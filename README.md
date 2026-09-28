@@ -88,6 +88,48 @@ On Linux, running/testing also needs system packages for audio and Tk:
 sudo apt-get install -y libportaudio2 python3-tk python3-dev
 ```
 
+### Quick start on Windows (`setup.ps1`)
+
+On Windows, `setup.ps1` in the repo root sets up all three components — backend,
+desktop tray app, and mobile companion — in one command:
+
+```powershell
+git clone https://github.com/tharun-ragu22/vetscribe.git
+cd vetscribe
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+It requires [`uv`](https://github.com/astral-sh/uv) (and, for the mobile app,
+[Node.js](https://nodejs.org/) with `npm`) on your `PATH` — the script checks for
+them first and points you at `winget` installs if either is missing. Then it:
+
+- creates `backend/.env` and `mobile/.env` from their `.env.example` templates if
+  they don't exist yet (fill in your provider API keys afterward);
+- installs backend and desktop dependencies (`uv sync`) and mobile dependencies
+  (`npm install`);
+- seeds `~/.vetscribe/config.json` from `backend/.env` so the desktop app points
+  at the local backend port and shares its `VETSCRIBE_BACKEND_API_KEY` — merging
+  into any existing config so your hotkey/window settings are preserved.
+
+Each component's `.env` is the source of truth for its environment variables (see
+[`backend/README.md`](backend/README.md) and [`mobile/.env.example`](mobile/.env.example)
+for the full lists), so after the first run just edit those files to configure the stack.
+
+Flags:
+
+| Flag | Effect |
+|---|---|
+| `-Run` | Launch the backend and desktop app (each in its own window) once setup finishes |
+| `-SkipMobile` | Skip `npm install` — handy on an exam-room PC that only runs the backend + desktop app |
+
+```powershell
+# set everything up and launch backend + desktop:
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Run
+
+# exam-room PC (no phone deps):
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -SkipMobile
+```
+
 ### Configuration
 
 On first run, VetScribe creates `~/.vetscribe/config.json` with defaults
