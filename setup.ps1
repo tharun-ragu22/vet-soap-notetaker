@@ -209,7 +209,10 @@ if (Test-Path $configPath) {
 }
 $config['api_endpoint'] = "http://localhost:$backendPort/api/soap"
 $config['api_key'] = $backendKey
-($config | ConvertTo-Json) | Set-Content -LiteralPath $configPath -Encoding UTF8
+# Write UTF-8 WITHOUT a BOM: Windows PowerShell 5.1's `Set-Content -Encoding UTF8`
+# prepends a BOM, which Python's Config.load() reads as junk before the '{' and
+# fails to parse. WriteAllText with UTF8Encoding($false) emits no BOM.
+[System.IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "    Wrote desktop config: $configPath"
 Write-Host "      api_endpoint = $($config['api_endpoint'])"
 if ([string]::IsNullOrEmpty($backendKey)) {
