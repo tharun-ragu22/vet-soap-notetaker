@@ -207,7 +207,10 @@ if (Test-Path $configPath) {
     $existing = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     foreach ($p in $existing.PSObject.Properties) { $config[$p.Name] = $p.Value }
 }
-$config['api_endpoint'] = "http://localhost:$backendPort/api/soap"
+# Use 127.0.0.1, not "localhost": on Windows "localhost" resolves to IPv6 ::1
+# first, but uvicorn binds IPv4 (0.0.0.0), and that mismatch can stall the
+# desktop app's requests until they time out instead of connecting.
+$config['api_endpoint'] = "http://127.0.0.1:$backendPort/api/soap"
 $config['api_key'] = $backendKey
 # Write UTF-8 WITHOUT a BOM: Windows PowerShell 5.1's `Set-Content -Encoding UTF8`
 # prepends a BOM, which Python's Config.load() reads as junk before the '{' and
