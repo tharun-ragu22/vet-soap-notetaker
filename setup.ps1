@@ -81,9 +81,14 @@ function Import-DotEnv {
         if ($idx -lt 1) { continue }
         $key = $trimmed.Substring(0, $idx).Trim()
         $val = $trimmed.Substring($idx + 1).Trim()
-        # Strip surrounding quotes if present.
         if ($val.Length -ge 2 -and (($val.StartsWith('"') -and $val.EndsWith('"')) -or ($val.StartsWith("'") -and $val.EndsWith("'")))) {
+            # Quoted value: strip the surrounding quotes, keep everything inside verbatim.
             $val = $val.Substring(1, $val.Length - 2)
+        }
+        else {
+            # Unquoted value: an inline comment starts at the first whitespace-then-#,
+            # matching python-dotenv (which the backend uses to read this same file).
+            $val = ($val -replace '\s+#.*$', '').Trim()
         }
         $map[$key] = $val
     }
