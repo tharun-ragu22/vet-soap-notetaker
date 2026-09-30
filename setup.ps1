@@ -1,13 +1,13 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    One-shot setup for the whole VetScribe stack on Windows: backend, desktop
-    tray app, and mobile companion.
+    One command to set up and start the whole VetScribe stack on Windows:
+    backend, desktop tray app, and mobile companion.
 
 .DESCRIPTION
-    Installs dependencies for all three components and wires them together using
-    the per-component `.env` files as the single source of truth for environment
-    variables:
+    Installs dependencies for all three components, wires them together using the
+    per-component `.env` files as the single source of truth for environment
+    variables, and then launches every service (each in its own window):
 
       * backend/.env  - provider keys, note/transcription provider, PORT,
                         VETSCRIBE_BACKEND_API_KEY, VETSCRIBE_EXAMS_PATH.
@@ -21,22 +21,31 @@
     -- pointing the desktop app at the backend port and copying the shared
     bearer key across so the three pieces agree without hand-editing.
 
-.PARAMETER Run
-    After setup, launch the backend and desktop app (each in its own window) and
-    print the command to start the mobile dev server.
+    By default the script runs setup and then starts backend + desktop + mobile.
+
+.PARAMETER NoInstall
+    Skip dependency install and .env creation -- just (re)start the services.
+    Use this for a fast restart once you've already run setup once.
+
+.PARAMETER NoStart
+    Run setup only; do not start any services.
 
 .PARAMETER SkipMobile
-    Skip mobile (`npm install`) -- useful on the exam-room PC that only runs the
-    backend + desktop app.
+    Ignore the mobile app entirely (no npm install, not started) -- useful on the
+    exam-room PC that only runs the backend + desktop app.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\setup.ps1
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Run
+    powershell -ExecutionPolicy Bypass -File .\setup.ps1 -NoInstall
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\setup.ps1 -SkipMobile
 #>
 param(
-    [switch]$Run,
+    [switch]$NoInstall,
+    [switch]$NoStart,
     [switch]$SkipMobile
 )
 
@@ -97,11 +106,24 @@ function Initialize-EnvFile {
     return $true
 }
 
-Write-Host "VetScribe full-stack setup" -ForegroundColor Green
+# Start one service in its own PowerShell window so its logs stay visible.
+function Start-Service-Window {
+    param([string]$Title, [string]$WorkingDir, [string]$Command)
+    Write-Host "    Starting $Title..."
+    Start-Process -FilePath 'powershell' -ArgumentList @(
+        '-NoExit', '-Command',
+        "`$host.UI.RawUI.WindowTitle = 'VetScribe: $Title'; Set-Location '$WorkingDir'; $Command"
+    )
+}
+
+Write-Host "VetScribe full-stack launcher" -ForegroundColor Green
 Write-Host "Repo: $RepoRoot"
 
+$backendDir = Join-Path $RepoRoot 'backend'
+$mobileDir  = Join-Path $RepoRoot 'mobile'
+
 # ---------------------------------------------------------------------------
-# Prerequisites
+# Prerequisites (needed to install AND to run)
 # ---------------------------------------------------------------------------
 Write-Section "Checking prerequisites"
 
@@ -123,22 +145,26 @@ if (-not $SkipMobile) {
 }
 
 # ---------------------------------------------------------------------------
-# Backend
+# Backend deps + .env
 # ---------------------------------------------------------------------------
 Write-Section "Backend (backend/)"
-$backendDir = Join-Path $RepoRoot 'backend'
-Initialize-EnvFile `
-    -EnvPath (Join-Path $backendDir '.env') `
-    -ExamplePath (Join-Path $backendDir '.env.example') `
-    -Label 'backend' | Out-Null
+if (-not $NoInstall) {
+    Initialize-EnvFile `
+        -EnvPath (Join-Path $backendDir '.env') `
+        -ExamplePath (Join-Path $backendDir '.env.example') `
+        -Label 'backend' | Out-Null
 
-Push-Location $backendDir
-try {
-    Write-Host "    Installing backend dependencies (uv sync)..."
-    uv sync
-    if ($LASTEXITCODE -ne 0) { throw "backend 'uv sync' failed (exit $LASTEXITCODE)." }
+    Push-Location $backendDir
+    try {
+        Write-Host "    Installing backend dependencies (uv sync)..."
+        uv sync
+        if ($LASTEXITCODE -ne 0) { throw "backend 'uv sync' failed (exit $LASTEXITCODE)." }
+    }
+    finally { Pop-Location }
 }
-finally { Pop-Location }
+else {
+    Write-Host "    -NoInstall: skipping backend .env creation and uv sync."
+}
 
 $backendEnv = Import-DotEnv (Join-Path $backendDir '.env')
 $backendPort = if ($backendEnv['PORT']) { $backendEnv['PORT'] } else { '8443' }
@@ -146,16 +172,21 @@ $backendKey  = $backendEnv['VETSCRIBE_BACKEND_API_KEY']
 if ($null -eq $backendKey) { $backendKey = '' }
 
 # ---------------------------------------------------------------------------
-# Desktop tray app (root)
+# Desktop deps + config
 # ---------------------------------------------------------------------------
 Write-Section "Desktop tray app (root)"
-Push-Location $RepoRoot
-try {
-    Write-Host "    Installing desktop dependencies (uv sync)..."
-    uv sync
-    if ($LASTEXITCODE -ne 0) { throw "desktop 'uv sync' failed (exit $LASTEXITCODE)." }
+if (-not $NoInstall) {
+    Push-Location $RepoRoot
+    try {
+        Write-Host "    Installing desktop dependencies (uv sync)..."
+        uv sync
+        if ($LASTEXITCODE -ne 0) { throw "desktop 'uv sync' failed (exit $LASTEXITCODE)." }
+    }
+    finally { Pop-Location }
 }
-finally { Pop-Location }
+else {
+    Write-Host "    -NoInstall: skipping desktop uv sync."
+}
 
 # Seed ~/.vetscribe/config.json from backend/.env so the desktop app points at
 # the local backend and shares its bearer key. Merge into an existing config so
@@ -186,60 +217,69 @@ if ([string]::IsNullOrEmpty($backendKey)) {
 }
 
 # ---------------------------------------------------------------------------
-# Mobile companion (mobile/)
+# Mobile deps + .env
 # ---------------------------------------------------------------------------
 if ($SkipMobile) {
     Write-Section "Mobile companion (mobile/) -- skipped (-SkipMobile)"
 }
 else {
     Write-Section "Mobile companion (mobile/)"
-    $mobileDir = Join-Path $RepoRoot 'mobile'
-    Initialize-EnvFile `
-        -EnvPath (Join-Path $mobileDir '.env') `
-        -ExamplePath (Join-Path $mobileDir '.env.example') `
-        -Label 'mobile' | Out-Null
+    if (-not $NoInstall) {
+        Initialize-EnvFile `
+            -EnvPath (Join-Path $mobileDir '.env') `
+            -ExamplePath (Join-Path $mobileDir '.env.example') `
+            -Label 'mobile' | Out-Null
 
-    $mobileEnv = Import-DotEnv (Join-Path $mobileDir '.env')
-    if ($mobileEnv['EXPO_PUBLIC_VETSCRIBE_API_URL'] -like '*192.168.1.50*') {
-        Write-Warn "mobile/.env still points EXPO_PUBLIC_VETSCRIBE_API_URL at the placeholder LAN IP (192.168.1.50)."
-        Write-Warn "Set it to this machine's LAN IP:$backendPort so a physical phone can reach the backend."
-    }
+        $mobileEnv = Import-DotEnv (Join-Path $mobileDir '.env')
+        if ($mobileEnv['EXPO_PUBLIC_VETSCRIBE_API_URL'] -like '*192.168.1.50*') {
+            Write-Warn "mobile/.env still points EXPO_PUBLIC_VETSCRIBE_API_URL at the placeholder LAN IP (192.168.1.50)."
+            Write-Warn "Set it to this machine's LAN IP:$backendPort so a physical phone can reach the backend."
+        }
 
-    Push-Location $mobileDir
-    try {
-        Write-Host "    Installing mobile dependencies (npm install)..."
-        npm install
-        if ($LASTEXITCODE -ne 0) { throw "mobile 'npm install' failed (exit $LASTEXITCODE)." }
+        Push-Location $mobileDir
+        try {
+            Write-Host "    Installing mobile dependencies (npm install)..."
+            npm install
+            if ($LASTEXITCODE -ne 0) { throw "mobile 'npm install' failed (exit $LASTEXITCODE)." }
+        }
+        finally { Pop-Location }
     }
-    finally { Pop-Location }
+    else {
+        Write-Host "    -NoInstall: skipping mobile .env creation and npm install."
+    }
 }
 
 # ---------------------------------------------------------------------------
-# Done
+# Start the services
 # ---------------------------------------------------------------------------
-Write-Section "Setup complete"
-Write-Host "Start each component:" -ForegroundColor Green
-Write-Host "  Backend:  cd backend; uv run python -m vetscribe_backend.main"
-Write-Host "  Desktop:  uv run python -m vetscribe.main"
+if ($NoStart) {
+    Write-Section "Setup complete (-NoStart: not launching services)"
+    Write-Host "Start them yourself when ready:" -ForegroundColor Green
+    Write-Host "  Backend:  cd backend; uv run python -m vetscribe_backend.main"
+    Write-Host "  Desktop:  uv run python -m vetscribe.main"
+    if (-not $SkipMobile) { Write-Host "  Mobile:   cd mobile; npm start" }
+    return
+}
+
+Write-Section "Starting services"
+Start-Service-Window -Title 'backend' -WorkingDir $backendDir `
+    -Command 'uv run python -m vetscribe_backend.main'
+# Give the backend a moment to bind its port before the desktop app starts
+# polling it.
+Start-Sleep -Seconds 3
+Start-Service-Window -Title 'desktop' -WorkingDir $RepoRoot `
+    -Command 'uv run python -m vetscribe.main'
 if (-not $SkipMobile) {
-    Write-Host "  Mobile:   cd mobile; npm start"
+    Start-Service-Window -Title 'mobile' -WorkingDir $mobileDir -Command 'npm start'
+}
+
+Write-Section "All services launched"
+Write-Host "Each runs in its own window:" -ForegroundColor Green
+Write-Host "  Backend:  http://localhost:$backendPort/api/soap"
+Write-Host "  Desktop:  tray app (press $($config['hotkey']) to record)"
+if (-not $SkipMobile) {
+    Write-Host "  Mobile:   Expo dev server -- scan the QR code with Expo Go"
 }
 Write-Host ""
+Write-Host "Close a service by closing its window (or Ctrl+C inside it)."
 Write-Host "Fill in API keys in backend\.env before generating real notes."
-
-if ($Run) {
-    Write-Section "Launching backend + desktop (-Run)"
-    Start-Process -FilePath 'powershell' -ArgumentList @(
-        '-NoExit', '-Command',
-        "Set-Location '$backendDir'; uv run python -m vetscribe_backend.main"
-    )
-    Start-Sleep -Seconds 2
-    Start-Process -FilePath 'powershell' -ArgumentList @(
-        '-NoExit', '-Command',
-        "Set-Location '$RepoRoot'; uv run python -m vetscribe.main"
-    )
-    Write-Host "    Backend and desktop launched in separate windows."
-    if (-not $SkipMobile) {
-        Write-Host "    Start the mobile dev server yourself: cd mobile; npm start"
-    }
-}

@@ -90,8 +90,8 @@ sudo apt-get install -y libportaudio2 python3-tk python3-dev
 
 ### Quick start on Windows (`setup.ps1`)
 
-On Windows, `setup.ps1` in the repo root sets up all three components — backend,
-desktop tray app, and mobile companion — in one command:
+On Windows, `setup.ps1` in the repo root sets up **and starts** all three
+components — backend, desktop tray app, and mobile companion — in one command:
 
 ```powershell
 git clone https://github.com/tharun-ragu22/vetscribe.git
@@ -109,24 +109,29 @@ them first and points you at `winget` installs if either is missing. Then it:
   (`npm install`);
 - seeds `~/.vetscribe/config.json` from `backend/.env` so the desktop app points
   at the local backend port and shares its `VETSCRIBE_BACKEND_API_KEY` — merging
-  into any existing config so your hotkey/window settings are preserved.
+  into any existing config so your hotkey/window settings are preserved;
+- **launches each service in its own window**: the backend (`uv run python -m
+  vetscribe_backend.main`), the desktop tray app (`uv run python -m
+  vetscribe.main`), and the mobile Expo dev server (`npm start`).
 
 Each component's `.env` is the source of truth for its environment variables (see
 [`backend/README.md`](backend/README.md) and [`mobile/.env.example`](mobile/.env.example)
-for the full lists), so after the first run just edit those files to configure the stack.
+for the full lists), so edit those files to configure the stack. Close a service by
+closing its window (or `Ctrl+C` inside it).
 
 Flags:
 
 | Flag | Effect |
 |---|---|
-| `-Run` | Launch the backend and desktop app (each in its own window) once setup finishes |
-| `-SkipMobile` | Skip `npm install` — handy on an exam-room PC that only runs the backend + desktop app |
+| `-NoInstall` | Skip dependency install and `.env` creation — just (re)start the services. Use for a fast restart once you've run setup once |
+| `-NoStart` | Run setup only; don't launch anything |
+| `-SkipMobile` | Ignore the mobile app entirely (no `npm install`, not started) — handy on an exam-room PC that only runs the backend + desktop app |
 
 ```powershell
-# set everything up and launch backend + desktop:
-powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Run
+# fast restart of all services (skip the installs):
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -NoInstall
 
-# exam-room PC (no phone deps):
+# exam-room PC (no phone deps), backend + desktop only:
 powershell -ExecutionPolicy Bypass -File .\setup.ps1 -SkipMobile
 ```
 
