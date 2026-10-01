@@ -10,6 +10,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.vetscribe.mobile",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "VetScribe connects to the clinic's VetScribe backend on the local network to upload exam audio and fetch SOAP notes.",
         "NSAppTransportSecurity": {
