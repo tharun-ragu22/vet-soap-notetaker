@@ -8,9 +8,18 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vetscribe.mobile",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "VetScribe connects to the clinic's VetScribe backend on the local network to upload exam audio and fetch SOAP notes.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true
+        }
+      }
     },
     "android": {
+      "package": "com.vetscribe.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -29,7 +38,16 @@
         {
           "microphonePermission": "VetScribe records exam-room audio to generate SOAP notes."
         }
-      ]
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-asset"
     ]
   }
 }

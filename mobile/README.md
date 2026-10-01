@@ -81,6 +81,83 @@ npm start                   # Expo dev server (QR code)
 Microphone recording works in Expo Go. If you later add native modules Expo Go doesn't bundle,
 switch to a dev client: `npx expo run:ios` (needs a Mac) or an EAS build.
 
+## Installing on the vet's phone (standalone pilot build)
+
+Expo Go (above) is only good for a tethered demo — it needs your dev server running and the
+phone on the same Wi-Fi. For a multi-day pilot where the vet uses the app on their own, build a
+**standalone app with EAS** (Expo's cloud build service — no local Xcode/Android Studio needed).
+
+The backend URL is **baked into the build at build time** (`EXPO_PUBLIC_*` is inlined), so it
+must be stable. This pilot points the app at the clinic PC's **LAN IP** (e.g.
+`http://192.168.1.50:8443`), which means **the phone must stay on the clinic Wi-Fi**.
+
+> The config for a plain-HTTP LAN backend is already wired up: `app.json` allows Android
+> cleartext traffic (`expo-build-properties → usesCleartextTraffic`) and adds the iOS App
+> Transport Security + Local Network exceptions. Without these a release build silently fails
+> every request. (These are deliberately permissive for a LAN pilot; tighten before any App
+> Store release.)
+
+### One-time setup
+
+```bash
+npm install -g eas-cli          # or use: npx eas-cli@latest <command>
+eas login                       # free Expo account
+cd mobile
+eas init                        # creates the EAS project + writes projectId into app.json
+```
+
+Then set the backend address the build will use. Edit `eas.json` and replace the placeholder
+IP in **both** the `preview` and `production` profiles' `env` block:
+
+```jsonc
+"env": { "EXPO_PUBLIC_VETSCRIBE_API_URL": "http://<clinic-PC-LAN-IP>:8443" }
+```
+
+Find the PC's LAN IP with `ipconfig` on the clinic machine (the `IPv4 Address` on the active
+adapter). **Give that PC a static IP or a DHCP reservation on the clinic router** — if DHCP
+reassigns the IP, the baked-in URL stops working and the app must be rebuilt.
+
+If the backend requires a bearer key (`VETSCRIBE_BACKEND_API_KEY`), don't commit it to
+`eas.json`. Store it as an EAS environment secret so it's injected at build time:
+
+```bash
+eas env:create --name EXPO_PUBLIC_VETSCRIBE_API_KEY --value "<the-key>" --visibility secret --environment production
+```
+
+(Leave it unset if the backend is unauthenticated.)
+
+### Android — direct `.apk` install (easiest, free)
+
+```bash
+eas build --platform android --profile preview
+```
+
+EAS returns a download URL for an installable `.apk`. Send it to the vet; on the phone they open
+the link, allow **Install unknown apps** for the browser when prompted, and install. Done — no
+account, no store.
+
+### iPhone — TestFlight (needs a paid Apple Developer account)
+
+iOS has no sideloading, so a standalone iPhone install goes through **TestFlight**, which
+requires enrolling in the **Apple Developer Program ($99/yr**, using your Apple ID — Apple
+has no free standalone-install path).
+
+```bash
+eas build --platform ios --profile production     # EAS handles signing; sign in with your Apple ID when asked
+eas submit --platform ios --latest                # uploads the build to App Store Connect / TestFlight
+```
+
+Then in App Store Connect → your app → **TestFlight**, add the vet as an internal or external
+tester by email. They install the **TestFlight** app from the App Store and accept the invite.
+
+### On first launch (both platforms)
+
+- The app asks for **microphone** permission (recording) — allow.
+- On **iOS 14+** it also prompts for **Local Network** access the first time it reaches the LAN
+  backend — the vet must **allow** this, or every request fails.
+- Make sure the clinic PC's firewall allows inbound TCP on the backend port (`8443`) and the
+  backend is bound to `0.0.0.0` (it is by default) so the phone can reach it over the LAN.
+
 ## Configuration (local `.env`, no host env vars)
 
 Expo loads a local `.env` automatically. Only variables prefixed `EXPO_PUBLIC_` are exposed to
