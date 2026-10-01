@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 
 import { HistoryScreen } from '../components/HistoryScreen';
 import { useServices } from '../services/context';
@@ -8,6 +8,9 @@ export default function HistoryRoute() {
   const { apiClient } = useServices();
 
   return (
-    <HistoryScreen apiClient={apiClient} onOpenExam={(id) => router.push(`/exam/${id}`)} />
+    <>
+      <Stack.Screen options={{ title: 'Exam History' }} />
+      <HistoryScreen apiClient={apiClient} onOpenExam={(id) => router.push(`/exam/${id}`)} />
+    </>
   );
 }

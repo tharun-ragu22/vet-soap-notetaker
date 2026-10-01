@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 
 import { SettingsScreen } from '../components/SettingsScreen';
 import { useServices } from '../services/context';
@@ -8,12 +8,15 @@ export default function SettingsRoute() {
   const { settings, updateSettings } = useServices();
 
   return (
-    <SettingsScreen
-      settings={settings}
-      onSave={updateSettings}
-      onSaved={() => {
-        if (router.canGoBack()) router.back();
-      }}
-    />
+    <>
+      <Stack.Screen options={{ title: 'Settings' }} />
+      <SettingsScreen
+        settings={settings}
+        onSave={updateSettings}
+        onSaved={() => {
+          if (router.canGoBack()) router.back();
+        }}
+      />
+    </>
   );
 }
