@@ -87,9 +87,13 @@ Expo Go (above) is only good for a tethered demo — it needs your dev server ru
 phone on the same Wi-Fi. For a multi-day pilot where the vet uses the app on their own, build a
 **standalone app with EAS** (Expo's cloud build service — no local Xcode/Android Studio needed).
 
-The backend URL is **baked into the build at build time** (`EXPO_PUBLIC_*` is inlined), so it
-must be stable. This pilot points the app at the clinic PC's **LAN IP** (e.g.
-`http://192.168.1.50:8443`), which means **the phone must stay on the clinic Wi-Fi**.
+The backend address is **editable in-app** — open **Settings** on the home screen and enter the
+clinic backend's URL (and optional API key); it's saved on the device and applied live, no
+rebuild needed. The `EXPO_PUBLIC_*` value baked in at build time (below) is only the *default*
+the vet sees on first launch — you can even ship a build with none set and have the vet type it
+in on first run. This pilot points the app at the clinic PC's **LAN IP** (e.g.
+`http://192.168.1.50:8443`), which means **the phone must stay on the clinic Wi-Fi**; point it
+at a publicly reachable URL instead (in Settings or baked in) to drop that constraint.
 
 > The config for a plain-HTTP LAN backend is already wired up: `app.json` allows Android
 > cleartext traffic (`expo-build-properties → usesCleartextTraffic`) and adds the iOS App
@@ -106,16 +110,17 @@ cd mobile
 eas init                        # creates the EAS project + writes projectId into app.json
 ```
 
-Then set the backend address the build will use. Edit `eas.json` and replace the placeholder
-IP in **both** the `preview` and `production` profiles' `env` block:
+Optionally set the *default* backend address baked into the build. Edit `eas.json` and replace
+the placeholder IP in **both** the `preview` and `production` profiles' `env` block:
 
 ```jsonc
 "env": { "EXPO_PUBLIC_VETSCRIBE_API_URL": "http://<clinic-PC-LAN-IP>:8443" }
 ```
 
 Find the PC's LAN IP with `ipconfig` on the clinic machine (the `IPv4 Address` on the active
-adapter). **Give that PC a static IP or a DHCP reservation on the clinic router** — if DHCP
-reassigns the IP, the baked-in URL stops working and the app must be rebuilt.
+adapter). **Give that PC a static IP or a DHCP reservation on the clinic router** so the address
+stays put. If it does change, the vet just updates it in the app's **Settings** screen — no
+rebuild — since the baked value is only the first-launch default.
 
 If the backend requires a bearer key (`VETSCRIBE_BACKEND_API_KEY`), don't commit it to
 `eas.json`. Store it as an EAS environment secret so it's injected at build time:
@@ -152,6 +157,9 @@ tester by email. They install the **TestFlight** app from the App Store and acce
 
 ### On first launch (both platforms)
 
+- Open **Settings** on the home screen and confirm (or enter) the **Backend URL** for the clinic.
+  If a default was baked in it's already filled; otherwise type it once and tap **Save**. The home
+  screen shows a red "No backend set" hint until one is saved.
 - The app asks for **microphone** permission (recording) — allow.
 - On **iOS 14+** it also prompts for **Local Network** access the first time it reaches the LAN
   backend — the vet must **allow** this, or every request fails.
@@ -159,6 +167,11 @@ tester by email. They install the **TestFlight** app from the App Store and acce
   backend is bound to `0.0.0.0` (it is by default) so the phone can reach it over the LAN.
 
 ## Configuration (local `.env`, no host env vars)
+
+The backend URL and API key are configurable **in-app** via the Settings screen and persisted on
+the device (AsyncStorage), which overrides everything below. The `.env` / `EXPO_PUBLIC_*` values
+are the build-time **defaults** used until the vet saves something — handy for dev (`expo start`)
+and for pre-filling a pilot build.
 
 Expo loads a local `.env` automatically. Only variables prefixed `EXPO_PUBLIC_` are exposed to
 the app bundle. Copy `.env.example` → `.env` and fill in:
