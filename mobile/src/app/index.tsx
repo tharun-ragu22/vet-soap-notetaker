@@ -37,16 +37,20 @@ export default function RecorderRoute() {
           ),
         }}
       />
-      {!settings.apiUrl ? (
-        <Text style={styles.notConfigured}>
-          No backend set — open Settings to enter the clinic address.
-        </Text>
-      ) : null}
       <RecorderScreen
         audioService={audioService}
         uploadRecording={uploadRecording}
         onRecorded={(exam) => router.push(`/exam/${exam.id}`)}
       />
+      {/* Floated at the top as an overlay so it never shifts the recorder, which
+          stays centered in the full screen whether or not this banner shows. */}
+      {!settings.apiUrl ? (
+        <View style={styles.banner} pointerEvents="none">
+          <Text style={styles.notConfigured}>
+            No backend set — open Settings to enter the clinic address.
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -65,11 +69,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  banner: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingTop: 12,
+    paddingHorizontal: 24,
+  },
   notConfigured: {
     textAlign: 'center',
     color: '#c0392b',
     fontSize: 14,
-    paddingHorizontal: 24,
-    paddingTop: 12,
   },
 });
