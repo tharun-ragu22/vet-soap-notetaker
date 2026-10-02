@@ -147,7 +147,16 @@ export function ExamEditor({ exam, apiClient, onSaved, onDeleted }: ExamEditorPr
         : 'Delete Exam';
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    // The SOAP fields are multiline, so Return inserts a newline rather than
+    // closing the keyboard. Give the vet two easy ways out instead: swipe the
+    // form down to dismiss (keyboardDismissMode), and let taps on the action
+    // buttons go through on the first touch while the keyboard is up
+    // (keyboardShouldPersistTaps) rather than being swallowed just to dismiss it.
+    <ScrollView
+      contentContainerStyle={styles.container}
+      keyboardDismissMode="on-drag"
+      keyboardShouldPersistTaps="handled"
+    >
       {exam.patientName ? <Text style={styles.patient}>{exam.patientName}</Text> : null}
 
       {SECTIONS.map(([key, label]) => (
