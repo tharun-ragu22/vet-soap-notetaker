@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { ApiClient } from '../services/api/ApiClient';
@@ -9,6 +9,15 @@ export interface HistoryScreenProps {
   apiClient: Pick<ApiClient, 'fetchHistory'>;
   /** Called with the exam id when a row is tapped (route pushes the editor). */
   onOpenExam?: (id: string) => void;
+  /**
+   * Bumped by the route each time the screen regains focus. A change triggers a
+   * quiet background refetch, so an exam deleted on the editor screen disappears
+   * the moment the user returns here. The list stays mounted under the pushed
+   * editor, so a plain mount effect would never re-run on the way back and the
+   * stale (deleted) row would linger until the screen was left entirely. Left
+   * undefined in unit tests, which render this screen with no navigator.
+   */
+  reloadSignal?: number;
 }
 
 type Status = 'loading' | 'ready' | 'error';
@@ -24,24 +33,44 @@ function formatDate(iso: string): string {
  * Loads on mount and exposes explicit loading / empty / error (with retry) states so a
  * transient backend hiccup never leaves a blank screen with no way forward.
  */
-export function HistoryScreen({ apiClient, onOpenExam }: HistoryScreenProps) {
+export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistoryScreenProps) {
   const [status, setStatus] = useState<Status>('loading');
   const [exams, setExams] = useState<Exam[]>([]);
 
-  const load = useCallback(async () => {
-    setStatus('loading');
-    try {
-      const result = await apiClient.fetchHistory();
-      setExams(result);
-      setStatus('ready');
-    } catch {
-      setStatus('error');
-    }
-  }, [apiClient]);
+  const load = useCallback(
+    async (quiet = false) => {
+      // A quiet refresh keeps the current list on screen (no full-screen spinner)
+      // so returning to History doesn't flash "Loading…" every time.
+      if (!quiet) setStatus('loading');
+      try {
+        const result = await apiClient.fetchHistory();
+        setExams(result);
+        setStatus('ready');
+      } catch {
+        // Don't let a failed background refresh wipe out a list we already have;
+        // only surface the error screen when there's nothing to fall back to.
+        if (!quiet) setStatus('error');
+      }
+    },
+    [apiClient],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Refetch quietly whenever the route reports the screen was re-focused (e.g. the
+  // user came back after deleting an exam). Skip the first run: the mount effect
+  // above already did the initial load, so firing here too would double-fetch.
+  const firstFocus = useRef(true);
+  useEffect(() => {
+    if (reloadSignal === undefined) return;
+    if (firstFocus.current) {
+      firstFocus.current = false;
+      return;
+    }
+    void load(true);
+  }, [reloadSignal, load]);
 
   if (status === 'loading') {
     return (
@@ -56,7 +85,7 @@ export function HistoryScreen({ apiClient, onOpenExam }: HistoryScreenProps) {
     return (
       <View style={styles.center}>
         <Text style={styles.error}>Couldn't load exams.</Text>
-        <Pressable accessibilityRole="button" style={styles.retry} onPress={load}>
+        <Pressable accessibilityRole="button" style={styles.retry} onPress={() => load()}>
           <Text style={styles.retryText}>Retry</Text>
         </Pressable>
       </View>

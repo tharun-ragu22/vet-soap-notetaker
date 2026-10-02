@@ -59,6 +59,49 @@ describe('HistoryScreen', () => {
     expect(fetchHistory).toHaveBeenCalledTimes(2);
   });
 
+  it('refetches when the reload signal changes, so a deleted exam drops on return', async () => {
+    const fetchHistory = jest
+      .fn()
+      .mockResolvedValueOnce([
+        makeExam({ id: 'exam-1', patientName: 'Rex' }),
+        makeExam({ id: 'exam-2', patientName: 'Bella' }),
+      ])
+      .mockResolvedValueOnce([makeExam({ id: 'exam-1', patientName: 'Rex' })]);
+    // One stable client across rerenders, like context's memoized instance; a new
+    // object each render would change `load` and spuriously re-fire the mount load.
+    const client = makeApiClient(fetchHistory);
+    const { rerender } = render(<HistoryScreen apiClient={client} reloadSignal={0} />);
+
+    await waitFor(() => expect(screen.getByText('Bella')).toBeTruthy());
+    // The initial mount loads once; a signal of 0 must NOT trigger a second fetch.
+    expect(fetchHistory).toHaveBeenCalledTimes(1);
+
+    // Simulate the route re-focusing after a delete (reloadSignal bumped). This is
+    // the fix's core contract: a focus change refetches, so the backend's now-shorter
+    // list (sans the deleted exam) replaces the stale one the screen was showing.
+    rerender(<HistoryScreen apiClient={client} reloadSignal={1} />);
+
+    await waitFor(() => expect(fetchHistory).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps the existing list when a background refresh fails', async () => {
+    const fetchHistory = jest
+      .fn()
+      .mockResolvedValueOnce([makeExam({ id: 'exam-1', patientName: 'Rex' })])
+      .mockRejectedValueOnce(new Error('backend returned 502'));
+    const client = makeApiClient(fetchHistory);
+    const { rerender } = render(<HistoryScreen apiClient={client} reloadSignal={0} />);
+
+    await waitFor(() => expect(screen.getByText('Rex')).toBeTruthy());
+
+    rerender(<HistoryScreen apiClient={client} reloadSignal={1} />);
+
+    await waitFor(() => expect(fetchHistory).toHaveBeenCalledTimes(2));
+    // The failed quiet refresh must not blow the list away or show the error screen.
+    expect(screen.getByText('Rex')).toBeTruthy();
+    expect(screen.queryByText(/couldn't load/i)).toBeNull();
+  });
+
   it('opens an exam when its row is tapped', async () => {
     const fetchHistory = jest.fn(async () => [makeExam({ id: 'exam-42', patientName: 'Rex' })]);
     const onOpenExam = jest.fn();
