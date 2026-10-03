@@ -1,10 +1,23 @@
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-_DEFAULT_DOTENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+
+def _default_dotenv_path() -> Path:
+    """Where to look for the ``.env`` holding provider keys.
+
+    In a dev checkout that's ``backend/.env`` (two levels up from this module).
+    In a PyInstaller-frozen build ``__file__`` lives inside the unpacked bundle,
+    so that relative path points at a temp dir, not the installed app -- the
+    combined installer drops the keys ``.env`` next to the backend executable, so
+    look there instead.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / ".env"
+    return Path(__file__).resolve().parents[2] / ".env"
 
 
 @dataclass
@@ -25,7 +38,7 @@ class BackendConfig:
 
     @classmethod
     def from_env(cls, dotenv_path: Path | str | None = None) -> "BackendConfig":
-        load_dotenv(dotenv_path or _DEFAULT_DOTENV_PATH)
+        load_dotenv(dotenv_path or _default_dotenv_path())
         return cls(
             transcription_provider=os.environ.get("VETSCRIBE_TRANSCRIPTION_PROVIDER", "openai"),
             note_provider=os.environ.get("VETSCRIBE_NOTE_PROVIDER", "openai"),

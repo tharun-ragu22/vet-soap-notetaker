@@ -1,4 +1,22 @@
-from vetscribe_backend.config import BackendConfig
+import sys
+
+from vetscribe_backend.config import BackendConfig, _default_dotenv_path
+
+
+def test_default_dotenv_path_is_backend_env_in_dev(monkeypatch):
+    # Not frozen: resolve to backend/.env (two levels up from the config module).
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    path = _default_dotenv_path()
+    assert path.name == ".env"
+    assert path.parent.name == "backend"
+
+
+def test_default_dotenv_path_is_beside_the_exe_when_frozen(monkeypatch, tmp_path):
+    # Frozen build: the installer drops .env next to the backend executable.
+    exe = tmp_path / "VetScribeBackend.exe"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe), raising=False)
+    assert _default_dotenv_path() == tmp_path / ".env"
 
 
 def test_from_env_loads_values_from_dotenv_file(monkeypatch, tmp_path):

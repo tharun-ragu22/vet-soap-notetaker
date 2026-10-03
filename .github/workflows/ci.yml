@@ -229,3 +229,24 @@ jobs:
         with:
           name: VetScribe-windows
           path: dist/VetScribe
+
+      # The backend is a separate uv project with its own deps (fastapi/uvicorn/
+      # httpx), so it builds in its own env. This is the windowless backend exe
+      # the desktop app's BackendSupervisor launches on the clinic PC.
+      - name: Sync backend dependencies
+        run: uv sync --locked
+        working-directory: backend
+
+      - name: Install PyInstaller (backend env)
+        run: uv pip install pyinstaller
+        working-directory: backend
+
+      - name: Build VetScribeBackend.exe (--onedir)
+        run: uv run pyinstaller build_spec/backend.spec --distpath dist --workpath build
+        working-directory: backend
+
+      - name: Upload VetScribeBackend.exe artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: VetScribeBackend-windows
+          path: backend/dist/VetScribeBackend
