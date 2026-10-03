@@ -102,85 +102,82 @@ def test_resolve_calibration_box_returns_none_when_no_children(mocker):
     assert injector.resolve_calibration_box(999, box) is None
 
 
-# --- focus a control cross-thread --------------------------------------------
+# --- set a control's text directly (no focus / clipboard / keystroke) ---------
 
 
-def test_focus_control_attaches_thread_input_then_sets_focus(mocker):
+def test_set_control_text_inserts_via_edit_messages(mocker):
     win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
-    win32process = mocker.patch("vetscribe.avimark_injector.win32process")
-    win32api = mocker.patch("vetscribe.avimark_injector.win32api")
-    win32process.GetWindowThreadProcessId.return_value = (4242, 777)
-    win32api.GetCurrentThreadId.return_value = 11
+    from vetscribe import avimark_injector as mod
 
     injector = AvimarkInjector()
-    injector._focus_control(555)
+    injector._set_control_text(555, "hello")
 
-    # attach, focus, detach -- in that order
-    assert win32process.AttachThreadInput.call_args_list == [
-        mocker.call(11, 4242, True),
-        mocker.call(11, 4242, False),
+    # Select the whole control then replace the selection: SendMessage marshals to
+    # the control's own thread, so the text lands in *this exact* hwnd with no focus
+    # race, no clipboard contention, and no dependence on the foreground window.
+    assert win32gui.SendMessage.call_args_list == [
+        mocker.call(555, mod._EM_SETSEL, 0, -1),
+        mocker.call(555, mod._EM_REPLACESEL, 1, "hello"),
     ]
-    win32gui.SetFocus.assert_called_once_with(555)
-
-
-def test_focus_control_detaches_even_if_set_focus_raises(mocker):
-    win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
-    win32process = mocker.patch("vetscribe.avimark_injector.win32process")
-    win32api = mocker.patch("vetscribe.avimark_injector.win32api")
-    win32process.GetWindowThreadProcessId.return_value = (4242, 777)
-    win32api.GetCurrentThreadId.return_value = 11
-    win32gui.SetFocus.side_effect = RuntimeError("boom")
-
-    injector = AvimarkInjector()
-    with pytest.raises(RuntimeError):
-        injector._focus_control(555)
-
-    # the detach still ran so we never leave threads attached
-    assert win32process.AttachThreadInput.call_args_list[-1] == mocker.call(11, 4242, False)
 
 
 # --- _paste_calibrated -------------------------------------------------------
 
 
-def test_paste_calibrated_focuses_and_pastes_each_box_in_order(mocker):
+def test_paste_calibrated_sets_each_box_text_in_order(mocker):
     injector = AvimarkInjector()
     hwnds = {"subjective": 1, "objective": 2, "assessment": 3, "plan": 4}
     mocker.patch.object(
         injector, "resolve_calibration_box", side_effect=lambda parent, box: _hwnd_for(box, hwnds)
     )
-    focus = mocker.patch.object(injector, "_focus_control")
-    copy = mocker.patch.object(injector, "copy_to_clipboard")
-    paste = mocker.patch.object(injector, "_send_ctrl_v")
-    mocker.patch("vetscribe.avimark_injector.time.sleep")
+    setter = mocker.patch.object(injector, "_set_control_text")
 
     ok = injector._paste_calibrated(999, _fields(), _full_calibration())
 
     assert ok is True
-    # each box focused before its text is pasted, in SOAP order
-    assert [c.args[0] for c in focus.call_args_list] == [1, 2, 3, 4]
-    assert [c.args[0] for c in copy.call_args_list] == ["S text", "O text", "A text", "P text"]
-    assert paste.call_count == 4
+    # each section's text set straight into its own resolved control, in SOAP order
+    assert setter.call_args_list == [
+        mocker.call(1, "S text"),
+        mocker.call(2, "O text"),
+        mocker.call(3, "A text"),
+        mocker.call(4, "P text"),
+    ]
+
+
+def test_paste_calibrated_sets_distinct_controls_for_distinct_boxes(mocker):
+    # Regression guard for the "S/O/A filled but Plan empty" bug: each box must get
+    # its own control. If two boxes resolve to the same hwnd we must abort rather
+    # than let one box's text overwrite/append into another's.
+    injector = AvimarkInjector()
+
+    def resolve(parent, box):
+        # plan collides onto the assessment control
+        return 3 if box.control_id in (1002, 1003) else {1000: 1, 1001: 2}[box.control_id]
+
+    mocker.patch.object(injector, "resolve_calibration_box", side_effect=resolve)
+    setter = mocker.patch.object(injector, "_set_control_text")
+
+    ok = injector._paste_calibrated(999, _fields(), _full_calibration())
+
+    assert ok is False
+    setter.assert_not_called()
 
 
 def test_paste_calibrated_bails_without_pasting_if_a_box_is_unresolved(mocker):
     injector = AvimarkInjector()
 
     def resolve(parent, box):
-        # fail to resolve the assessment box
-        return None if box.control_id == 1002 else 42
+        # fail to resolve the assessment box; the others resolve to distinct hwnds
+        return None if box.control_id == 1002 else 40 + box.control_id
 
     mocker.patch.object(injector, "resolve_calibration_box", side_effect=resolve)
-    focus = mocker.patch.object(injector, "_focus_control")
-    copy = mocker.patch.object(injector, "copy_to_clipboard")
-    paste = mocker.patch.object(injector, "_send_ctrl_v")
+    setter = mocker.patch.object(injector, "_set_control_text")
 
     ok = injector._paste_calibrated(999, _fields(), _full_calibration())
 
     assert ok is False
-    # nothing pasted -- we resolve everything first, then paste, so a miss aborts cleanly
-    focus.assert_not_called()
-    copy.assert_not_called()
-    paste.assert_not_called()
+    # nothing set -- we resolve everything first, then paste, so a miss aborts cleanly
+    setter.assert_not_called()
 
 
 def _hwnd_for(box, hwnds):

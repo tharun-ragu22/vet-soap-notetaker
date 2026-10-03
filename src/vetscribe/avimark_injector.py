@@ -1,11 +1,9 @@
 import logging
-import time
 
 import win32api
 import win32clipboard
 import win32con
 import win32gui
-import win32process
 
 from vetscribe.avimark_calibration import choose_control, descriptor_from_capture
 
@@ -14,11 +12,10 @@ AVIMARK_TITLE_MARKER = "AVImark"
 # win32con may not carry GA_ROOT on every build; it's a fixed Win32 constant.
 _GA_ROOT = getattr(win32con, "GA_ROOT", 2)
 
-# Between pasting one SOAP field and moving to the next box we pause briefly so
-# the target app has consumed the Ctrl+V before we overwrite the clipboard for
-# the next field (and so the focus-advance keystroke settles). Without this the
-# pastes race the clipboard and fields can land in the wrong box or be dropped.
-FIELD_PASTE_DELAY_SECONDS = 0.15
+# Edit-control messages used to drop a section's text straight into one box
+# (fixed Win32 constants; fall back to their literal values if win32con lacks them).
+_EM_SETSEL = getattr(win32con, "EM_SETSEL", 0x00B1)
+_EM_REPLACESEL = getattr(win32con, "EM_REPLACESEL", 0x00C2)
 
 logger = logging.getLogger("vetscribe.avimark_injector")
 
@@ -240,29 +237,29 @@ class AvimarkInjector:
         parent_rect = win32gui.GetWindowRect(parent_hwnd)
         return choose_control(candidates, box, parent_rect)
 
-    def _focus_control(self, hwnd):
-        """Give keyboard focus to a specific child control, cross-thread.
+    def _set_control_text(self, hwnd, text):
+        """Insert ``text`` straight into one EDIT/RichEdit control.
 
-        ``SetFocus`` only works on a window attached to the calling thread's input
-        queue, so we attach to the target control's thread for the call and detach
-        afterwards (even on error) to avoid leaving the input queues wired together.
+        Selects the control's whole contents and replaces the selection, both via
+        ``SendMessage`` -- which marshals to the control's own thread. Unlike a
+        global Ctrl+V, this targets *this exact* hwnd, so there's no focus race
+        (the earlier approach could paste a field into the previously-focused box
+        if ``SetFocus`` hadn't settled), no clipboard contention between fields,
+        and no dependence on the window being foreground.
         """
-        target_tid, _ = win32process.GetWindowThreadProcessId(hwnd)
-        our_tid = win32api.GetCurrentThreadId()
-        win32process.AttachThreadInput(our_tid, target_tid, True)
-        try:
-            win32gui.SetFocus(hwnd)
-        finally:
-            win32process.AttachThreadInput(our_tid, target_tid, False)
+        win32gui.SendMessage(hwnd, _EM_SETSEL, 0, -1)
+        win32gui.SendMessage(hwnd, _EM_REPLACESEL, 1, text)
 
     def _paste_calibrated(self, parent_hwnd, section_fields, calibration) -> bool:
-        """Paste each ``(section, text)`` straight into its calibrated box.
+        """Place each ``(section, text)`` straight into its calibrated box.
 
-        Resolves *every* box first; if any can't be resolved (or isn't calibrated)
-        it returns False without pasting anything, so the caller can fall back to a
-        safe single-block paste rather than scatter a half-placed note.
+        Resolves *every* box first; if any can't be resolved (or isn't calibrated),
+        or if two boxes resolve to the *same* control, it returns False without
+        writing anything -- so the caller can fall back to a safe single-block paste
+        rather than scatter a half-placed note or let one box overwrite another.
         """
         resolved = []
+        seen = {}
         for section, text in section_fields:
             box = calibration.get(section)
             if box is None:
@@ -272,13 +269,21 @@ class AvimarkInjector:
             if hwnd is None:
                 logger.warning("calibrated paste aborted: could not resolve %r box", section)
                 return False
-            resolved.append((hwnd, text))
+            if hwnd in seen:
+                logger.warning(
+                    "calibrated paste aborted: %r and %r resolved to the same control "
+                    "(%s) -- stale calibration",
+                    seen[hwnd],
+                    section,
+                    hwnd,
+                )
+                return False
+            seen[hwnd] = section
+            resolved.append((section, hwnd, text))
 
-        for hwnd, text in resolved:
-            self._focus_control(hwnd)
-            self.copy_to_clipboard(text)
-            self._send_ctrl_v()
-            time.sleep(FIELD_PASTE_DELAY_SECONDS)
+        for section, hwnd, text in resolved:
+            self._set_control_text(hwnd, text)
+            logger.debug("calibrated paste: %d chars into %r box (control %s)", len(text), section, hwnd)
         logger.info("SOAP note injected into AVImark across %d calibrated boxes", len(resolved))
         return True
 
