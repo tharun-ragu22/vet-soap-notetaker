@@ -37,7 +37,7 @@ if sys.platform == "win32":
     _tk.Tk.__init__ = _tk_init_with_tcl_retry
 
 if sys.platform != "win32":
-    for _name in ("win32api", "win32con", "win32gui", "win32clipboard", "pywintypes", "winreg"):
+    for _name in ("win32api", "win32con", "win32gui", "win32clipboard", "win32process", "pywintypes", "winreg"):
         if _name not in sys.modules:
             sys.modules[_name] = types.ModuleType(_name)
 

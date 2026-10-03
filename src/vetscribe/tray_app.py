@@ -27,7 +27,12 @@ def build_icon_image(color: str) -> Image.Image:
 
 class TrayApp:
     def __init__(
-        self, pipeline, on_open_settings=None, on_show_note=None, on_show_history=None
+        self,
+        pipeline,
+        on_open_settings=None,
+        on_show_note=None,
+        on_show_history=None,
+        on_calibrate=None,
     ):
         self.pipeline = pipeline
         self.hotkey_listener = None
@@ -38,6 +43,7 @@ class TrayApp:
         self.on_open_settings = on_open_settings or (lambda: None)
         self.on_show_note = on_show_note or (lambda soap_text: None)
         self.on_show_history = on_show_history or (lambda: None)
+        self.on_calibrate = on_calibrate or (lambda: None)
         self.icon = pystray.Icon(
             "vetscribe",
             icon=build_icon_image(STATE_COLORS[PipelineState.IDLE]),
@@ -58,6 +64,9 @@ class TrayApp:
             ),
             pystray.MenuItem(
                 ui_strings.MENU_SETTINGS, lambda icon, item: self.open_settings()
+            ),
+            pystray.MenuItem(
+                ui_strings.MENU_CALIBRATE_AVIMARK, lambda icon, item: self.calibrate()
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(ui_strings.MENU_QUIT, lambda icon, item: self.quit()),
@@ -110,6 +119,9 @@ class TrayApp:
 
     def open_settings(self):
         self.on_open_settings()
+
+    def calibrate(self):
+        self.on_calibrate()
 
     def quit(self):
         logger.info("shutting down")

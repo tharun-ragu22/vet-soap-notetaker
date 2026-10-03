@@ -56,3 +56,35 @@ def test_config_save_writes_json_that_can_be_reloaded(tmp_path):
     reloaded = Config.load(config_path)
 
     assert reloaded == config
+
+
+def test_config_defaults_avimark_calibration_to_none(tmp_path):
+    config = Config.load(tmp_path / "config.json")
+
+    assert config.avimark_calibration is None
+
+
+def test_config_round_trips_an_avimark_calibration(tmp_path):
+    config_path = tmp_path / "config.json"
+    calibration = {
+        "subjective": {"control_id": 1001, "class_name": "Edit", "rel_x": 0.1, "rel_y": 0.2},
+        "objective": {"control_id": 1002, "class_name": "Edit", "rel_x": 0.1, "rel_y": 0.4},
+    }
+    config = Config(
+        api_endpoint="http://localhost:8443/api/soap",
+        api_timeout_seconds=30,
+        hotkey="<ctrl>+<shift>+r",
+        avimark_calibration=calibration,
+    )
+
+    config.save(config_path)
+
+    assert Config.load(config_path).avimark_calibration == calibration
+
+
+def test_config_without_calibration_key_loads_as_none(tmp_path):
+    # a config written before calibration existed must still load
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"api_endpoint": "http://localhost:8443/api/soap"}))
+
+    assert Config.load(config_path).avimark_calibration is None

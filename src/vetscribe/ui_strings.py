@@ -8,11 +8,30 @@ renders it and the code that checks for it.
 # Window titles
 HISTORY_WINDOW_TITLE = "VetScribe History"
 SETTINGS_WINDOW_TITLE = "VetScribe Settings"
+CALIBRATION_TITLE = "Calibrate AVImark Boxes"
+
+# Human-readable name per SOAP section, for the calibration prompt.
+_SECTION_LABELS = {
+    "subjective": "Subjective",
+    "objective": "Objective",
+    "assessment": "Assessment",
+    "plan": "Plan",
+}
+
+
+def calibration_prompt(section, done, total):
+    """Instruction shown while calibrating one box (done = boxes already captured)."""
+    label = _SECTION_LABELS.get(section, section)
+    return (
+        f"Box {done + 1} of {total}: with AVImark's note window open, "
+        f"click inside the {label} box."
+    )
 
 # Tray menu items
 MENU_OPEN_LAST_SOAP_NOTE = "Open Last SOAP Note"
 MENU_VIEW_HISTORY = "View History"
 MENU_SETTINGS = "Settings"
+MENU_CALIBRATE_AVIMARK = "Calibrate AVImark Boxes…"
 MENU_QUIT = "Quit"
 
 # Buttons

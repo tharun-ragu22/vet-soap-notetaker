@@ -81,7 +81,18 @@ def test_menu_has_status_open_note_history_settings_separator_and_quit_items():
     assert labels[1] == ui_strings.MENU_OPEN_LAST_SOAP_NOTE
     assert labels[2] == ui_strings.MENU_VIEW_HISTORY
     assert labels[3] == ui_strings.MENU_SETTINGS
-    assert labels[5] == ui_strings.MENU_QUIT
+    assert labels[4] == ui_strings.MENU_CALIBRATE_AVIMARK
+    assert labels[6] == ui_strings.MENU_QUIT
+
+
+def test_calibrate_menu_item_invokes_on_calibrate():
+    calls = []
+    tray_app, _pipeline = make_tray_app(state=PipelineState.IDLE)
+    tray_app.on_calibrate = lambda: calls.append("calibrate")
+
+    tray_app.calibrate()
+
+    assert calls == ["calibrate"]
 
 
 def test_view_history_menu_item_invokes_on_show_history():

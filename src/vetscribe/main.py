@@ -1,6 +1,7 @@
 import logging
 import threading
 import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
 
 import pyperclip
@@ -8,7 +9,9 @@ import pyperclip
 from vetscribe import autostart
 from vetscribe.api_client import ApiClient, SoapNote
 from vetscribe.audio_recorder import AudioRecorder
+from vetscribe.avimark_calibration import SOAP_SECTIONS, BoxCalibration
 from vetscribe.avimark_injector import AvimarkInjector
+from vetscribe.calibration_ui import CalibrationController
 from vetscribe.config import Config
 from vetscribe.flyout_ui import FlyoutWindow
 from vetscribe.backend_history_store import BackendHistoryStore
@@ -24,12 +27,41 @@ from vetscribe.logger import build_logger
 from vetscribe.offline_queue import OfflineQueue
 from vetscribe.pipeline import Pipeline, format_soap_text
 from vetscribe.settings_ui import SettingsWindow
+from vetscribe import ui_strings
 from vetscribe.tray_app import TrayApp
 from vetscribe.window_icon import apply_window_icon
 
 logger = logging.getLogger("vetscribe.main")
 
 CONFIG_PATH = Path.home() / ".vetscribe" / "config.json"
+
+
+def _load_calibration(config):
+    """Rehydrate the saved AVImark box calibration, or None if not calibrated."""
+    if not config.avimark_calibration:
+        return None
+    return BoxCalibration.from_dict(config.avimark_calibration)
+
+
+def _section_fields(note):
+    """The SOAP note as ordered (section, text) pairs for per-box injection."""
+    return [(section, getattr(note, section)) for section in SOAP_SECTIONS]
+
+
+def _point_in_window(window, x, y):
+    """Whether screen point (x, y) falls inside a Tk window's current bounds.
+
+    Used during calibration to ignore clicks on our own instruction window.
+    Best-effort: if the geometry can't be read, treat the point as outside.
+    """
+    try:
+        left = window.winfo_rootx()
+        top = window.winfo_rooty()
+        right = left + window.winfo_width()
+        bottom = top + window.winfo_height()
+    except Exception:
+        return False
+    return left <= x <= right and top <= y <= bottom
 
 
 def run_on_main_thread(tk_root, fn):
@@ -120,6 +152,10 @@ def build_app(config=None, tk_root=None):
     recorder = AudioRecorder()
     api_client = ApiClient(config.api_endpoint, config.api_timeout_seconds, config.api_key)
     injector = AvimarkInjector(title_marker=config.target_window_matcher)
+    # The live AVImark box calibration (None until the vet calibrates). Held in a
+    # mutable cell so Settings / the calibration flow can swap it in without
+    # rebuilding the app, same pattern as current_config below.
+    current_calibration = {"value": _load_calibration(config)}
     # The shared exam history lives on the backend (the same records the mobile
     # app reads); a local cache keeps History usable through a brief outage.
     history_store = BackendHistoryStore(api_client)
@@ -170,7 +206,18 @@ def build_app(config=None, tk_root=None):
             transcript=exam.get("transcript", ""),
         )
         soap_text = format_soap_text(note)
-        if not injector.focus_and_inject(soap_text):
+        calibration = current_calibration["value"]
+        if calibration is not None:
+            # Per-box: paste each section straight into its calibrated AVImark box.
+            # Degrades gracefully -- if the boxes can't be resolved it still lands
+            # the whole note as one block (soap_text) into the focused box, and
+            # only returns False when no AVImark chart is safely targetable.
+            injected = injector.focus_and_inject_fields_calibrated(
+                _section_fields(note), calibration, soap_text
+            )
+        else:
+            injected = injector.focus_and_inject(soap_text)
+        if not injected:
             show_note_flyout(soap_text)
 
     injection_poller = InjectionPoller(
@@ -241,6 +288,7 @@ def build_app(config=None, tk_root=None):
         api_client.api_key = new_config.api_key
         injector.title_marker = new_config.target_window_matcher
         hotkey_listener.update_hotkey(new_config.hotkey)
+        current_calibration["value"] = _load_calibration(new_config)
         if new_config.launch_on_startup:
             autostart.enable(autostart.default_launch_command())
         else:
@@ -249,6 +297,67 @@ def build_app(config=None, tk_root=None):
 
     def open_settings():
         SettingsWindow(master=tk_root, config=current_config["value"], on_save=apply_settings)
+
+    def apply_calibration(calibration):
+        # Persist the finished calibration and make it live for the next inject,
+        # without rebuilding the app. Runs on the main thread (the calibration
+        # controller's clicks are marshalled there).
+        new_config = replace(
+            current_config["value"], avimark_calibration=calibration.to_dict()
+        )
+        new_config.save(CONFIG_PATH)
+        current_config["value"] = new_config
+        current_calibration["value"] = calibration
+        logger.info("AVImark calibration saved")
+
+    def start_calibration():
+        # One-time setup: a small always-on-top window prompts the vet to click in
+        # each SOAP box; a global mouse hook feeds each click to the controller,
+        # which captures the control under the cursor. Both the window and the hook
+        # are torn down by close() once all four boxes are captured. Must run on
+        # the main thread (Tk + Win32).
+        from pynput import mouse
+
+        window = tk.Toplevel(tk_root)
+        window.title(ui_strings.CALIBRATION_TITLE)
+        window.attributes("-topmost", True)
+        label = tk.Label(window, text="", justify="left", padx=20, pady=20, wraplength=360)
+        label.pack()
+
+        listener = {"value": None}
+
+        def prompt(section, done, total):
+            label.config(
+                text=ui_strings.calibration_prompt(section, done, total)
+            )
+
+        def close():
+            if listener["value"] is not None:
+                listener["value"].stop()
+            window.destroy()
+
+        controller = CalibrationController(
+            capture=injector.capture_calibration_box,
+            save=apply_calibration,
+            prompt=prompt,
+            close=close,
+        )
+
+        def on_click(x, y, button, pressed):
+            # Capture the box on a left-button *press*. Ignore clicks that land on
+            # our own instruction window (so clicking near it doesn't register as a
+            # box), and let the click through to AVImark either way.
+            if not pressed or button != mouse.Button.left:
+                return
+            if _point_in_window(window, x, y):
+                return
+            run_on_main_thread(tk_root, lambda: controller.on_click(x, y))
+
+        listener["value"] = mouse.Listener(on_click=on_click)
+        listener["value"].start()
+        controller.start()
+
+    tray_app.on_calibrate = lambda: run_on_main_thread(tk_root, start_calibration)
 
     # The tray menu fires on the pystray icon thread, so -- like on_show_note /
     # on_show_history above -- constructing the Tk window must be marshalled onto

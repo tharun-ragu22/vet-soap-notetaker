@@ -556,3 +556,69 @@ def test_build_app_offline_queue_on_note_ready_shows_flyout(mocker):
     _, kwargs = mock_flyout_cls.call_args
     assert kwargs["master"] is tk_root
     assert kwargs["soap_text"] == "SUBJECTIVE: recovered note"
+
+
+def _calibration_dict():
+    sections = ("subjective", "objective", "assessment", "plan")
+    return {
+        s: {"control_id": 1000 + i, "class_name": "Edit", "rel_x": 0.1, "rel_y": 0.1 * i}
+        for i, s in enumerate(sections)
+    }
+
+
+def test_remote_injection_uses_calibrated_per_box_paste_when_calibrated(mocker):
+    from vetscribe.avimark_calibration import BoxCalibration
+
+    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    config = Config(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+        avimark_calibration=_calibration_dict(),
+    )
+    tk_root = MagicMock()
+
+    tray_app, _, _ = build_app(config=config, tk_root=tk_root)
+    calibrated = mocker.patch.object(
+        tray_app.pipeline.injector, "focus_and_inject_fields_calibrated", return_value=True
+    )
+    plain = mocker.patch.object(tray_app.pipeline.injector, "focus_and_inject")
+
+    tray_app.injection_poller.on_injection(_injection_request())
+
+    plain.assert_not_called()
+    calibrated.assert_called_once()
+    args = calibrated.call_args.args
+    assert args[0] == [
+        ("subjective", "s"),
+        ("objective", "o"),
+        ("assessment", "a"),
+        ("plan", "p"),
+    ]
+    assert isinstance(args[1], BoxCalibration)
+    assert args[2] == _EXPECTED_NOTE  # single-block fallback text
+    mock_flyout_cls.assert_not_called()
+
+
+def test_remote_injection_calibrated_failure_falls_back_to_flyout(mocker):
+    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    config = Config(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+        avimark_calibration=_calibration_dict(),
+    )
+    tk_root = MagicMock()
+
+    tray_app, _, _ = build_app(config=config, tk_root=tk_root)
+    mocker.patch.object(
+        tray_app.pipeline.injector,
+        "focus_and_inject_fields_calibrated",
+        return_value=False,
+    )
+
+    tray_app.injection_poller.on_injection(_injection_request())
+
+    mock_flyout_cls.assert_called_once()
+    _, kwargs = mock_flyout_cls.call_args
+    assert kwargs["soap_text"] == _EXPECTED_NOTE

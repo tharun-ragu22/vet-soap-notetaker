@@ -5,8 +5,14 @@ import win32api
 import win32clipboard
 import win32con
 import win32gui
+import win32process
+
+from vetscribe.avimark_calibration import choose_control, descriptor_from_capture
 
 AVIMARK_TITLE_MARKER = "AVImark"
+
+# win32con may not carry GA_ROOT on every build; it's a fixed Win32 constant.
+_GA_ROOT = getattr(win32con, "GA_ROOT", 2)
 
 # Between pasting one SOAP field and moving to the next box we pause briefly so
 # the target app has consumed the Ctrl+V before we overwrite the clipboard for
@@ -185,55 +191,129 @@ class AvimarkInjector:
         logger.info("SOAP note injected into AVImark")
         return True
 
-    def inject_fields(self, fields) -> bool:
-        """Paste each SOAP field into its own box, like ``inject`` but per-field.
+    # --- calibrated per-box injection ---------------------------------------
+    #
+    # We can't fill the four SOAP boxes by Tabbing between them -- unrelated
+    # checkboxes sit in the keyboard order, so a blind Tab count lands in the wrong
+    # field. Instead each box is targeted by its actual Win32 control, captured
+    # once by `capture_calibration_box` and resolved back with `resolve_calibration_box`.
+    # See avimark_calibration.py for the (pure) descriptor model and matching.
 
-        Requires AVImark to already be the foreground window (the same guard as
-        ``inject``). Starting from whichever box the caret is in, it pastes the
-        first field, advances to the next box, pastes the next, and so on -- so
-        the vet lands the caret in AVImark's Subjective box and VetScribe fills
-        Subjective / Objective / Assessment / Plan down the form.
+    def capture_calibration_box(self, screen_x: int, screen_y: int):
+        """Identify the control under a calibration click as a ``BoxControl``.
+
+        Called while the vet clicks inside one of AVImark's boxes during setup.
+        Records the control's id/class and the click position relative to the
+        top-level AVImark window, so it can be re-found later even after the window
+        is recreated for a different patient.
         """
-        if not self.is_avimark_foreground():
-            logger.warning("field injection skipped: AVImark is not the foreground window")
-            return False
-        self._paste_fields(fields)
-        return True
+        hwnd = win32gui.WindowFromPoint((screen_x, screen_y))
+        control_id = win32gui.GetDlgCtrlID(hwnd)
+        class_name = win32gui.GetClassName(hwnd)
+        top = win32gui.GetAncestor(hwnd, _GA_ROOT)
+        parent_rect = win32gui.GetWindowRect(top)
+        return descriptor_from_capture(
+            control_id, class_name, parent_rect, screen_x, screen_y
+        )
 
-    def focus_and_inject_fields(self, fields) -> bool:
-        """Per-field counterpart of ``focus_and_inject`` for the flyout/history.
+    def _enumerate_candidates(self, parent_hwnd):
+        """List every child control of ``parent_hwnd`` with its id/class/rect."""
+        results = []
 
-        Resolves and raises the AVImark chart (same safety logic, same refusal
-        on ambiguity) then fills each box in turn. The clipboard fallback on
-        refusal gets the whole note joined together for a single manual paste.
+        def _collect(hwnd, _extra):
+            results.append(
+                {
+                    "hwnd": hwnd,
+                    "control_id": win32gui.GetDlgCtrlID(hwnd),
+                    "class_name": win32gui.GetClassName(hwnd),
+                    "rect": win32gui.GetWindowRect(hwnd),
+                }
+            )
+            return True
+
+        win32gui.EnumChildWindows(parent_hwnd, _collect, None)
+        return results
+
+    def resolve_calibration_box(self, parent_hwnd, box):
+        """Resolve a calibrated ``box`` back to a live control hwnd under the window."""
+        candidates = self._enumerate_candidates(parent_hwnd)
+        parent_rect = win32gui.GetWindowRect(parent_hwnd)
+        return choose_control(candidates, box, parent_rect)
+
+    def _focus_control(self, hwnd):
+        """Give keyboard focus to a specific child control, cross-thread.
+
+        ``SetFocus`` only works on a window attached to the calling thread's input
+        queue, so we attach to the target control's thread for the call and detach
+        afterwards (even on error) to avoid leaving the input queues wired together.
         """
-        fallback = "\n\n".join(f for f in fields if f)
-        hwnd = self._resolve_and_focus_target(fallback)
-        if hwnd is None:
-            return False
-        self._paste_fields(fields)
-        return True
+        target_tid, _ = win32process.GetWindowThreadProcessId(hwnd)
+        our_tid = win32api.GetCurrentThreadId()
+        win32process.AttachThreadInput(our_tid, target_tid, True)
+        try:
+            win32gui.SetFocus(hwnd)
+        finally:
+            win32process.AttachThreadInput(our_tid, target_tid, False)
 
-    def _paste_fields(self, fields):
-        """Paste an ordered list of fields, advancing one box between each.
+    def _paste_calibrated(self, parent_hwnd, section_fields, calibration) -> bool:
+        """Paste each ``(section, text)`` straight into its calibrated box.
 
-        The caret must already be in the first target box. Field 0 pastes where
-        the caret is; every later field first advances to the next box (Tab) and
-        then pastes. Short delays keep each paste from racing the clipboard
-        overwrite for the next field (see ``FIELD_PASTE_DELAY_SECONDS``).
+        Resolves *every* box first; if any can't be resolved (or isn't calibrated)
+        it returns False without pasting anything, so the caller can fall back to a
+        safe single-block paste rather than scatter a half-placed note.
         """
-        for index, field in enumerate(fields):
-            if index > 0:
-                self._send_tab()
-                time.sleep(FIELD_PASTE_DELAY_SECONDS)
-            self.copy_to_clipboard(field)
+        resolved = []
+        for section, text in section_fields:
+            box = calibration.get(section)
+            if box is None:
+                logger.warning("calibrated paste aborted: no calibration for %r", section)
+                return False
+            hwnd = self.resolve_calibration_box(parent_hwnd, box)
+            if hwnd is None:
+                logger.warning("calibrated paste aborted: could not resolve %r box", section)
+                return False
+            resolved.append((hwnd, text))
+
+        for hwnd, text in resolved:
+            self._focus_control(hwnd)
+            self.copy_to_clipboard(text)
             self._send_ctrl_v()
             time.sleep(FIELD_PASTE_DELAY_SECONDS)
-        logger.info("SOAP note injected into AVImark across %d fields", len(fields))
+        logger.info("SOAP note injected into AVImark across %d calibrated boxes", len(resolved))
+        return True
 
-    def _send_tab(self):
-        win32api.keybd_event(win32con.VK_TAB, 0, 0, 0)
-        win32api.keybd_event(win32con.VK_TAB, 0, win32con.KEYEVENTF_KEYUP, 0)
+    def inject_fields_calibrated(self, section_fields, calibration) -> bool:
+        """Calibrated counterpart of ``inject``: paste per box into the foreground.
+
+        Requires AVImark to already be the foreground window (same guard as
+        ``inject``). Returns False if the window isn't AVImark or a box can't be
+        resolved -- the caller then falls back to the single-block paste.
+        """
+        if not self.is_avimark_foreground():
+            logger.warning("calibrated injection skipped: AVImark is not the foreground window")
+            return False
+        parent_hwnd = win32gui.GetForegroundWindow()
+        return self._paste_calibrated(parent_hwnd, section_fields, calibration)
+
+    def focus_and_inject_fields_calibrated(
+        self, section_fields, calibration, fallback_text: str
+    ) -> bool:
+        """Calibrated counterpart of ``focus_and_inject`` for the flyout/history.
+
+        Resolves and raises the AVImark chart (same safety + ambiguity refusal),
+        then pastes each section into its box. If the boxes can't be resolved, it
+        still gets the note in -- as one block into the focused box -- using
+        ``fallback_text``, so a stale calibration degrades gracefully instead of
+        dropping the note.
+        """
+        hwnd = self._resolve_and_focus_target(fallback_text)
+        if hwnd is None:
+            return False
+        if not self._paste_calibrated(hwnd, section_fields, calibration):
+            logger.info("calibrated paste unavailable; falling back to single-block paste")
+            self.copy_to_clipboard(fallback_text)
+            self._send_ctrl_v()
+        return True
 
     def _send_ctrl_v(self):
         win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)

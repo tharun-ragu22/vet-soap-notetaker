@@ -8,6 +8,10 @@ DEFAULT_CONFIG = {
     "api_key": "",
     "target_window_matcher": "AVImark",
     "launch_on_startup": False,
+    # Per-site AVImark SOAP-box calibration (avimark_calibration.BoxCalibration
+    # serialized via .to_dict()), or None until the vet has calibrated. Kept as a
+    # plain dict here so config stays pure data; main.py rehydrates it.
+    "avimark_calibration": None,
 }
 
 
@@ -19,6 +23,7 @@ class Config:
     api_key: str = ""
     target_window_matcher: str = "AVImark"
     launch_on_startup: bool = False
+    avimark_calibration: dict | None = None
 
     @classmethod
     def load(cls, path):
