@@ -158,18 +158,19 @@ class MockAvimarkSoapApp:
         _ensure_class()
         hinst = win32api.GetModuleHandle(None)
 
-        # Size the top-level window so its *client* area fits the controls. We keep
-        # CW_USEDEFAULT so consecutive mock windows cascade to *different* positions
-        # -- pinning them all to one spot makes a closing window overlap the next,
-        # and the calibration's WindowFromPoint then captures the wrong window's
-        # control. The trade-off is that a window tall enough to cascade off the
-        # bottom of the (headless) CI display loses its lower boxes, so every layout
-        # is kept short enough to fit (see _layout).
+        # Pin the window to a fixed on-screen spot near the top-left (so even the
+        # tallest layout fits on the headless CI display) and size it so its client
+        # area holds the controls. Position matters because calibration locates each
+        # box with WindowFromPoint(screen point): the box must be on-screen AND our
+        # window must be the top-most one at that point. We make it top-most right
+        # after creation (below), which is what actually guarantees WindowFromPoint
+        # lands on our control rather than a window underneath (e.g. the CI console)
+        # -- cascading (CW_USEDEFAULT) or stacking at the origin both let another
+        # window sit over a box and corrupt the capture.
         style = win32con.WS_OVERLAPPEDWINDOW | win32con.WS_VISIBLE
         self.hwnd = win32gui.CreateWindow(
             _CLASS_NAME, self.title, style,
-            win32con.CW_USEDEFAULT, win32con.CW_USEDEFAULT,
-            cw + 40, ch + 60, 0, 0, hinst, None,
+            20, 10, cw + 40, ch + 60, 0, 0, hinst, None,
         )
 
         for item in items:
@@ -194,6 +195,16 @@ class MockAvimarkSoapApp:
                 self.box_hwnds[section] = child
 
         win32gui.UpdateWindow(self.hwnd)
+        # Force this window above everything else (incl. the CI console) so the
+        # calibration's WindowFromPoint hits our boxes. SetWindowPos' z-order change
+        # is honoured cross-thread, unlike SetForegroundWindow.
+        try:
+            win32gui.SetWindowPos(
+                self.hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+            )
+        except Exception:
+            pass
 
     def box_rect(self, section):
         return win32gui.GetWindowRect(self.box_hwnds[section])
