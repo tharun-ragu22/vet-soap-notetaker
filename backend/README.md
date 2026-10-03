@@ -117,8 +117,9 @@ needed to run the suite.
 
 ## Evals
 
-`evals/` (separate from `tests/`, not picked up by `pytest`) holds `pydantic-evals`-based evals for
-`NoteGenerator.generate()` against a range of example transcripts (`evals/cases.py`) — routine visits,
+`src/vetscribe_backend/llm/evals/` (grouped with the LLM code it exercises, separate from `tests/`, not
+picked up by `pytest`) holds `pydantic-evals`-based evals for `NoteGenerator.generate()` against a range
+of example transcripts (`llm/evals/cases.py`) — routine visits,
 emergencies, multi-pet visits, vague/garbled transcripts, declined-care conversations, and irrelevant
 chit-chat mixed in with a real complaint. Unlike the unit tests, these make real network calls to a live
 Ollama-compatible server, scoring output with deterministic checks (all four SOAP fields present,
@@ -129,7 +130,7 @@ needed:
 ```bash
 cd backend
 OLLAMA_BASE_URL=http://localhost:11434 OLLAMA_NOTE_MODEL=gemma4:e4b \
-  uv run python -m evals.note_generator_evals
+  uv run python -m vetscribe_backend.llm.evals.note_generator_evals
 ```
 
 Point `OLLAMA_BASE_URL` at any reachable Ollama server (e.g. a tunnel to a GPU box) and

@@ -17,16 +17,15 @@ jobs:
         id: filter
         with:
           # The expensive eval job runs if and only if the LLM code changed, so
-          # the filter keys on exactly that: the llm/ package (transcription +
-          # note generation + prompts + pipeline) and the eval harness that
-          # exercises it. Every other backend change (store, app, config, the
-          # PyInstaller spec, docs) leaves the model behavior untouched and must
-          # not trigger evals. Gating on *.py under those dirs gives clean OR
-          # semantics and sidesteps markdown without a negation pattern.
+          # the filter keys on exactly that one directory: the llm/ package, which
+          # holds transcription, note generation, prompts, the pipeline, AND the
+          # eval harness (llm/evals/). Every other backend change (store, app,
+          # config, the PyInstaller spec, docs) leaves the model behavior
+          # untouched and must not trigger evals. Gating on *.py sidesteps
+          # markdown without needing a negation pattern.
           filters: |
             llm:
               - 'backend/src/vetscribe_backend/llm/**/*.py'
-              - 'backend/evals/**/*.py'
 
   test:
     strategy:
@@ -200,7 +199,7 @@ jobs:
         env:
           OLLAMA_BASE_URL: ${{ steps.remote_check.outputs.available == 'true' && secrets.REMOTE_OLLAMA_URL || 'http://localhost:11434' }}
           OLLAMA_NOTE_MODEL: gemma4:e4b
-        run: uv run python -m evals.note_generator_evals
+        run: uv run python -m vetscribe_backend.llm.evals.note_generator_evals
 
   build-windows-exe:
     needs: [test, backend-evals]

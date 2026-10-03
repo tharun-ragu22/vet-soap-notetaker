@@ -28,7 +28,12 @@ block_cipher = None
 # PyInstaller's static analysis can't see them -- force the whole backend package
 # in. uvicorn likewise imports its loop/protocol/lifespan backends lazily by
 # string name, so collect those too or the server won't start when frozen.
-hidden = collect_submodules("vetscribe_backend") + collect_submodules("uvicorn")
+#
+# Drop the llm/evals/ subpackage: it's a dev-only eval harness (pydantic-evals /
+# pydantic-ai) that the server never imports, so it has no place in the shipped
+# exe -- forcing it in would needlessly bundle those heavy dev deps.
+_collected = collect_submodules("vetscribe_backend") + collect_submodules("uvicorn")
+hidden = [m for m in _collected if "evals" not in m.split(".")]
 
 a = Analysis(
     [str(src_dir / "vetscribe_backend" / "main.py")],
@@ -39,7 +44,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Belt and braces with the hidden-imports filter above: keep the eval harness
+    # and its dev-only deps out of the shipped backend exe.
+    excludes=["vetscribe_backend.llm.evals", "pydantic_evals", "pydantic_ai"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

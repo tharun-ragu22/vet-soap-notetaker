@@ -26,8 +26,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_evals import Dataset
 from pydantic_evals.evaluators import LLMJudge
 
-from evals.cases import CASES
-from evals.evaluators import FieldKeywordCoverage, HasAllSoapFields
+from vetscribe_backend.llm.evals.cases import CASES
+from vetscribe_backend.llm.evals.evaluators import FieldKeywordCoverage, HasAllSoapFields
 from vetscribe_backend.llm.note_generation.ollama_note_generator import OllamaNoteGenerator
 from vetscribe_backend.schemas import SoapNote
 
