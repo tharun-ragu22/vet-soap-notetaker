@@ -75,10 +75,9 @@ def test_calibrated_injection_routes_each_section_to_its_box(layout):
         calibrate_and_inject(app, injector, note=SAMPLE_NOTE)
 
         # Wait on the last-pasted box, then assert every section landed in its own
-        # box -- regardless of the on-screen layout.
+        # box -- regardless of the on-screen layout. Compare the whole mapping so a
+        # failure dumps every box (where a stray/misrouted section actually went),
+        # not just the first mismatch.
         _wait_for_fill(app, "plan", SAMPLE_NOTE["plan"])
-        for section, expected in SAMPLE_NOTE.items():
-            assert app.box_text(section) == expected, (
-                f"layout {layout}: {section} box = {app.box_text(section)!r}, "
-                f"expected {expected!r}"
-            )
+        actual = {section: app.box_text(section) for section in SAMPLE_NOTE}
+        assert actual == dict(SAMPLE_NOTE), f"layout {layout}: {actual!r}"
