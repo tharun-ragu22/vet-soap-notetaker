@@ -253,6 +253,12 @@ def calibrate_and_inject(app, injector, note=None, delay=0.0):
             time.sleep(delay)
     calibration = session.result()
 
+    # Target this specific mock window (like the real app remembering the active
+    # chart). Without it, any *other* open "AVImark"-titled window -- e.g. a plain
+    # mock left over from an earlier run -- makes the injector refuse to guess which
+    # chart to paste into.
+    injector.target_hwnd = app.hwnd
+
     fields = note_fields(note)
     fallback = "\n\n".join(text for _, text in fields if text)
     injector.focus_and_inject_fields_calibrated(fields, calibration, fallback)
