@@ -157,12 +157,18 @@ class MockAvimarkSoapApp:
         _ensure_class()
         hinst = win32api.GetModuleHandle(None)
 
-        # Size the top-level window so its *client* area fits the controls.
+        # Size the top-level window so its *client* area fits the controls, and
+        # pin it to the top-left corner. We must NOT use CW_USEDEFAULT position:
+        # that cascades the window down the screen, and for the tallest layout the
+        # lower boxes then fall off the bottom of the (headless) CI display. If a
+        # box's centre is off-screen, the calibration's WindowFromPoint lands on no
+        # control, the capture degrades to the position fallback, and two boxes can
+        # resolve to the same control -- exactly the collision the per-box inject
+        # (rightly) refuses. Anchoring at (0, 0) keeps every box on-screen.
         style = win32con.WS_OVERLAPPEDWINDOW | win32con.WS_VISIBLE
         self.hwnd = win32gui.CreateWindow(
             _CLASS_NAME, self.title, style,
-            win32con.CW_USEDEFAULT, win32con.CW_USEDEFAULT,
-            cw + 40, ch + 60, 0, 0, hinst, None,
+            0, 0, cw + 40, ch + 60, 0, 0, hinst, None,
         )
 
         for item in items:
