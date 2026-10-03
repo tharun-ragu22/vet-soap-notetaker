@@ -252,3 +252,23 @@ jobs:
         with:
           name: VetScribeBackend-windows
           path: backend/dist/VetScribeBackend
+
+      # Wrap both onedir builds into the single combined installer the vet runs
+      # on-site. Inno Setup isn't preinstalled on the runner; choco adds ISCC.exe
+      # to PATH (via its shim dir, already on PATH), so the compile is a separate
+      # step. No backend/.env exists in CI, so installer.iss skips the keys file
+      # (skipifsourcedoesntexist) -- the repo never carries secrets, and this
+      # artifact is a keyless installer that proves installer.iss compiles against
+      # the two real builds. The shipped, keyed installer is built the same way
+      # after dropping a real backend/.env in.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile VetScribeSetup.exe
+        run: iscc build_spec\installer.iss
+
+      - name: Upload VetScribeSetup.exe artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: VetScribeSetup
+          path: dist/installer/VetScribeSetup.exe

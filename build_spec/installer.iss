@@ -1,16 +1,36 @@
-; Inno Setup script for VetScribe Assistant.
+; Inno Setup script for VetScribe Assistant -- the single combined installer the
+; vet runs on-site (VetScribeSetup.exe). It installs BOTH halves of the appliance
+; and wires up everything so the clinic PC is zero-touch after a reboot:
 ;
-; Prerequisite: build the PyInstaller --onedir output first, so that
-; dist\VetScribe\VetScribe.exe (and its supporting files) exist:
+;   * the desktop tray app        -> {app}\VetScribe.exe
+;   * the windowless backend exe  -> {app}\backend\VetScribeBackend.exe
+;                                    (exactly where backend_supervisor.find_bundled_backend
+;                                     looks: <app>\backend\VetScribeBackend.exe)
+;
+; plus: an autostart entry for the desktop app (which in turn launches + babysits
+; the backend -- a single autostart brings the whole stack up), a firewall rule so
+; the phone can reach the backend, and a seeded config pointing the desktop app at
+; the local backend. Uninstall reverses all of it (see [UninstallRun] + [Code]).
+;
+; Prerequisites -- build BOTH onedir outputs first:
 ;   uv run pyinstaller build_spec/vetscribe.spec --distpath dist --workpath build
+;   (cd backend && uv run pyinstaller build_spec/backend.spec --distpath dist --workpath build)
+; Optionally drop a real backend\.env (provider API keys) next to the backend
+; source so it ships inside the installer; it's skipped if absent so the repo never
+; has to carry secrets.
 ;
-; Then compile this script (e.g. with the Inno Setup Compiler or
-; `iscc build_spec/installer.iss`) to produce dist\installer\VetScribeSetup.exe.
+; Then compile:  iscc build_spec/installer.iss  -> dist\installer\VetScribeSetup.exe
+;
+; Admin is required: the firewall rule and a Program Files install both need it.
+; This assumes the single everyday Windows user on the clinic PC is the one running
+; the installer (autostart + config + data live under that user's profile).
 
 #define MyAppName "VetScribe Assistant"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "VetScribe"
 #define MyAppExeName "VetScribe.exe"
+#define FirewallRuleName "VetScribe Backend"
+#define BackendPort "8443"
 
 [Setup]
 AppId={{B6C2E9B0-6F5E-4A7B-9E9B-1A2B3C4D5E6F}}
@@ -25,7 +45,8 @@ OutputBaseFilename=VetScribeSetup
 Compression=lzma
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
-PrivilegesRequired=lowest
+; Admin: needed to add the Windows Firewall rule and to install into Program Files.
+PrivilegesRequired=admin
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -34,11 +55,68 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Files]
+; The desktop tray app (PyInstaller onedir) -> install root.
 Source: "..\dist\VetScribe\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The windowless backend exe (its own onedir) -> {app}\backend\, the exact path
+; backend_supervisor.find_bundled_backend() resolves.
+Source: "..\backend\dist\VetScribeBackend\*"; DestDir: "{app}\backend"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Provider API keys for the backend, read by config._default_dotenv_path() from
+; beside the backend exe when frozen. Optional at build time: the repo carries no
+; secrets, so this is skipped unless a real backend\.env was dropped in before
+; compiling the shipped installer.
+Source: "..\backend\.env"; DestDir: "{app}\backend"; Flags: skipifsourcedoesntexist
+; Seed the desktop app's config at ~\.vetscribe\config.json pointing at the LOCAL
+; backend over plain http (the bundled backend serves http; config.DEFAULT_CONFIG
+; defaults to https). onlyifdoesntexist so we never clobber a config already tuned
+; on this PC.
+Source: "clinic_config.json"; DestDir: "{%USERPROFILE}\.vetscribe"; DestName: "config.json"; Flags: onlyifdoesntexist
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
+[Registry]
+; Autostart the desktop app on login. Same HKCU Run key + value name the in-app
+; autostart module manages (src/vetscribe/autostart.py: RUN_KEY_PATH / APP_NAME),
+; so the app's Settings toggle stays consistent with what the installer wrote.
+; The frozen exe takes no args (unlike the dev `-m vetscribe.main` form).
+; uninsdeletevalue removes it on uninstall so nothing relaunches afterwards.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VetScribeAssistant"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
+
 [Run]
+; Open the backend's port so the phone on the clinic Wi-Fi can reach it.
+Filename: "{sys}\netsh.exe"; \
+  Parameters: "advfirewall firewall add rule name=""{#FirewallRuleName}"" dir=in action=allow protocol=TCP localport={#BackendPort}"; \
+  Flags: runhidden; StatusMsg: "Allowing the phone to reach the backend..."
+; Offer to launch the tray app right after a non-silent install.
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Reverse the firewall rule on uninstall.
+Filename: "{sys}\netsh.exe"; \
+  Parameters: "advfirewall firewall delete rule name=""{#FirewallRuleName}"""; \
+  Flags: runhidden; RunOnceId: "DelVetScribeFirewall"
+
+[Code]
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  AppDataDir: string;
+  ProfileDir: string;
+begin
+  // After the program files are gone, offer to remove the data too. A prompt (not
+  // automatic) so uninstall is reversible without being silently destructive: the
+  // vet keeps their exam history if they might reinstall.
+  if CurUninstallStep = usPostUninstall then
+  begin
+    if MsgBox('Also delete VetScribe data on this PC?' + #13#10 + #13#10 +
+              'This removes exam history, saved config, logs and any failed ' +
+              'recordings. Leave them if you might reinstall later.',
+              mbConfirmation, MB_YESNO) = IDYES then
+    begin
+      AppDataDir := ExpandConstant('{userappdata}\VetScribe');   // logs, recordings
+      ProfileDir := ExpandConstant('{%USERPROFILE}\.vetscribe'); // config, exams
+      DelTree(AppDataDir, True, True, True);
+      DelTree(ProfileDir, True, True, True);
+    end;
+  end;
+end;
