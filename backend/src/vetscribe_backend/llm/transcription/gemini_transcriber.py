@@ -3,7 +3,7 @@ import base64
 import httpx
 
 from vetscribe_backend.config import BackendConfig
-from vetscribe_backend.transcription import Transcriber
+from vetscribe_backend.llm.transcription import Transcriber
 
 ENDPOINT_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 

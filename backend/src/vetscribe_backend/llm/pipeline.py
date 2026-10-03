@@ -1,6 +1,6 @@
-from vetscribe_backend.note_generation import NoteGenerator
+from vetscribe_backend.llm.note_generation import NoteGenerator
 from vetscribe_backend.schemas import SoapResult
-from vetscribe_backend.transcription import Transcriber
+from vetscribe_backend.llm.transcription import Transcriber
 
 
 class SoapPipeline:

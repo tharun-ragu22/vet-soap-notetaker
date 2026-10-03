@@ -28,7 +28,7 @@ from pydantic_evals.evaluators import LLMJudge
 
 from evals.cases import CASES
 from evals.evaluators import FieldKeywordCoverage, HasAllSoapFields
-from vetscribe_backend.note_generation.ollama_note_generator import OllamaNoteGenerator
+from vetscribe_backend.llm.note_generation.ollama_note_generator import OllamaNoteGenerator
 from vetscribe_backend.schemas import SoapNote
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")

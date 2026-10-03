@@ -1,9 +1,9 @@
 import httpx
 
 from vetscribe_backend.config import BackendConfig
-from vetscribe_backend.note_generation import NoteGenerator
-from vetscribe_backend.note_generation.parsing import parse_soap_json
-from vetscribe_backend.prompts import SOAP_SYSTEM_PROMPT
+from vetscribe_backend.llm.note_generation import NoteGenerator
+from vetscribe_backend.llm.note_generation.parsing import parse_soap_json
+from vetscribe_backend.llm.prompts import SOAP_SYSTEM_PROMPT
 from vetscribe_backend.schemas import SoapNote
 
 ENDPOINT_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"

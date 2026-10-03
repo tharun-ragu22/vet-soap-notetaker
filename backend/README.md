@@ -49,7 +49,7 @@ variables still take precedence over `.env` values if both are set. `.env` is gi
 it.
 
 The SOAP-note system prompt sent to whichever note-generation provider is selected lives in
-`src/vetscribe_backend/prompts.py` (`SOAP_SYSTEM_PROMPT`) — edit it there if you want to change the
+`src/vetscribe_backend/llm/prompts.py` (`SOAP_SYSTEM_PROMPT`) — edit it there if you want to change the
 clinical instructions given to the model.
 
 ## Running

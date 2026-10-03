@@ -10,23 +10,23 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
+      llm: ${{ steps.filter.outputs.llm }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          # Require EVERY pattern to match, not the default `some` (OR). With
-          # OR, the negation `!backend/**/*.md` matches every file that isn't a
-          # backend markdown file (i.e. almost everything), so the `backend`
-          # filter was always true and the eval job ran on every push. With
-          # `every`, a file counts only if it's under backend/ AND is not a
-          # backend markdown file -- i.e. a real backend code change.
-          predicate-quantifier: 'every'
+          # The expensive eval job runs if and only if the LLM code changed, so
+          # the filter keys on exactly that: the llm/ package (transcription +
+          # note generation + prompts + pipeline) and the eval harness that
+          # exercises it. Every other backend change (store, app, config, the
+          # PyInstaller spec, docs) leaves the model behavior untouched and must
+          # not trigger evals. Gating on *.py under those dirs gives clean OR
+          # semantics and sidesteps markdown without a negation pattern.
           filters: |
-            backend:
-              - 'backend/**'
-              - '!backend/**/*.md'
+            llm:
+              - 'backend/src/vetscribe_backend/llm/**/*.py'
+              - 'backend/evals/**/*.py'
 
   test:
     strategy:
@@ -140,8 +140,11 @@ jobs:
         run: npm test
 
   backend-evals:
+    # Prerequisite tests must pass first (test-backend), and the LLM code must
+    # actually have changed (changes.outputs.llm) -- otherwise this expensive,
+    # model-hitting job is skipped.
     needs: [test-backend, changes]
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.llm == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

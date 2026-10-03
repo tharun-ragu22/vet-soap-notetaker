@@ -1,4 +1,4 @@
-from vetscribe_backend.pipeline import SoapPipeline
+from vetscribe_backend.llm.pipeline import SoapPipeline
 from vetscribe_backend.schemas import SoapNote
 
 

@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from vetscribe_backend.note_generation.gemini_note_generator import GeminiNoteGenerator
-from vetscribe_backend.note_generation.parsing import NoteParsingError
+from vetscribe_backend.llm.note_generation.gemini_note_generator import GeminiNoteGenerator
+from vetscribe_backend.llm.note_generation.parsing import NoteParsingError
 
 SOAP_PAYLOAD = {"subjective": "s", "objective": "o", "assessment": "a", "plan": "p"}
 

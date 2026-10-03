@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from vetscribe_backend.app import create_app
 from vetscribe_backend.schemas import SoapNote, SoapResult
-from vetscribe_backend.transcription.gemini_transcriber import TranscriptionError
+from vetscribe_backend.llm.transcription.gemini_transcriber import TranscriptionError
 
 
 class FakePipeline:

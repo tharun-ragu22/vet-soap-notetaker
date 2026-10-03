@@ -4,12 +4,12 @@ from fastapi.responses import JSONResponse
 
 from vetscribe_backend.config import BackendConfig
 from vetscribe_backend.injection_queue import InjectionQueue
-from vetscribe_backend.note_generation import get_note_generator
-from vetscribe_backend.note_generation.parsing import NoteParsingError
-from vetscribe_backend.pipeline import SoapPipeline
+from vetscribe_backend.llm.note_generation import get_note_generator
+from vetscribe_backend.llm.note_generation.parsing import NoteParsingError
+from vetscribe_backend.llm.pipeline import SoapPipeline
 from vetscribe_backend.store import ExamStore
-from vetscribe_backend.transcription import get_transcriber
-from vetscribe_backend.transcription.gemini_transcriber import TranscriptionError
+from vetscribe_backend.llm.transcription import get_transcriber
+from vetscribe_backend.llm.transcription.gemini_transcriber import TranscriptionError
 
 _NOTE_FIELDS = ("subjective", "objective", "assessment", "plan", "transcript")
 

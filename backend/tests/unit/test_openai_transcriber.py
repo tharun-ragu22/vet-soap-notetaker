@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from vetscribe_backend.transcription.openai_transcriber import OpenAiTranscriber
+from vetscribe_backend.llm.transcription.openai_transcriber import OpenAiTranscriber
 
 
 @respx.mock

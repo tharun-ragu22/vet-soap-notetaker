@@ -1,6 +1,6 @@
 import pytest
 
-from vetscribe_backend.note_generation.parsing import NoteParsingError, parse_soap_json
+from vetscribe_backend.llm.note_generation.parsing import NoteParsingError, parse_soap_json
 
 
 def test_parse_soap_json_parses_plain_json():
