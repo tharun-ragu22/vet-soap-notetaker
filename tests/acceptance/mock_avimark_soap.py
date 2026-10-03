@@ -109,19 +109,20 @@ def _layout(n):
         ]
         return TITLE_TEMPLATE.format(n=n), 700, 525, items
     if n == 4:
-        # A big checkbox block between Subjective and Objective -- a blind Tab count
-        # would march straight through these into the wrong field.
+        # A block of checkboxes between Subjective and Objective -- a blind Tab count
+        # would march straight through these into the wrong field. Kept compact so
+        # the window still fits on the (headless) CI display when cascaded.
         checks = [
-            _check(f"Finding #{i + 1}", 2001 + i, 20, 120 + i * 26) for i in range(6)
+            _check(f"Finding #{i + 1}", 2001 + i, 20, 108 + i * 24) for i in range(4)
         ]
         items = [
-            _label("Subjective", 20, 10), _box("subjective", 20, 30, 640, 80),
+            _label("Subjective", 20, 10), _box("subjective", 20, 30, 640, 70),
             *checks,
-            _label("Objective", 20, 285), _box("objective", 20, 305, 640, 70),
-            _label("Assessment", 20, 380), _box("assessment", 20, 400, 640, 70),
-            _label("Plan", 20, 475), _box("plan", 20, 495, 640, 70),
+            _label("Objective", 20, 215), _box("objective", 20, 235, 640, 65),
+            _label("Assessment", 20, 310), _box("assessment", 20, 330, 640, 65),
+            _label("Plan", 20, 405), _box("plan", 20, 425, 640, 65),
         ]
-        return TITLE_TEMPLATE.format(n=n), 700, 585, items
+        return TITLE_TEMPLATE.format(n=n), 700, 500, items
     if n == 5:
         title, w, h, items = _layout(1)
         return TITLE_TEMPLATE.format(n=5), w, h, items  # ids zeroed in _create
@@ -157,18 +158,18 @@ class MockAvimarkSoapApp:
         _ensure_class()
         hinst = win32api.GetModuleHandle(None)
 
-        # Size the top-level window so its *client* area fits the controls, and
-        # pin it to the top-left corner. We must NOT use CW_USEDEFAULT position:
-        # that cascades the window down the screen, and for the tallest layout the
-        # lower boxes then fall off the bottom of the (headless) CI display. If a
-        # box's centre is off-screen, the calibration's WindowFromPoint lands on no
-        # control, the capture degrades to the position fallback, and two boxes can
-        # resolve to the same control -- exactly the collision the per-box inject
-        # (rightly) refuses. Anchoring at (0, 0) keeps every box on-screen.
+        # Size the top-level window so its *client* area fits the controls. We keep
+        # CW_USEDEFAULT so consecutive mock windows cascade to *different* positions
+        # -- pinning them all to one spot makes a closing window overlap the next,
+        # and the calibration's WindowFromPoint then captures the wrong window's
+        # control. The trade-off is that a window tall enough to cascade off the
+        # bottom of the (headless) CI display loses its lower boxes, so every layout
+        # is kept short enough to fit (see _layout).
         style = win32con.WS_OVERLAPPEDWINDOW | win32con.WS_VISIBLE
         self.hwnd = win32gui.CreateWindow(
             _CLASS_NAME, self.title, style,
-            0, 0, cw + 40, ch + 60, 0, 0, hinst, None,
+            win32con.CW_USEDEFAULT, win32con.CW_USEDEFAULT,
+            cw + 40, ch + 60, 0, 0, hinst, None,
         )
 
         for item in items:
