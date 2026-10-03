@@ -33,6 +33,7 @@ class TrayApp:
         self.hotkey_listener = None
         self.offline_queue = None
         self.injection_poller = None
+        self.backend_supervisor = None
         self.tk_root = None
         self.on_open_settings = on_open_settings or (lambda: None)
         self.on_show_note = on_show_note or (lambda soap_text: None)
@@ -73,6 +74,9 @@ class TrayApp:
 
     def attach_injection_poller(self, injection_poller):
         self.injection_poller = injection_poller
+
+    def attach_backend_supervisor(self, backend_supervisor):
+        self.backend_supervisor = backend_supervisor
 
     def attach_tk_root(self, tk_root):
         self.tk_root = tk_root
@@ -117,6 +121,10 @@ class TrayApp:
             self.offline_queue.stop()
         if self.injection_poller is not None:
             self.injection_poller.stop()
+        # Stop the backend last: the pollers above talk to it, so shut them down
+        # first, then bring the backend process down so we don't leave an orphan.
+        if self.backend_supervisor is not None:
+            self.backend_supervisor.stop()
         self.icon.stop()
         if self.tk_root is not None:
             self.tk_root.after(0, self.tk_root.quit)

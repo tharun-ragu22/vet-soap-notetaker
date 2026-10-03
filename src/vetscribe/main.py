@@ -14,6 +14,11 @@ from vetscribe.flyout_ui import FlyoutWindow
 from vetscribe.backend_history_store import BackendHistoryStore
 from vetscribe.history_ui import HistoryWindow
 from vetscribe.hotkey_listener import HotkeyListener
+from vetscribe.backend_supervisor import (
+    BackendSupervisor,
+    default_backend_launch,
+    find_bundled_backend,
+)
 from vetscribe.injection_poller import InjectionPoller
 from vetscribe.logger import build_logger
 from vetscribe.offline_queue import OfflineQueue
@@ -198,6 +203,17 @@ def build_app(config=None, tk_root=None):
     pipeline.on_state_change = lambda state: tray_app.update_icon_for_state()
     tray_app.attach_offline_queue(offline_queue)
     tray_app.attach_injection_poller(injection_poller)
+
+    # On the packaged clinic appliance the desktop app also owns the backend's
+    # lifecycle: it launches the bundled backend exe and relaunches it if it
+    # dies, so one autostart entry (this app) brings the whole stack up after a
+    # reboot. In a dev checkout there's no bundled exe, so the supervisor stays
+    # off and the separately-run backend (setup.ps1 / uv run) is left alone.
+    backend_exe = find_bundled_backend()
+    backend_supervisor = BackendSupervisor(
+        launch=default_backend_launch(backend_exe) if backend_exe else None
+    )
+    tray_app.attach_backend_supervisor(backend_supervisor)
     tray_app.attach_tk_root(tk_root)
 
     def dispatch_hotkey_trigger():
@@ -248,6 +264,9 @@ def run():
     build_logger()
     logger.info("VetScribe starting up")
     tray_app, hotkey_listener, tk_root = build_app()
+    # Bring the backend up first (no-op in dev) so it's listening before the
+    # pollers below start reaching for it.
+    tray_app.backend_supervisor.start()
     hotkey_listener.start()
     tray_app.offline_queue.start()
     tray_app.injection_poller.start()
