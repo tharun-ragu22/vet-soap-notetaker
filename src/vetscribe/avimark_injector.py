@@ -132,16 +132,14 @@ class AvimarkInjector:
             return None
         return hwnd
 
-    def _resolve_and_focus_target(self, fallback_text: str):
-        """Locate the AVImark paste target, raise it, and confirm it's foreground.
+    def _resolve_target(self, fallback_text: str):
+        """Pick *which* AVImark window to paste into (no focus change).
 
-        Shared by the single-blob and per-field "Copy & Inject" paths. Returns
-        the target hwnd once AVImark is genuinely the foreground window, or None
-        if we can't safely paste. We prefer the exact window recorded by
-        ``remember_active_window`` (the chart the vet was in); if that's gone and
-        several AVImark windows are open we can't tell which patient is meant, so
-        we refuse and leave ``fallback_text`` on the clipboard for a manual
-        Ctrl+V rather than risk the wrong chart.
+        Prefers the exact window recorded by ``remember_active_window`` (the chart
+        the vet was in); if that's gone and several AVImark windows are open we
+        can't tell which patient is meant, so we refuse and leave ``fallback_text``
+        on the clipboard for a manual Ctrl+V rather than risk the wrong chart.
+        Returns the target hwnd, or None if there's no window / it's ambiguous.
         """
         hwnd = self._remembered_target()
         if hwnd is None:
@@ -159,6 +157,33 @@ class AvimarkInjector:
                 self.copy_to_clipboard(fallback_text)
                 return None
             hwnd = matches[0]
+        return hwnd
+
+    def _raise_window(self, hwnd):
+        """Best-effort: un-minimise ``hwnd`` and bring it to the foreground.
+
+        Used before a calibrated paste so the vet sees the chart fill, but the
+        message-based paste does not depend on it succeeding, so a failure here is
+        swallowed rather than aborting the inject.
+        """
+        try:
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
+            logger.debug("could not raise AVImark window %s (continuing)", hwnd)
+
+    def _resolve_and_focus_target(self, fallback_text: str):
+        """Locate the AVImark paste target, raise it, and confirm it's foreground.
+
+        For the single-block "Copy & Inject" path, which pastes with a *global*
+        Ctrl+V and so genuinely needs AVImark to be the foreground window. Returns
+        the target hwnd once AVImark is foreground, or None if we can't safely
+        paste (no window, ambiguous, or it wouldn't come to the foreground).
+        """
+        hwnd = self._resolve_target(fallback_text)
+        if hwnd is None:
+            return None
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.SetForegroundWindow(hwnd)
@@ -305,19 +330,32 @@ class AvimarkInjector:
     ) -> bool:
         """Calibrated counterpart of ``focus_and_inject`` for the flyout/history.
 
-        Resolves and raises the AVImark chart (same safety + ambiguity refusal),
-        then pastes each section into its box. If the boxes can't be resolved, it
-        still gets the note in -- as one block into the focused box -- using
-        ``fallback_text``, so a stale calibration degrades gracefully instead of
-        dropping the note.
+        Resolves *which* AVImark chart to use (same safety + ambiguity refusal) and
+        raises it so the vet sees it fill, then pastes each section into its box via
+        SendMessage -- which delivers straight to each control, so this path does
+        **not** require the window to be the foreground one (that foreground gate was
+        both the layout-4 "all boxes empty" failure and the intermittent real-world
+        "could not bring AVImark to the foreground" skip). If the boxes can't be
+        resolved (stale calibration), it degrades to a single-block paste; that
+        fallback uses a global Ctrl+V, which *does* need AVImark foreground, so it
+        refuses (leaving the note on the clipboard) if it isn't.
         """
-        hwnd = self._resolve_and_focus_target(fallback_text)
+        hwnd = self._resolve_target(fallback_text)
         if hwnd is None:
             return False
-        if not self._paste_calibrated(hwnd, section_fields, calibration):
-            logger.info("calibrated paste unavailable; falling back to single-block paste")
+        self._raise_window(hwnd)
+        if self._paste_calibrated(hwnd, section_fields, calibration):
+            return True
+        logger.info("calibrated paste unavailable; falling back to single-block paste")
+        if not self.is_avimark_foreground():
+            logger.warning(
+                "injection skipped: could not bring AVImark to the foreground for "
+                "single-block fallback; note copied to clipboard for manual paste"
+            )
             self.copy_to_clipboard(fallback_text)
-            self._send_ctrl_v()
+            return False
+        self.copy_to_clipboard(fallback_text)
+        self._send_ctrl_v()
         return True
 
     def _send_ctrl_v(self):

@@ -217,7 +217,7 @@ def test_inject_fields_calibrated_pastes_into_the_foreground_window(mocker):
 
 def test_focus_and_inject_fields_calibrated_refuses_when_no_target(mocker):
     injector = AvimarkInjector()
-    mocker.patch.object(injector, "_resolve_and_focus_target", return_value=None)
+    mocker.patch.object(injector, "_resolve_target", return_value=None)
     paste = mocker.patch.object(injector, "_paste_calibrated")
 
     ok = injector.focus_and_inject_fields_calibrated(_fields(), _full_calibration(), "blob")
@@ -226,31 +226,59 @@ def test_focus_and_inject_fields_calibrated_refuses_when_no_target(mocker):
     paste.assert_not_called()
 
 
-def test_focus_and_inject_fields_calibrated_pastes_per_box_when_resolved(mocker):
+def test_focus_and_inject_fields_calibrated_pastes_per_box_without_requiring_foreground(mocker):
+    # The per-box paste uses SendMessage straight to each control, so it must NOT
+    # bail just because the window couldn't be brought to the foreground -- that was
+    # the "all four boxes empty" layout-4 regression.
     injector = AvimarkInjector()
-    mocker.patch.object(injector, "_resolve_and_focus_target", return_value=42)
+    mocker.patch.object(injector, "_resolve_target", return_value=42)
+    raise_window = mocker.patch.object(injector, "_raise_window")
     mocker.patch.object(injector, "_paste_calibrated", return_value=True)
+    mocker.patch.object(injector, "is_avimark_foreground", return_value=False)
     copy = mocker.patch.object(injector, "copy_to_clipboard")
-    paste = mocker.patch.object(injector, "_send_ctrl_v")
+    ctrl_v = mocker.patch.object(injector, "_send_ctrl_v")
 
     ok = injector.focus_and_inject_fields_calibrated(_fields(), _full_calibration(), "blob")
 
     assert ok is True
+    raise_window.assert_called_once_with(42)  # still raise it so the vet sees it fill
     # no single-blob fallback when per-box succeeded
     copy.assert_not_called()
-    paste.assert_not_called()
+    ctrl_v.assert_not_called()
 
 
-def test_focus_and_inject_fields_calibrated_falls_back_to_single_blob(mocker):
+def test_focus_and_inject_fields_calibrated_falls_back_to_single_blob_when_foreground(mocker):
     injector = AvimarkInjector()
-    mocker.patch.object(injector, "_resolve_and_focus_target", return_value=42)
+    mocker.patch.object(injector, "_resolve_target", return_value=42)
+    mocker.patch.object(injector, "_raise_window")
     mocker.patch.object(injector, "_paste_calibrated", return_value=False)
+    mocker.patch.object(injector, "is_avimark_foreground", return_value=True)
     copy = mocker.patch.object(injector, "copy_to_clipboard")
-    paste = mocker.patch.object(injector, "_send_ctrl_v")
+    ctrl_v = mocker.patch.object(injector, "_send_ctrl_v")
 
     ok = injector.focus_and_inject_fields_calibrated(_fields(), _full_calibration(), "the blob")
 
     # still reports success: the note landed, just as one block in the focused box
     assert ok is True
     copy.assert_called_once_with("the blob")
-    paste.assert_called_once()
+    ctrl_v.assert_called_once()
+
+
+def test_focus_and_inject_fields_calibrated_fallback_refuses_when_not_foreground(mocker):
+    # The single-block fallback uses a global Ctrl+V, which DOES need AVImark
+    # foreground; if it isn't, refuse rather than paste into the wrong app (the note
+    # is left on the clipboard for a manual paste).
+    injector = AvimarkInjector()
+    mocker.patch.object(injector, "_resolve_target", return_value=42)
+    mocker.patch.object(injector, "_raise_window")
+    mocker.patch.object(injector, "_paste_calibrated", return_value=False)
+    mocker.patch.object(injector, "is_avimark_foreground", return_value=False)
+    ctrl_v = mocker.patch.object(injector, "_send_ctrl_v")
+    copy = mocker.patch.object(injector, "copy_to_clipboard")
+
+    ok = injector.focus_and_inject_fields_calibrated(_fields(), _full_calibration(), "the blob")
+
+    assert ok is False
+    ctrl_v.assert_not_called()
+    # note is left on the clipboard so the vet can paste it manually
+    copy.assert_called_once_with("the blob")
