@@ -211,8 +211,14 @@ class MockAvimarkSoapApp:
         win32gui.PumpMessages()
 
     def close(self):
+        # DestroyWindow only works on the thread that created the window; this is
+        # usually called from another thread, so post WM_CLOSE instead -- PostMessage
+        # is thread-safe and queues to the window's own thread, which then runs the
+        # default WM_CLOSE -> DestroyWindow -> WM_DESTROY -> PostQuitMessage, ending
+        # its PumpMessages(). (Calling DestroyWindow cross-thread silently no-ops and
+        # leaks the window, which then looks like a second open AVImark chart.)
         try:
-            win32gui.DestroyWindow(self.hwnd)
+            win32gui.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
         except Exception:
             pass
 
