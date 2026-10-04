@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "scheme": "vetsoapnotetaker",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon-vet-dog.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
