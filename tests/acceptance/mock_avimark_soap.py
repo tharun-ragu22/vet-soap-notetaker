@@ -2,7 +2,7 @@
 
 Unlike the Tkinter ``mock_avimark.py``, these windows are built from **real native
 Win32 controls** -- ``EDIT`` boxes and ``BUTTON`` checkboxes, each a genuine child
-HWND with its own control id and window class. That matters: VetScribe's
+HWND with its own control id and window class. That matters: Vet Soap Notetaker's
 calibration identifies each SOAP box by ``WindowFromPoint`` -> ``GetDlgCtrlID`` /
 ``GetClassName`` and later re-finds it via ``EnumChildWindows``. Tkinter widgets
 aren't native HWNDs (they're drawn by Tk on one toplevel), so they can't exercise
@@ -19,7 +19,7 @@ checkboxes interspersed, so you can see per-box placement work regardless of lay
   5. same as 1 but the boxes have NO control id (id 0) -- forces calibration's
      position fallback, the way owner-drawn / unlabeled controls would
 
-Each window's title contains "AVImark" so VetScribe's title marker matches it.
+Each window's title contains "AVImark" so Vet Soap Notetaker's title marker matches it.
 
 Just look at one:
     python -m tests.acceptance.mock_avimark_soap --layout 3
@@ -38,7 +38,7 @@ import win32api
 import win32con
 import win32gui
 
-from vetscribe.avimark_calibration import SOAP_SECTIONS, CalibrationSession
+from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, CalibrationSession
 
 TITLE_TEMPLATE = "AVImark - [SOAP Demo Layout {n}]"
 
@@ -57,7 +57,7 @@ _EDIT_STYLE = (
 _CHECK_STYLE = win32con.WS_CHILD | win32con.WS_VISIBLE | win32con.BS_AUTOCHECKBOX
 _LABEL_STYLE = win32con.WS_CHILD | win32con.WS_VISIBLE | win32con.SS_LEFT
 
-_CLASS_NAME = "VetScribeMockAvimarkSoap"
+_CLASS_NAME = "VetSoapNotetakerMockAvimarkSoap"
 _class_registered = False
 
 
@@ -287,7 +287,7 @@ def _run_demo(layout):
     """Show a layout and auto-calibrate+inject against it, leaving it on screen."""
     import threading
 
-    from vetscribe.avimark_injector import AvimarkInjector
+    from vet_soap_notetaker.avimark_injector import AvimarkInjector
 
     app = MockAvimarkSoapApp(layout=layout)
 

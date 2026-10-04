@@ -3,13 +3,13 @@ import time
 from dataclasses import replace
 from unittest.mock import MagicMock
 
-from vetscribe.api_client import ApiClient, Exam, SoapNote
-from vetscribe.audio_recorder import AudioRecorder
-from vetscribe.avimark_injector import AvimarkInjector
-from vetscribe.config import Config
-from vetscribe.icon_art import STATUS_SAMPLE
-from vetscribe.main import build_app, follow_active_avimark
-from vetscribe.pipeline import PipelineState
+from vet_soap_notetaker.api_client import ApiClient, Exam, SoapNote
+from vet_soap_notetaker.audio_recorder import AudioRecorder
+from vet_soap_notetaker.avimark_injector import AvimarkInjector
+from vet_soap_notetaker.config import Config
+from vet_soap_notetaker.icon_art import STATUS_SAMPLE
+from vet_soap_notetaker.main import build_app, follow_active_avimark
+from vet_soap_notetaker.pipeline import PipelineState
 
 
 def test_follow_active_avimark_tracks_until_window_closes():
@@ -162,7 +162,7 @@ def test_build_app_wires_configured_hotkey_into_hotkey_listener():
 
 
 def test_build_app_flyout_callback_creates_flyout_window_on_injection_failure(mocker):
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -182,7 +182,7 @@ def test_build_app_flyout_callback_creates_flyout_window_on_injection_failure(mo
 
 
 def test_build_app_error_callback_shows_flyout_with_error_message(mocker):
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -202,8 +202,8 @@ def test_build_app_error_callback_shows_flyout_with_error_message(mocker):
 
 
 def test_note_flyout_offers_open_history_that_opens_the_history_window(mocker):
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
-    mock_history_cls = mocker.patch("vetscribe.main.HistoryWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    mock_history_cls = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -223,7 +223,7 @@ def test_note_flyout_offers_open_history_that_opens_the_history_window(mocker):
 
 
 def test_error_flyout_has_no_open_history_button(mocker):
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -239,7 +239,7 @@ def test_error_flyout_has_no_open_history_button(mocker):
 
 
 def test_open_last_note_shows_flyout_with_last_soap_text(mocker):
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -259,7 +259,7 @@ def test_open_last_note_shows_flyout_with_last_soap_text(mocker):
 
 
 def test_open_settings_opens_settings_window_with_current_config(mocker):
-    mock_settings_cls = mocker.patch("vetscribe.main.SettingsWindow")
+    mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -280,7 +280,7 @@ def test_open_settings_from_tray_thread_is_marshalled_onto_main_thread(mocker):
     # The tray menu fires on the pystray icon thread. Constructing the Tk
     # SettingsWindow directly from a background thread deadlocks (no traceback);
     # it must be marshalled via tk_root.after, exactly like history/note.
-    mock_settings_cls = mocker.patch("vetscribe.main.SettingsWindow")
+    mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -305,11 +305,11 @@ def test_open_settings_from_tray_thread_is_marshalled_onto_main_thread(mocker):
 
 
 def test_saving_settings_persists_config_and_updates_live_components(mocker, tmp_path):
-    mock_settings_cls = mocker.patch("vetscribe.main.SettingsWindow")
-    mocker.patch("vetscribe.main.autostart")
-    mocker.patch("vetscribe.hotkey_listener.keyboard.Listener")
+    mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
+    mocker.patch("vet_soap_notetaker.main.autostart")
+    mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
     config_path = tmp_path / "config.json"
-    mocker.patch("vetscribe.main.CONFIG_PATH", config_path)
+    mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", config_path)
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -348,11 +348,11 @@ def test_saving_settings_persists_config_and_updates_live_components(mocker, tmp
 
 
 def test_saving_settings_enables_autostart_when_launch_on_startup_checked(mocker, tmp_path):
-    mock_settings_cls = mocker.patch("vetscribe.main.SettingsWindow")
-    mock_enable = mocker.patch("vetscribe.main.autostart.enable")
-    mock_disable = mocker.patch("vetscribe.main.autostart.disable")
-    mocker.patch("vetscribe.hotkey_listener.keyboard.Listener")
-    mocker.patch("vetscribe.main.CONFIG_PATH", tmp_path / "config.json")
+    mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
+    mock_enable = mocker.patch("vet_soap_notetaker.main.autostart.enable")
+    mock_disable = mocker.patch("vet_soap_notetaker.main.autostart.disable")
+    mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
+    mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", tmp_path / "config.json")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -391,9 +391,9 @@ def test_view_history_opens_window_reading_the_shared_backend_history(mocker, tm
     # The history the user browses is the backend's shared exam store -- the same
     # records the mobile app reads -- so opening the window surfaces every note,
     # whether it was recorded on this desktop or on a phone.
-    mock_history_window = mocker.patch("vetscribe.main.HistoryWindow")
+    mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
     mocker.patch(
-        "vetscribe.backend_history_store.get_cache_path",
+        "vet_soap_notetaker.backend_history_store.get_cache_path",
         return_value=tmp_path / "history_cache.json",
     )
     exams = [
@@ -496,7 +496,7 @@ _EXPECTED_NOTE = "SUBJECTIVE: s\nOBJECTIVE: o\nASSESSMENT: a\nPLAN: p"
 
 
 def test_remote_injection_pastes_into_avimark_and_skips_flyout_when_targetable(mocker):
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -517,7 +517,7 @@ def test_remote_injection_pastes_into_avimark_and_skips_flyout_when_targetable(m
 
 
 def test_remote_injection_falls_back_to_safety_flyout_when_not_targetable(mocker):
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -541,7 +541,7 @@ def test_remote_injection_falls_back_to_safety_flyout_when_not_targetable(mocker
 
 
 def test_build_app_offline_queue_on_note_ready_shows_flyout(mocker):
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -567,9 +567,9 @@ def _calibration_dict():
 
 
 def test_remote_injection_uses_calibrated_per_box_paste_when_calibrated(mocker):
-    from vetscribe.avimark_calibration import BoxCalibration
+    from vet_soap_notetaker.avimark_calibration import BoxCalibration
 
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,
@@ -601,7 +601,7 @@ def test_remote_injection_uses_calibrated_per_box_paste_when_calibrated(mocker):
 
 
 def test_remote_injection_calibrated_failure_falls_back_to_flyout(mocker):
-    mock_flyout_cls = mocker.patch("vetscribe.main.FlyoutWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
         api_endpoint="https://example.test/soap",
         api_timeout_seconds=15,

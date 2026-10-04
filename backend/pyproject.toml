@@ -1,7 +1,7 @@
 [project]
-name = "vetscribe-backend"
+name = "vet_soap_notetaker_backend"
 version = "0.1.0"
-description = "Reference SOAP-note generation backend for VetScribe Assistant: pluggable STT/LLM providers behind a single HTTP contract"
+description = "Reference SOAP-note generation backend for Vet Soap Notetaker Assistant: pluggable STT/LLM providers behind a single HTTP contract"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
@@ -28,4 +28,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/vetscribe_backend"]
+packages = ["src/vet_soap_notetaker_backend"]

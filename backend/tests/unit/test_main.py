@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from vetscribe_backend.main import _frozen_log_path
+from vet_soap_notetaker_backend.main import _frozen_log_path
 
 
 def test_frozen_log_path_uses_appdata_when_set():

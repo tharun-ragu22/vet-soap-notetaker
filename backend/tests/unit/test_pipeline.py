@@ -1,5 +1,5 @@
-from vetscribe_backend.llm.pipeline import SoapPipeline
-from vetscribe_backend.schemas import SoapNote
+from vet_soap_notetaker_backend.llm.pipeline import SoapPipeline
+from vet_soap_notetaker_backend.schemas import SoapNote
 
 
 class FakeTranscriber:

@@ -2,8 +2,8 @@ import tkinter
 
 import pytest
 
-from vetscribe.config import Config
-from vetscribe.settings_ui import SettingsWindow
+from vet_soap_notetaker.config import Config
+from vet_soap_notetaker.settings_ui import SettingsWindow
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def tk_root():
 
 def make_config(**overrides):
     defaults = dict(
-        api_endpoint="https://vetscribe.example.com/api/soap",
+        api_endpoint="https://vet_soap_notetaker.example.com/api/soap",
         api_timeout_seconds=30,
         hotkey="<ctrl>+<shift>+r",
         api_key="",
@@ -29,7 +29,7 @@ def make_config(**overrides):
 
 def test_settings_window_prefills_fields_from_config(tk_root):
     config = make_config(
-        api_endpoint="https://vetscribe.example.com/api/soap",
+        api_endpoint="https://vet_soap_notetaker.example.com/api/soap",
         api_key="secret",
         hotkey="<ctrl>+<alt>+v",
         target_window_matcher="PracticeSoft",
@@ -38,7 +38,7 @@ def test_settings_window_prefills_fields_from_config(tk_root):
 
     window = SettingsWindow(master=tk_root, config=config, on_save=lambda c: None)
 
-    assert window.endpoint_var.get() == "https://vetscribe.example.com/api/soap"
+    assert window.endpoint_var.get() == "https://vet_soap_notetaker.example.com/api/soap"
     assert window.api_key_var.get() == "secret"
     assert window.hotkey_var.get() == "<ctrl>+<alt>+v"
     assert window.target_window_var.get() == "PracticeSoft"

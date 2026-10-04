@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    One command to set up and start the whole VetScribe stack on Windows:
+    One command to set up and start the whole Vet Soap Notetaker stack on Windows:
     backend, desktop tray app, and mobile companion.
 
 .DESCRIPTION
@@ -117,11 +117,11 @@ function Start-Service-Window {
     Write-Host "    Starting $Title..."
     Start-Process -FilePath 'powershell' -ArgumentList @(
         '-NoExit', '-Command',
-        "`$host.UI.RawUI.WindowTitle = 'VetScribe: $Title'; Set-Location '$WorkingDir'; $Command"
+        "`$host.UI.RawUI.WindowTitle = 'Vet Soap Notetaker: $Title'; Set-Location '$WorkingDir'; $Command"
     )
 }
 
-Write-Host "VetScribe full-stack launcher" -ForegroundColor Green
+Write-Host "Vet Soap Notetaker full-stack launcher" -ForegroundColor Green
 Write-Host "Repo: $RepoRoot"
 
 $backendDir = Join-Path $RepoRoot 'backend'
@@ -196,9 +196,9 @@ else {
 # Seed ~/.vetscribe/config.json from backend/.env so the desktop app points at
 # the local backend and shares its bearer key. Merge into an existing config so
 # we don't stomp a vet's other settings (hotkey, window matcher, etc.).
-$vetscribeDir = Join-Path $HOME '.vetscribe'
-if (-not (Test-Path $vetscribeDir)) { New-Item -ItemType Directory -Path $vetscribeDir | Out-Null }
-$configPath = Join-Path $vetscribeDir 'config.json'
+$vet_soap_notetakerDir = Join-Path $HOME '.vetscribe'
+if (-not (Test-Path $vet_soap_notetakerDir)) { New-Item -ItemType Directory -Path $vet_soap_notetakerDir | Out-Null }
+$configPath = Join-Path $vet_soap_notetakerDir 'config.json'
 
 $config = [ordered]@{
     api_endpoint          = "https://localhost:8443/api/soap"
@@ -266,20 +266,20 @@ else {
 if ($NoStart) {
     Write-Section "Setup complete (-NoStart: not launching services)"
     Write-Host "Start them yourself when ready:" -ForegroundColor Green
-    Write-Host "  Backend:  cd backend; uv run python -m vetscribe_backend.main"
-    Write-Host "  Desktop:  uv run python -m vetscribe.main"
+    Write-Host "  Backend:  cd backend; uv run python -m vet_soap_notetaker_backend.main"
+    Write-Host "  Desktop:  uv run python -m vet_soap_notetaker.main"
     if (-not $SkipMobile) { Write-Host "  Mobile:   cd mobile; npm start" }
     return
 }
 
 Write-Section "Starting services"
 Start-Service-Window -Title 'backend' -WorkingDir $backendDir `
-    -Command 'uv run python -m vetscribe_backend.main'
+    -Command 'uv run python -m vet_soap_notetaker_backend.main'
 # Give the backend a moment to bind its port before the desktop app starts
 # polling it.
 Start-Sleep -Seconds 3
 Start-Service-Window -Title 'desktop' -WorkingDir $RepoRoot `
-    -Command 'uv run python -m vetscribe.main'
+    -Command 'uv run python -m vet_soap_notetaker.main'
 if (-not $SkipMobile) {
     Start-Service-Window -Title 'mobile' -WorkingDir $mobileDir -Command 'npm start'
 }

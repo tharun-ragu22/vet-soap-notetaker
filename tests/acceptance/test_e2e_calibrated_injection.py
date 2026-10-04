@@ -19,7 +19,7 @@ import pytest
 if sys.platform != "win32":
     pytest.skip("requires a real Windows GUI environment", allow_module_level=True)
 
-from vetscribe.avimark_injector import AvimarkInjector
+from vet_soap_notetaker.avimark_injector import AvimarkInjector
 from tests.acceptance.mock_avimark_soap import (
     SAMPLE_NOTE,
     MockAvimarkSoapApp,

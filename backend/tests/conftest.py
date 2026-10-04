@@ -1,6 +1,6 @@
 import pytest
 
-from vetscribe_backend.config import BackendConfig
+from vet_soap_notetaker_backend.config import BackendConfig
 
 
 @pytest.fixture

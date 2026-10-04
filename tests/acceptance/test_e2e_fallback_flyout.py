@@ -8,10 +8,10 @@ import pytest
 if sys.platform != "win32":
     pytest.skip("requires a real Windows GUI environment", allow_module_level=True)
 
-from vetscribe.api_client import SoapNote
-from vetscribe.avimark_injector import AvimarkInjector
-from vetscribe.flyout_ui import FlyoutWindow
-from vetscribe.pipeline import Pipeline
+from vet_soap_notetaker.api_client import SoapNote
+from vet_soap_notetaker.avimark_injector import AvimarkInjector
+from vet_soap_notetaker.flyout_ui import FlyoutWindow
+from vet_soap_notetaker.pipeline import Pipeline
 
 
 def test_pipeline_shows_safety_flyout_when_avimark_not_focused():

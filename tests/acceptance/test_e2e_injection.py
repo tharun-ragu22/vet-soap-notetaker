@@ -11,9 +11,9 @@ if sys.platform != "win32":
 
 from pywinauto import Application
 
-from vetscribe.api_client import SoapNote
-from vetscribe.avimark_injector import AvimarkInjector
-from vetscribe.pipeline import Pipeline
+from vet_soap_notetaker.api_client import SoapNote
+from vet_soap_notetaker.avimark_injector import AvimarkInjector
+from vet_soap_notetaker.pipeline import Pipeline
 from tests.acceptance.mock_avimark import WINDOW_TITLE
 
 MOCK_AVIMARK_SCRIPT = Path(__file__).parent / "mock_avimark.py"

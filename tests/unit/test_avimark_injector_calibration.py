@@ -9,8 +9,8 @@ tests do.
 
 import pytest
 
-from vetscribe.avimark_calibration import SOAP_SECTIONS, BoxCalibration, BoxControl
-from vetscribe.avimark_injector import AvimarkInjector
+from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, BoxCalibration, BoxControl
+from vet_soap_notetaker.avimark_injector import AvimarkInjector
 
 
 def _full_calibration():
@@ -37,7 +37,7 @@ def _fields(**overrides):
 
 
 def test_capture_calibration_box_builds_descriptor_from_the_click(mocker):
-    win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     win32gui.WindowFromPoint.return_value = 500
     win32gui.GetDlgCtrlID.return_value = 1007
     win32gui.GetClassName.return_value = "RichEdit20W"
@@ -78,7 +78,7 @@ def _fake_enum(win32gui, children):
 
 
 def test_resolve_calibration_box_matches_the_enumerated_child_by_id(mocker):
-    win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     _fake_enum(
         win32gui,
         {
@@ -94,7 +94,7 @@ def test_resolve_calibration_box_matches_the_enumerated_child_by_id(mocker):
 
 
 def test_resolve_calibration_box_returns_none_when_no_children(mocker):
-    win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     _fake_enum(win32gui, {})
     box = BoxControl(control_id=1002, class_name="Edit", rel_x=0.0, rel_y=0.0)
 
@@ -106,8 +106,8 @@ def test_resolve_calibration_box_returns_none_when_no_children(mocker):
 
 
 def test_set_control_text_inserts_via_edit_messages(mocker):
-    win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
-    from vetscribe import avimark_injector as mod
+    win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    from vet_soap_notetaker import avimark_injector as mod
 
     injector = AvimarkInjector()
     injector._set_control_text(555, "hello")
@@ -201,7 +201,7 @@ def test_inject_fields_calibrated_refuses_when_avimark_not_foreground(mocker):
 
 
 def test_inject_fields_calibrated_pastes_into_the_foreground_window(mocker):
-    win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     win32gui.GetForegroundWindow.return_value = 321
     injector = AvimarkInjector()
     mocker.patch.object(injector, "is_avimark_foreground", return_value=True)

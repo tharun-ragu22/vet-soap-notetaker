@@ -1,20 +1,20 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "Vet Soap Notetaker",
     "slug": "mobile",
     "version": "1.0.0",
-    "scheme": "vetscribe",
+    "scheme": "vetsoapnotetaker",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.vetscribe.mobile",
+      "bundleIdentifier": "com.vetsoapnotetaker.mobile",
       "config": {
         "usesNonExemptEncryption": false
       },
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "VetScribe connects to the clinic's VetScribe backend on the local network to upload exam audio and fetch SOAP notes.",
+        "NSLocalNetworkUsageDescription": "Vet Soap Notetaker connects to the clinic's Vet Soap Notetaker backend on the local network to upload exam audio and fetch SOAP notes.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true,
           "NSAllowsArbitraryLoads": true
@@ -22,7 +22,7 @@
       }
     },
     "android": {
-      "package": "com.vetscribe.mobile",
+      "package": "com.vetsoapnotetaker.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -49,7 +49,7 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "VetScribe records exam-room audio to generate SOAP notes."
+          "microphonePermission": "Vet Soap Notetaker records exam-room audio to generate SOAP notes."
         }
       ],
       [

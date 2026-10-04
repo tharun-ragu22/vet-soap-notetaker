@@ -22,8 +22,8 @@ line-for-line mirror of it.
 import json
 from pathlib import Path
 
-from vetscribe.autostart import APP_NAME, RUN_KEY_PATH
-from vetscribe.backend_supervisor import BACKEND_EXE_NAME, BACKEND_SUBDIR
+from vet_soap_notetaker.autostart import APP_NAME, RUN_KEY_PATH
+from vet_soap_notetaker.backend_supervisor import BACKEND_EXE_NAME, BACKEND_SUBDIR
 
 ISS_PATH = Path(__file__).resolve().parents[2] / "build_spec" / "installer.iss"
 CLINIC_CONFIG_PATH = ISS_PATH.parent / "clinic_config.json"
@@ -35,7 +35,7 @@ def _iss_text() -> str:
 
 def test_installer_bundles_the_desktop_app_into_the_app_dir():
     text = _iss_text()
-    assert r"..\dist\VetScribe\*" in text
+    assert r"..\dist\VetSoapNotetaker\*" in text
     assert 'DestDir: "{app}"' in text
 
 
@@ -44,10 +44,10 @@ def test_installer_bundles_the_backend_under_the_supervised_subdir():
     # so the installer must place the backend onedir exactly there or the desktop
     # app won't find the backend to launch.
     text = _iss_text()
-    assert r"..\backend\dist\VetScribeBackend\*" in text
+    assert r"..\backend\dist\VetSoapNotetakerBackend\*" in text
     assert f'DestDir: "{{app}}\\{BACKEND_SUBDIR}"' in text
     # guard the exe-name assumption the supervisor and PyInstaller spec share
-    assert BACKEND_EXE_NAME == "VetScribeBackend.exe"
+    assert BACKEND_EXE_NAME == "VetSoapNotetakerBackend.exe"
 
 
 def test_installer_registers_autostart_matching_the_autostart_module():
@@ -56,8 +56,8 @@ def test_installer_registers_autostart_matching_the_autostart_module():
     assert "HKCU" in text
     assert RUN_KEY_PATH in text
     assert f'ValueName: "{APP_NAME}"' in text
-    # the frozen exe launches with no args (no `-m vetscribe.main`)
-    assert r"{app}\VetScribe.exe" in text
+    # the frozen exe launches with no args (no `-m vet_soap_notetaker.main`)
+    assert r"{app}\VetSoapNotetaker.exe" in text
     # torn down on uninstall
     assert "uninsdeletevalue" in text
 
@@ -102,7 +102,8 @@ def test_installer_requires_admin_for_firewall_and_program_files():
 def test_uninstaller_offers_to_remove_both_data_dirs():
     text = _iss_text()
     assert "[Code]" in text
-    # %APPDATA%\VetScribe (logs/recordings) and ~\.vetscribe (config/history)
+    # data dirs keep their legacy names: %APPDATA%\VetScribe (logs/recordings) and
+    # ~\.vetscribe (config/history) -- renaming them would orphan existing installs
     assert ".vetscribe" in text
     assert r"{userappdata}\VetScribe" in text
     # a prompt -- removal is the vet's choice, so uninstall isn't silently destructive

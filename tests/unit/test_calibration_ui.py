@@ -5,8 +5,8 @@ steps; the actual instruction window and the global mouse hook are injected as
 plain callables, so the sequencing is testable without a display or pynput.
 """
 
-from vetscribe.avimark_calibration import SOAP_SECTIONS, BoxCalibration, BoxControl
-from vetscribe.calibration_ui import CalibrationController
+from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, BoxCalibration, BoxControl
+from vet_soap_notetaker.calibration_ui import CalibrationController
 
 
 def _make(capture=None):

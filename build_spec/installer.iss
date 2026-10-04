@@ -1,11 +1,11 @@
-; Inno Setup script for VetScribe Assistant -- the single combined installer the
-; vet runs on-site (VetScribeSetup.exe). It installs BOTH halves of the appliance
+; Inno Setup script for Vet Soap Notetaker -- the single combined installer the
+; vet runs on-site (VetSoapNotetakerSetup.exe). It installs BOTH halves of the appliance
 ; and wires up everything so the clinic PC is zero-touch after a reboot:
 ;
-;   * the desktop tray app        -> {app}\VetScribe.exe
-;   * the windowless backend exe  -> {app}\backend\VetScribeBackend.exe
+;   * the desktop tray app        -> {app}\VetSoapNotetaker.exe
+;   * the windowless backend exe  -> {app}\backend\VetSoapNotetakerBackend.exe
 ;                                    (exactly where backend_supervisor.find_bundled_backend
-;                                     looks: <app>\backend\VetScribeBackend.exe)
+;                                     looks: <app>\backend\VetSoapNotetakerBackend.exe)
 ;
 ; plus: an autostart entry for the desktop app (which in turn launches + babysits
 ; the backend -- a single autostart brings the whole stack up), a firewall rule so
@@ -13,23 +13,23 @@
 ; the local backend. Uninstall reverses all of it (see [UninstallRun] + [Code]).
 ;
 ; Prerequisites -- build BOTH onedir outputs first:
-;   uv run pyinstaller build_spec/vetscribe.spec --distpath dist --workpath build
+;   uv run pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
 ;   (cd backend && uv run pyinstaller build_spec/backend.spec --distpath dist --workpath build)
 ; Optionally drop a real backend\.env (provider API keys) next to the backend
 ; source so it ships inside the installer; it's skipped if absent so the repo never
 ; has to carry secrets.
 ;
-; Then compile:  iscc build_spec/installer.iss  -> dist\installer\VetScribeSetup.exe
+; Then compile:  iscc build_spec/installer.iss  -> dist\installer\VetSoapNotetakerSetup.exe
 ;
 ; Admin is required: the firewall rule and a Program Files install both need it.
 ; This assumes the single everyday Windows user on the clinic PC is the one running
 ; the installer (autostart + config + data live under that user's profile).
 
-#define MyAppName "VetScribe Assistant"
+#define MyAppName "Vet Soap Notetaker"
 #define MyAppVersion "0.1.0"
-#define MyAppPublisher "VetScribe"
-#define MyAppExeName "VetScribe.exe"
-#define FirewallRuleName "VetScribe Backend"
+#define MyAppPublisher "Vet Soap Notetaker"
+#define MyAppExeName "VetSoapNotetaker.exe"
+#define FirewallRuleName "Vet Soap Notetaker Backend"
 #define BackendPort "8443"
 
 [Setup]
@@ -37,11 +37,11 @@ AppId={{B6C2E9B0-6F5E-4A7B-9E9B-1A2B3C4D5E6F}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\VetScribe
+DefaultDirName={autopf}\Vet Soap Notetaker
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist\installer
-OutputBaseFilename=VetScribeSetup
+OutputBaseFilename=VetSoapNotetakerSetup
 Compression=lzma
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
@@ -56,10 +56,10 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "A
 
 [Files]
 ; The desktop tray app (PyInstaller onedir) -> install root.
-Source: "..\dist\VetScribe\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\VetSoapNotetaker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; The windowless backend exe (its own onedir) -> {app}\backend\, the exact path
 ; backend_supervisor.find_bundled_backend() resolves.
-Source: "..\backend\dist\VetScribeBackend\*"; DestDir: "{app}\backend"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\backend\dist\VetSoapNotetakerBackend\*"; DestDir: "{app}\backend"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Provider API keys for the backend, read by config._default_dotenv_path() from
 ; beside the backend exe when frozen. Optional at build time: the repo carries no
 ; secrets, so this is skipped unless a real backend\.env was dropped in before
@@ -77,11 +77,11 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Registry]
 ; Autostart the desktop app on login. Same HKCU Run key + value name the in-app
-; autostart module manages (src/vetscribe/autostart.py: RUN_KEY_PATH / APP_NAME),
+; autostart module manages (src/vet_soap_notetaker/autostart.py: RUN_KEY_PATH / APP_NAME),
 ; so the app's Settings toggle stays consistent with what the installer wrote.
-; The frozen exe takes no args (unlike the dev `-m vetscribe.main` form).
+; The frozen exe takes no args (unlike the dev `-m vet_soap_notetaker.main` form).
 ; uninsdeletevalue removes it on uninstall so nothing relaunches afterwards.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VetScribeAssistant"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VetSoapNotetakerAssistant"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
 
 [Run]
 ; Open the backend's port so the phone on the clinic Wi-Fi can reach it.
@@ -95,7 +95,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: no
 ; Reverse the firewall rule on uninstall.
 Filename: "{sys}\netsh.exe"; \
   Parameters: "advfirewall firewall delete rule name=""{#FirewallRuleName}"""; \
-  Flags: runhidden; RunOnceId: "DelVetScribeFirewall"
+  Flags: runhidden; RunOnceId: "DelVetSoapNotetakerFirewall"
 
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -108,7 +108,7 @@ begin
   // vet keeps their exam history if they might reinstall.
   if CurUninstallStep = usPostUninstall then
   begin
-    if MsgBox('Also delete VetScribe data on this PC?' + #13#10 + #13#10 +
+    if MsgBox('Also delete Vet Soap Notetaker data on this PC?' + #13#10 + #13#10 +
               'This removes exam history, saved config, logs and any failed ' +
               'recordings. Leave them if you might reinstall later.',
               mbConfirmation, MB_YESNO) = IDYES then

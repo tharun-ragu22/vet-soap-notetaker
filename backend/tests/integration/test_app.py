@@ -1,9 +1,9 @@
 import httpx
 from fastapi.testclient import TestClient
 
-from vetscribe_backend.app import create_app
-from vetscribe_backend.schemas import SoapNote, SoapResult
-from vetscribe_backend.llm.transcription.gemini_transcriber import TranscriptionError
+from vet_soap_notetaker_backend.app import create_app
+from vet_soap_notetaker_backend.schemas import SoapNote, SoapResult
+from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import TranscriptionError
 
 
 class FakePipeline:
@@ -215,8 +215,8 @@ def test_regenerate_returns_502_when_note_generation_fails(make_config):
 
 # --- Cross-device sync: history + exam editing ------------------------------
 
-from vetscribe_backend.injection_queue import InjectionQueue  # noqa: E402
-from vetscribe_backend.store import ExamStore  # noqa: E402
+from vet_soap_notetaker_backend.injection_queue import InjectionQueue  # noqa: E402
+from vet_soap_notetaker_backend.store import ExamStore  # noqa: E402
 
 
 def _note(a="a"):

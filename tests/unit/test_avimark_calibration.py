@@ -8,7 +8,7 @@ focusing a control, pasting) stay in the injector and are exercised separately.
 
 import pytest
 
-from vetscribe.avimark_calibration import (
+from vet_soap_notetaker.avimark_calibration import (
     SOAP_SECTIONS,
     BoxCalibration,
     BoxControl,
@@ -160,7 +160,7 @@ def test_choose_control_returns_none_when_no_candidates():
 
 # --- CalibrationSession ------------------------------------------------------
 
-from vetscribe.avimark_calibration import CalibrationSession  # noqa: E402
+from vet_soap_notetaker.avimark_calibration import CalibrationSession  # noqa: E402
 
 
 def _fake_capture(x, y):

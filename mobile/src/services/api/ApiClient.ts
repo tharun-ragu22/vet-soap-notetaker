@@ -48,7 +48,7 @@ interface RawInjectionRequest {
 }
 
 /**
- * REST + sync client for the VetScribe backend. Mirrors the desktop ApiClient's
+ * REST + sync client for the Vet Soap Notetaker backend. Mirrors the desktop ApiClient's
  * contract (POST /api/soap with raw audio bytes, POST /api/soap/regenerate with a
  * transcript) and adds the cross-device sync surface: /api/history and /api/exams/:id.
  *

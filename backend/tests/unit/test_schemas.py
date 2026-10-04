@@ -1,4 +1,4 @@
-from vetscribe_backend.schemas import SoapNote, SoapResult
+from vet_soap_notetaker_backend.schemas import SoapNote, SoapResult
 
 
 def test_soap_note_to_dict_returns_all_fields():

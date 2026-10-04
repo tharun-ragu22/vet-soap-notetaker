@@ -1,4 +1,4 @@
-# VetScribe Assistant
+# Vet Soap Notetaker Assistant
 
 A Windows system-tray app for veterinary exam rooms. Press a hotkey to record
 the conversation, get an AI-generated SOAP note, and have it typed directly
@@ -40,7 +40,7 @@ app:
 - Hotkey Combination (rebinds the global hotkey live)
 - Target Window Matcher (which window title identifies your practice
   software — defaults to `AVImark`)
-- Launch VetScribe on Windows Startup (adds/removes an
+- Launch Vet Soap Notetaker on Windows Startup (adds/removes an
   `HKCU\...\CurrentVersion\Run` registry entry)
 
 Saving writes to `~/.vetscribe/config.json` and applies every change to the
@@ -77,8 +77,8 @@ real on Windows.
 Requires Python 3.11+ and [`uv`](https://github.com/astral-sh/uv).
 
 ```bash
-git clone https://github.com/tharun-ragu22/vetscribe.git
-cd vetscribe
+git clone https://github.com/tharun-ragu22/vet_soap_notetaker.git
+cd vet_soap_notetaker
 uv sync
 ```
 
@@ -94,8 +94,8 @@ On Windows, `setup.ps1` in the repo root sets up **and starts** all three
 components — backend, desktop tray app, and mobile companion — in one command:
 
 ```powershell
-git clone https://github.com/tharun-ragu22/vetscribe.git
-cd vetscribe
+git clone https://github.com/tharun-ragu22/vet_soap_notetaker.git
+cd vet_soap_notetaker
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
@@ -111,8 +111,8 @@ them first and points you at `winget` installs if either is missing. Then it:
   at the local backend port and shares its `VETSCRIBE_BACKEND_API_KEY` — merging
   into any existing config so your hotkey/window settings are preserved;
 - **launches each service in its own window**: the backend (`uv run python -m
-  vetscribe_backend.main`), the desktop tray app (`uv run python -m
-  vetscribe.main`), and the mobile Expo dev server (`npm start`).
+  vet_soap_notetaker_backend.main`), the desktop tray app (`uv run python -m
+  vet_soap_notetaker.main`), and the mobile Expo dev server (`npm start`).
 
 Each component's `.env` is the source of truth for its environment variables (see
 [`backend/README.md`](backend/README.md) and [`mobile/.env.example`](mobile/.env.example)
@@ -137,8 +137,8 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -SkipMobile
 
 ### Configuration
 
-On first run, VetScribe creates `~/.vetscribe/config.json` with defaults
-(see `src/vetscribe/config.py`):
+On first run, Vet Soap Notetaker creates `~/.vetscribe/config.json` with defaults
+(see `src/vet_soap_notetaker/config.py`):
 
 ```json
 {
@@ -162,17 +162,17 @@ with `subjective`, `objective`, `assessment`, and `plan` fields.
 A reference implementation of this backend, with pluggable OpenAI/Anthropic/Gemini
 providers for transcription and note generation, lives in [`backend/`](backend/README.md).
 
-#### Pointing VetScribe at the reference backend
+#### Pointing Vet Soap Notetaker at the reference backend
 
 1. Start the backend (see [`backend/README.md`](backend/README.md) for provider setup):
    ```bash
    cd backend
    uv sync
    VETSCRIBE_NOTE_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... \
-     uv run python -m vetscribe_backend.main
+     uv run python -m vet_soap_notetaker_backend.main
    ```
    By default it listens on `http://localhost:8443/api/soap` — plain HTTP, no TLS.
-2. In VetScribe's tray menu, open **Settings** and set:
+2. In Vet Soap Notetaker's tray menu, open **Settings** and set:
    - **API Endpoint URL** to `http://localhost:8443/api/soap` (note `http://`, not the
      `https://` default — the reference backend doesn't terminate TLS itself; put a
      reverse proxy in front of it for anything beyond local testing).
@@ -184,7 +184,7 @@ providers for transcription and note generation, lives in [`backend/`](backend/R
 ### Running
 
 ```bash
-uv run python -m vetscribe.main
+uv run python -m vet_soap_notetaker.main
 ```
 
 This starts the tray icon, registers the global hotkey, configures logging,
@@ -194,14 +194,14 @@ and starts the offline-retry background worker.
 
 Diagnostic logs (mic start/stop, foreground window checks, backend response
 codes, injection success/failure) are written to a rotating log file (5MB per
-file, 3 backups kept) at `%APPDATA%\VetScribe\logs\vetscribe.log` on Windows,
-or `~/.vetscribe/logs/vetscribe.log` elsewhere. Set the `VETSCRIBE_DEBUG`
+file, 3 backups kept) at `%APPDATA%\Vet Soap Notetaker\logs\vet_soap_notetaker.log` on Windows,
+or `~/.vetscribe/logs/vet_soap_notetaker.log` elsewhere. Set the `VETSCRIBE_DEBUG`
 environment variable to any truthy value to log at `DEBUG` instead of `INFO`.
 
 ## Project layout
 
 ```
-src/vetscribe/
+src/vet_soap_notetaker/
   config.py            Config dataclass; loads/saves ~/.vetscribe/config.json
   api_client.py         ApiClient — POSTs audio to the AI backend, parses SoapNote
   audio_recorder.py     AudioRecorder — sounddevice-based mic capture + WAV export
@@ -224,8 +224,8 @@ tests/
                          pywinauto GUI automation tests (skipped on non-Windows platforms)
 
 build_spec/
-  vetscribe.spec        PyInstaller spec (--onedir) for building a standalone executable
-  installer.iss          Inno Setup script that wraps the PyInstaller output into VetScribeSetup.exe
+  vet_soap_notetaker.spec        PyInstaller spec (--onedir) for building a standalone executable
+  installer.iss          Inno Setup script that wraps the PyInstaller output into VetSoapNotetakerSetup.exe
 
 .github/workflows/ci.yml  GitHub Actions CI: runs the full suite on ubuntu-latest and
                           windows-latest (via uv), then builds and uploads the Windows
@@ -293,8 +293,8 @@ call sites can still be imported and exercised with mocks.
   `ubuntu-latest`, independently of the `test` job above — provider calls are
   `respx`-mocked so no real API keys are needed.
 - **`build-windows-exe`**: runs after `test` passes, builds a standalone
-  `VetScribe` folder with PyInstaller (`build_spec/vetscribe.spec`), and
+  `Vet Soap Notetaker` folder with PyInstaller (`build_spec/vet_soap_notetaker.spec`), and
   uploads it as a workflow artifact. Producing the double-clickable
-  `VetScribeSetup.exe` installer additionally requires running Inno Setup
+  `VetSoapNotetakerSetup.exe` installer additionally requires running Inno Setup
   (`build_spec/installer.iss`) against that build output, which isn't yet
   automated in CI.

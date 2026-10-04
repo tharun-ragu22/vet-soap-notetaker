@@ -1,6 +1,6 @@
-# VetScribe Mobile
+# Vet Soap Notetaker Mobile
 
-A cross-platform (iOS + Android) companion app for the VetScribe ecosystem: a portable
+A cross-platform (iOS + Android) companion app for the Vet Soap Notetaker ecosystem: a portable
 exam-room microphone, recorder, note reviewer, and remote AVImark injection trigger. It
 talks to the same backend (`backend/`) the Windows tray app uses.
 

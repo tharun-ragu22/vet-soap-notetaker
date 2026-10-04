@@ -1,7 +1,7 @@
 export class ConfigError extends Error {}
 
 export interface AppConfig {
-  /** Base URL of the VetScribe backend, without a trailing slash. */
+  /** Base URL of the Vet Soap Notetaker backend, without a trailing slash. */
   apiUrl: string;
   /** Shared bearer secret; empty string means the backend is unauthenticated. */
   apiKey: string;

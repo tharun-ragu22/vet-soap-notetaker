@@ -3,17 +3,17 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from vetscribe.api_client import ApiClientError, SoapNote
-from vetscribe.offline_queue import OfflineQueue, get_queue_dir
+from vet_soap_notetaker.api_client import ApiClientError, SoapNote
+from vet_soap_notetaker.offline_queue import OfflineQueue, get_queue_dir
 
 
 def test_get_queue_dir_appends_queue_subdir_to_appdata_base_dir(mocker):
     mocker.patch(
-        "vetscribe.offline_queue.get_appdata_base_dir",
-        return_value=Path("/tmp/vetscribe-base"),
+        "vet_soap_notetaker.offline_queue.get_appdata_base_dir",
+        return_value=Path("/tmp/vet_soap_notetaker-base"),
     )
 
-    assert get_queue_dir() == Path("/tmp/vetscribe-base/queue")
+    assert get_queue_dir() == Path("/tmp/vet_soap_notetaker-base/queue")
 
 
 def test_enqueue_writes_wav_bytes_to_queue_dir(tmp_path):

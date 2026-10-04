@@ -25,7 +25,7 @@ jobs:
           # markdown without needing a negation pattern.
           filters: |
             llm:
-              - 'backend/src/vetscribe_backend/llm/**/*.py'
+              - 'backend/src/vet_soap_notetaker_backend/llm/**/*.py'
 
   test:
     strategy:
@@ -199,7 +199,7 @@ jobs:
         env:
           OLLAMA_BASE_URL: ${{ steps.remote_check.outputs.available == 'true' && secrets.REMOTE_OLLAMA_URL || 'http://localhost:11434' }}
           OLLAMA_NOTE_MODEL: gemma4:e4b
-        run: uv run python -m vetscribe_backend.llm.evals.note_generator_evals
+        run: uv run python -m vet_soap_notetaker_backend.llm.evals.note_generator_evals
 
   build-windows-exe:
     needs: [test, backend-evals]
@@ -223,14 +223,14 @@ jobs:
       - name: Install PyInstaller
         run: uv pip install pyinstaller
 
-      - name: Build VetScribe.exe (--onedir)
-        run: uv run pyinstaller build_spec/vetscribe.spec --distpath dist --workpath build
+      - name: Build VetSoapNotetaker.exe (--onedir)
+        run: uv run pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
 
-      - name: Upload VetScribe.exe artifact
+      - name: Upload VetSoapNotetaker.exe artifact
         uses: actions/upload-artifact@v7
         with:
-          name: VetScribe-windows
-          path: dist/VetScribe
+          name: VetSoapNotetaker-windows
+          path: dist/VetSoapNotetaker
 
       # The backend is a separate uv project with its own deps (fastapi/uvicorn/
       # httpx), so it builds in its own env. This is the windowless backend exe
@@ -243,15 +243,15 @@ jobs:
         run: uv pip install pyinstaller
         working-directory: backend
 
-      - name: Build VetScribeBackend.exe (--onedir)
+      - name: Build VetSoapNotetakerBackend.exe (--onedir)
         run: uv run pyinstaller build_spec/backend.spec --distpath dist --workpath build
         working-directory: backend
 
-      - name: Upload VetScribeBackend.exe artifact
+      - name: Upload VetSoapNotetakerBackend.exe artifact
         uses: actions/upload-artifact@v7
         with:
-          name: VetScribeBackend-windows
-          path: backend/dist/VetScribeBackend
+          name: VetSoapNotetakerBackend-windows
+          path: backend/dist/VetSoapNotetakerBackend
 
       # Wrap both onedir builds into the single combined installer the vet runs
       # on-site. Inno Setup isn't preinstalled on the runner; choco adds ISCC.exe
@@ -264,11 +264,11 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 
-      - name: Compile VetScribeSetup.exe
+      - name: Compile VetSoapNotetakerSetup.exe
         run: iscc build_spec\installer.iss
 
-      - name: Upload VetScribeSetup.exe artifact
+      - name: Upload VetSoapNotetakerSetup.exe artifact
         uses: actions/upload-artifact@v7
         with:
-          name: VetScribeSetup
-          path: dist/installer/VetScribeSetup.exe
+          name: VetSoapNotetakerSetup
+          path: dist/installer/VetSoapNotetakerSetup.exe

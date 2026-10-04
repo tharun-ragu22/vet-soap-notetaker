@@ -4,11 +4,11 @@ from types import SimpleNamespace
 
 from pynput import keyboard
 
-from vetscribe.hotkey_listener import HotkeyListener
+from vet_soap_notetaker.hotkey_listener import HotkeyListener
 
 
 def test_start_parses_ctrl_shift_r_hotkey_and_starts_listener(mocker):
-    mock_listener_cls = mocker.patch("vetscribe.hotkey_listener.keyboard.Listener")
+    mock_listener_cls = mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
     mock_listener = mock_listener_cls.return_value
 
     listener = HotkeyListener(on_trigger=lambda: None)
@@ -22,7 +22,7 @@ def test_start_parses_ctrl_shift_r_hotkey_and_starts_listener(mocker):
 
 
 def test_start_uses_custom_hotkey_passed_at_construction(mocker):
-    mocker.patch("vetscribe.hotkey_listener.keyboard.Listener")
+    mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
 
     listener = HotkeyListener(on_trigger=lambda: None, hotkey="<ctrl>+<alt>+v")
     listener.start()
@@ -31,7 +31,7 @@ def test_start_uses_custom_hotkey_passed_at_construction(mocker):
 
 
 def test_update_hotkey_while_running_stops_old_listener_and_starts_new_binding(mocker):
-    mock_listener_cls = mocker.patch("vetscribe.hotkey_listener.keyboard.Listener")
+    mock_listener_cls = mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
     first_listener = mock_listener_cls.return_value
 
     listener = HotkeyListener(on_trigger=lambda: None)
@@ -49,7 +49,7 @@ def test_update_hotkey_while_running_stops_old_listener_and_starts_new_binding(m
 
 
 def test_update_hotkey_when_not_started_only_updates_pending_hotkey(mocker):
-    mock_listener_cls = mocker.patch("vetscribe.hotkey_listener.keyboard.Listener")
+    mock_listener_cls = mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
 
     listener = HotkeyListener(on_trigger=lambda: None)
     listener.update_hotkey("<ctrl>+<alt>+v")

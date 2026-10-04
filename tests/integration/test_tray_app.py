@@ -1,9 +1,9 @@
 from unittest.mock import MagicMock
 
-from vetscribe import ui_strings
-from vetscribe.icon_art import STATUS_SAMPLE
-from vetscribe.pipeline import PipelineState
-from vetscribe.tray_app import TrayApp, build_icon_image
+from vet_soap_notetaker import ui_strings
+from vet_soap_notetaker.icon_art import STATUS_SAMPLE
+from vet_soap_notetaker.pipeline import PipelineState
+from vet_soap_notetaker.tray_app import TrayApp, build_icon_image
 
 
 def _status_rgb(image):

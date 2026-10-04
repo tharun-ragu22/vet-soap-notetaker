@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 
-from vetscribe.api_client import ApiClientError, SoapNote
-from vetscribe.pipeline import Pipeline, PipelineState
+from vet_soap_notetaker.api_client import ApiClientError, SoapNote
+from vet_soap_notetaker.pipeline import Pipeline, PipelineState
 
 
 def make_pipeline(**overrides):

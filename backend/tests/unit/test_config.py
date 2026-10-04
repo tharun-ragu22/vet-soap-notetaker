@@ -1,6 +1,6 @@
 import sys
 
-from vetscribe_backend.config import BackendConfig, _default_dotenv_path
+from vet_soap_notetaker_backend.config import BackendConfig, _default_dotenv_path
 
 
 def test_default_dotenv_path_is_backend_env_in_dev(monkeypatch):
@@ -13,7 +13,7 @@ def test_default_dotenv_path_is_backend_env_in_dev(monkeypatch):
 
 def test_default_dotenv_path_is_beside_the_exe_when_frozen(monkeypatch, tmp_path):
     # Frozen build: the installer drops .env next to the backend executable.
-    exe = tmp_path / "VetScribeBackend.exe"
+    exe = tmp_path / "VetSoapNotetakerBackend.exe"
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(exe), raising=False)
     assert _default_dotenv_path() == tmp_path / ".env"

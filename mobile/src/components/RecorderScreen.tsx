@@ -76,7 +76,7 @@ export function RecorderScreen({ audioService, uploadRecording, onRecorded }: Re
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>VetScribe</Text>
+      <Text style={styles.title}>Vet Soap Notetaker</Text>
       {phase === 'recording' ? (
         <Text accessibilityLabel="recording" style={styles.recording}>
           ● Recording…

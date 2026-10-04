@@ -2,8 +2,8 @@ import tkinter
 
 import pytest
 
-from vetscribe import ui_strings
-from vetscribe.flyout_ui import FlyoutWindow
+from vet_soap_notetaker import ui_strings
+from vet_soap_notetaker.flyout_ui import FlyoutWindow
 
 
 @pytest.fixture

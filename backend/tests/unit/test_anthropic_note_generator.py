@@ -4,8 +4,8 @@ import httpx
 import pytest
 import respx
 
-from vetscribe_backend.llm.note_generation.anthropic_note_generator import AnthropicNoteGenerator
-from vetscribe_backend.llm.note_generation.parsing import NoteParsingError
+from vet_soap_notetaker_backend.llm.note_generation.anthropic_note_generator import AnthropicNoteGenerator
+from vet_soap_notetaker_backend.llm.note_generation.parsing import NoteParsingError
 
 SOAP_PAYLOAD = {"subjective": "s", "objective": "o", "assessment": "a", "plan": "p"}
 

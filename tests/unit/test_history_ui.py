@@ -3,9 +3,9 @@ import uuid
 
 import pytest
 
-from vetscribe import history_ui, ui_strings
-from vetscribe.api_client import Exam, SoapNote
-from vetscribe.history_ui import HistoryWindow
+from vet_soap_notetaker import history_ui, ui_strings
+from vet_soap_notetaker.api_client import Exam, SoapNote
+from vet_soap_notetaker.history_ui import HistoryWindow
 
 
 class _SyncThread:

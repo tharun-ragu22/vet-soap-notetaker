@@ -2,7 +2,7 @@ import itertools
 
 import pytest
 
-from vetscribe_backend.injection_queue import InjectionQueue
+from vet_soap_notetaker_backend.injection_queue import InjectionQueue
 
 
 @pytest.fixture

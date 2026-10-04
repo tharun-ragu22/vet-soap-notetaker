@@ -1,6 +1,6 @@
-# VetScribe — Live Demo Plan (for a vet audience)
+# Vet Soap Notetaker — Live Demo Plan (for a vet audience)
 
-A ~8–10 minute flow to show VetScribe to a practicing vet. It leads with their pain
+A ~8–10 minute flow to show Vet Soap Notetaker to a practicing vet. It leads with their pain
 (charting time), shows the happy path, then the two things that actually earn trust in a
 clinical setting: the **safety net** (never pastes into the wrong chart) and **no lost
 recordings** (audio survives a backend outage).
@@ -12,7 +12,7 @@ be spoken in 30–60 seconds and to produce a clean Subjective / Objective / Ass
 
 ## Elevator pitch (~30 sec — when you've only got a moment)
 
-> "You know how you lose a few minutes after every patient typing up the SOAP note? VetScribe
+> "You know how you lose a few minutes after every patient typing up the SOAP note? Vet Soap Notetaker
 > writes it for you. You hit a hotkey, talk to the owner like you always do, hit it again, and
 > a structured note lands in the AVImark chart a few seconds later — in your words. It never
 > pastes into the wrong patient's chart, and if the network drops your recording is saved and
@@ -35,7 +35,7 @@ be spoken in 30–60 seconds and to produce a clean Subjective / Objective / Ass
 > part of the job nobody went to vet school for."
 
 **Introduce the solution simply:**
-> "VetScribe listens to the visit and writes the SOAP note for you. You press a hotkey when the
+> "Vet Soap Notetaker listens to the visit and writes the SOAP note for you. You press a hotkey when the
 > exam starts, you talk to your patient and the owner exactly like you always do, you press it
 > again when you're done, and a few seconds later a structured note — Subjective, Objective,
 > Assessment, Plan — is sitting in the patient's AVImark chart. In your words, from what you
@@ -87,7 +87,7 @@ be spoken in 30–60 seconds and to produce a clean Subjective / Objective / Ass
 
 ### 1. Frame the problem — 30 sec, no clicking
 > "You finish an exam, then spend 3–5 minutes typing it into AVImark while the next patient
-> waits. VetScribe does that write-up for you — you just talk normally."
+> waits. Vet Soap Notetaker does that write-up for you — you just talk normally."
 
 Point at the tray icon: **green = idle and listening for the hotkey.**
 

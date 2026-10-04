@@ -1,5 +1,5 @@
-from vetscribe_backend.schemas import SoapNote
-from vetscribe_backend.store import ExamStore, JsonFileExamStore
+from vet_soap_notetaker_backend.schemas import SoapNote
+from vet_soap_notetaker_backend.store import ExamStore, JsonFileExamStore
 
 
 def _note(a="a"):

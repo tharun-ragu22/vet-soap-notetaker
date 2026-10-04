@@ -1,7 +1,7 @@
 import pytest
 
-from vetscribe.api_client import ApiClientError
-from vetscribe.injection_poller import InjectionPoller
+from vet_soap_notetaker.api_client import ApiClientError
+from vet_soap_notetaker.injection_poller import InjectionPoller
 
 
 class FakeApiClient:

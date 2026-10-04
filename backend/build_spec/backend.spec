@@ -1,10 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for the VetScribe backend (the reference SOAP-note server).
+# PyInstaller spec for the Vet Soap Notetaker backend (the reference SOAP-note server).
 #
 # Builds a --onedir, windowless build so the desktop app can launch it as a
-# hidden background process on the clinic PC (see src/vetscribe/backend_supervisor.py
+# hidden background process on the clinic PC (see src/vet_soap_notetaker/backend_supervisor.py
 # in the desktop project). The combined installer drops this build under
-# <install>\backend\ next to VetScribe.exe, with the keys ".env" beside the
+# <install>\backend\ next to VetSoapNotetaker.exe, with the keys ".env" beside the
 # backend exe (see config._default_dotenv_path).
 #
 # --onedir (not --onefile) for the same reason as the desktop build: AV vendors
@@ -32,11 +32,11 @@ block_cipher = None
 # Drop the llm/evals/ subpackage: it's a dev-only eval harness (pydantic-evals /
 # pydantic-ai) that the server never imports, so it has no place in the shipped
 # exe -- forcing it in would needlessly bundle those heavy dev deps.
-_collected = collect_submodules("vetscribe_backend") + collect_submodules("uvicorn")
+_collected = collect_submodules("vet_soap_notetaker_backend") + collect_submodules("uvicorn")
 hidden = [m for m in _collected if "evals" not in m.split(".")]
 
 a = Analysis(
-    [str(src_dir / "vetscribe_backend" / "main.py")],
+    [str(src_dir / "vet_soap_notetaker_backend" / "main.py")],
     pathex=[str(src_dir)],
     binaries=[],
     datas=[],
@@ -46,7 +46,7 @@ a = Analysis(
     runtime_hooks=[],
     # Belt and braces with the hidden-imports filter above: keep the eval harness
     # and its dev-only deps out of the shipped backend exe.
-    excludes=["vetscribe_backend.llm.evals", "pydantic_evals", "pydantic_ai"],
+    excludes=["vet_soap_notetaker_backend.llm.evals", "pydantic_evals", "pydantic_ai"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -59,7 +59,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="VetScribeBackend",
+    name="VetSoapNotetakerBackend",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -83,5 +83,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="VetScribeBackend",
+    name="VetSoapNotetakerBackend",
 )

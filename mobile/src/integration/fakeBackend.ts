@@ -1,8 +1,8 @@
 import type { HttpFetch, HttpResponse, HttpRequestInit } from '../services/api/ApiClient';
 
 /**
- * An in-memory stand-in for the real VetScribe backend, faithful to the contract in
- * backend/src/vetscribe_backend/app.py: the same routes, the same snake_case JSON
+ * An in-memory stand-in for the real Vet Soap Notetaker backend, faithful to the contract in
+ * backend/src/vet_soap_notetaker_backend/app.py: the same routes, the same snake_case JSON
  * shapes, the same status codes (202 on inject, 404 on unknown, 401 on bad auth) and
  * the same "resolve the note fresh at poll time" behaviour for pending injections.
  *

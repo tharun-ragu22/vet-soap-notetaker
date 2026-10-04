@@ -1,5 +1,5 @@
-from vetscribe.api_client import ApiClientError, Exam
-from vetscribe.backend_history_store import BackendHistoryStore
+from vet_soap_notetaker.api_client import ApiClientError, Exam
+from vet_soap_notetaker.backend_history_store import BackendHistoryStore
 
 
 def _exam(exam_id="exam-1", assessment="a", transcript="t", patient_name=None):

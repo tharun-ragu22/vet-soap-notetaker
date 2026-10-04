@@ -1,4 +1,4 @@
-from vetscribe.backend_supervisor import BackendSupervisor
+from vet_soap_notetaker.backend_supervisor import BackendSupervisor
 
 
 class FakeProcess:

@@ -1,10 +1,10 @@
 import numpy as np
 
-from vetscribe.audio_recorder import AudioRecorder
+from vet_soap_notetaker.audio_recorder import AudioRecorder
 
 
 def test_start_creates_input_stream_and_sets_recording_true(mocker):
-    mock_stream_cls = mocker.patch("vetscribe.audio_recorder.sd.InputStream")
+    mock_stream_cls = mocker.patch("vet_soap_notetaker.audio_recorder.sd.InputStream")
     recorder = AudioRecorder(sample_rate=16000, channels=1)
 
     recorder.start()
@@ -18,7 +18,7 @@ def test_start_creates_input_stream_and_sets_recording_true(mocker):
 
 
 def test_stop_stops_and_closes_stream_and_sets_recording_false(mocker):
-    mock_stream_cls = mocker.patch("vetscribe.audio_recorder.sd.InputStream")
+    mock_stream_cls = mocker.patch("vet_soap_notetaker.audio_recorder.sd.InputStream")
     recorder = AudioRecorder(sample_rate=16000, channels=1)
     recorder.start()
 
@@ -30,7 +30,7 @@ def test_stop_stops_and_closes_stream_and_sets_recording_false(mocker):
 
 
 def test_start_passes_audio_callback_to_input_stream(mocker):
-    mock_stream_cls = mocker.patch("vetscribe.audio_recorder.sd.InputStream")
+    mock_stream_cls = mocker.patch("vet_soap_notetaker.audio_recorder.sd.InputStream")
     recorder = AudioRecorder(sample_rate=16000, channels=1)
 
     recorder.start()
@@ -40,7 +40,7 @@ def test_start_passes_audio_callback_to_input_stream(mocker):
 
 
 def test_audio_callback_appends_copies_of_incoming_frames_to_buffer(mocker):
-    mocker.patch("vetscribe.audio_recorder.sd.InputStream")
+    mocker.patch("vet_soap_notetaker.audio_recorder.sd.InputStream")
     recorder = AudioRecorder(sample_rate=16000, channels=1)
     recorder.start()
     chunk = np.array([[0.1], [0.2]], dtype=np.float32)
@@ -53,8 +53,8 @@ def test_audio_callback_appends_copies_of_incoming_frames_to_buffer(mocker):
 
 
 def test_save_wav_writes_concatenated_frames_at_configured_sample_rate(mocker, tmp_path):
-    mocker.patch("vetscribe.audio_recorder.sd.InputStream")
-    mock_write = mocker.patch("vetscribe.audio_recorder.wavfile.write")
+    mocker.patch("vet_soap_notetaker.audio_recorder.sd.InputStream")
+    mock_write = mocker.patch("vet_soap_notetaker.audio_recorder.wavfile.write")
     recorder = AudioRecorder(sample_rate=16000, channels=1)
     recorder.start()
     recorder._audio_callback(np.array([[0.1], [0.2]], dtype=np.float32), 2, None, None)
@@ -71,8 +71,8 @@ def test_save_wav_writes_concatenated_frames_at_configured_sample_rate(mocker, t
 
 
 def test_save_wav_with_no_frames_writes_empty_array(mocker, tmp_path):
-    mocker.patch("vetscribe.audio_recorder.sd.InputStream")
-    mock_write = mocker.patch("vetscribe.audio_recorder.wavfile.write")
+    mocker.patch("vet_soap_notetaker.audio_recorder.sd.InputStream")
+    mock_write = mocker.patch("vet_soap_notetaker.audio_recorder.wavfile.write")
     recorder = AudioRecorder(sample_rate=16000, channels=1)
     output_path = tmp_path / "note.wav"
 

@@ -1,8 +1,8 @@
-from vetscribe.avimark_injector import AvimarkInjector
+from vet_soap_notetaker.avimark_injector import AvimarkInjector
 
 
 def test_is_avimark_foreground_returns_true_when_title_contains_avimark(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_win32gui.GetForegroundWindow.return_value = 12345
     mock_win32gui.GetWindowText.return_value = "AVImark - [Patient: Max (Golden Retriever)]"
 
@@ -13,7 +13,7 @@ def test_is_avimark_foreground_returns_true_when_title_contains_avimark(mocker):
 
 
 def test_is_avimark_foreground_returns_false_for_other_windows(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_win32gui.GetForegroundWindow.return_value = 999
     mock_win32gui.GetWindowText.return_value = "Notepad"
 
@@ -23,7 +23,7 @@ def test_is_avimark_foreground_returns_false_for_other_windows(mocker):
 
 
 def test_is_avimark_foreground_uses_configured_title_marker(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_win32gui.GetForegroundWindow.return_value = 12345
     mock_win32gui.GetWindowText.return_value = "PracticeSoft - [Patient: Max]"
 
@@ -36,7 +36,7 @@ def test_is_avimark_foreground_uses_configured_title_marker(mocker):
 
 
 def test_copy_to_clipboard_opens_empties_sets_and_closes_clipboard(mocker):
-    mock_win32clipboard = mocker.patch("vetscribe.avimark_injector.win32clipboard")
+    mock_win32clipboard = mocker.patch("vet_soap_notetaker.avimark_injector.win32clipboard")
 
     injector = AvimarkInjector()
     injector.copy_to_clipboard("SUBJECTIVE: patient is doing well.")
@@ -63,8 +63,8 @@ def test_inject_returns_false_and_does_not_copy_when_avimark_not_foreground(mock
 def test_inject_copies_and_sends_ctrl_v_when_avimark_foreground(mocker):
     mocker.patch.object(AvimarkInjector, "is_avimark_foreground", return_value=True)
     mock_copy = mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
-    mock_win32api = mocker.patch("vetscribe.avimark_injector.win32api")
-    mocker.patch("vetscribe.avimark_injector.win32con")
+    mock_win32api = mocker.patch("vet_soap_notetaker.avimark_injector.win32api")
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32con")
 
     injector = AvimarkInjector()
     result = injector.inject("SOAP TEXT")
@@ -85,7 +85,7 @@ def _fake_enum_windows(windows):
 
 
 def test_find_avimark_window_returns_matching_visible_window(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_win32gui.EnumWindows.side_effect = _fake_enum_windows([111, 222])
     mock_win32gui.IsWindowVisible.return_value = True
     mock_win32gui.GetWindowText.side_effect = (
@@ -98,7 +98,7 @@ def test_find_avimark_window_returns_matching_visible_window(mocker):
 
 
 def test_find_avimark_window_ignores_invisible_windows(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_win32gui.EnumWindows.side_effect = _fake_enum_windows([111])
     mock_win32gui.IsWindowVisible.return_value = False
     mock_win32gui.GetWindowText.return_value = "AVImark - [Patient]"
@@ -109,9 +109,9 @@ def test_find_avimark_window_ignores_invisible_windows(mocker):
 
 
 def test_focus_and_inject_raises_avimark_then_copies_and_pastes(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
-    mock_win32api = mocker.patch("vetscribe.avimark_injector.win32api")
-    mocker.patch("vetscribe.avimark_injector.win32con")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    mock_win32api = mocker.patch("vet_soap_notetaker.avimark_injector.win32api")
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32con")
     mock_copy = mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
 
     mock_win32gui.EnumWindows.side_effect = _fake_enum_windows([111])
@@ -131,9 +131,9 @@ def test_focus_and_inject_raises_avimark_then_copies_and_pastes(mocker):
 
 
 def test_focus_and_inject_restores_a_minimized_avimark_window(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
-    mocker.patch("vetscribe.avimark_injector.win32api")
-    mock_win32con = mocker.patch("vetscribe.avimark_injector.win32con")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32api")
+    mock_win32con = mocker.patch("vet_soap_notetaker.avimark_injector.win32con")
     mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
 
     mock_win32gui.EnumWindows.side_effect = _fake_enum_windows([111])
@@ -149,7 +149,7 @@ def test_focus_and_inject_restores_a_minimized_avimark_window(mocker):
 
 
 def test_focus_and_inject_returns_false_when_no_avimark_window(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_copy = mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
 
     mock_win32gui.EnumWindows.side_effect = _fake_enum_windows([222])
@@ -167,8 +167,8 @@ def test_focus_and_inject_returns_false_when_no_avimark_window(mocker):
 def test_focus_and_inject_does_not_paste_if_focus_does_not_take(mocker):
     # SetForegroundWindow can be refused by Windows; never paste unless AVImark
     # genuinely ended up in the foreground, so the note can't hit another app.
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
-    mocker.patch("vetscribe.avimark_injector.win32con")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32con")
     mock_copy = mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
 
     mock_win32gui.EnumWindows.side_effect = _fake_enum_windows([111])
@@ -188,7 +188,7 @@ def test_focus_and_inject_does_not_paste_if_focus_does_not_take(mocker):
 
 
 def test_remember_active_window_records_foreground_avimark(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_win32gui.GetForegroundWindow.return_value = 111
     mock_win32gui.GetWindowText.return_value = "AVImark - [Patient: Max]"
 
@@ -199,7 +199,7 @@ def test_remember_active_window_records_foreground_avimark(mocker):
 
 
 def test_remember_active_window_clears_target_when_foreground_not_avimark(mocker):
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_win32gui.GetForegroundWindow.return_value = 999
     mock_win32gui.GetWindowText.return_value = "Notepad"
 
@@ -213,7 +213,7 @@ def test_remember_active_window_clears_target_when_foreground_not_avimark(mocker
 def test_track_active_window_updates_target_to_foreground_avimark(mocker):
     # The vet switched to a different AVImark chart while the flyout was open;
     # tracking follows them to it.
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_win32gui.GetForegroundWindow.return_value = 222
     mock_win32gui.GetWindowText.return_value = "AVImark - [Patient: Bella]"
 
@@ -227,9 +227,9 @@ def test_track_active_window_updates_target_to_foreground_avimark(mocker):
 def test_track_active_window_keeps_last_target_when_foreground_not_avimark(mocker):
     # Our own flyout (or any non-AVImark window) is in front: don't drop the
     # chart the vet was last in, so Copy & Inject still has a target.
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_win32gui.GetForegroundWindow.return_value = 999
-    mock_win32gui.GetWindowText.return_value = "VetScribe note"
+    mock_win32gui.GetWindowText.return_value = "Vet Soap Notetaker note"
 
     injector = AvimarkInjector()
     injector.target_hwnd = 111
@@ -242,9 +242,9 @@ def test_focus_and_inject_pastes_into_remembered_chart_among_many(mocker):
     # Two AVImark charts are open (111 and 222). The vet was in 222 when the
     # flyout appeared, so we must paste there -- not into whichever window
     # EnumWindows happens to list first.
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
-    mocker.patch("vetscribe.avimark_injector.win32api")
-    mocker.patch("vetscribe.avimark_injector.win32con")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32api")
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32con")
     mock_copy = mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
 
     mock_win32gui.IsWindow.return_value = True
@@ -266,7 +266,7 @@ def test_focus_and_inject_pastes_into_remembered_chart_among_many(mocker):
 def test_focus_and_inject_refuses_when_multiple_charts_and_none_remembered(mocker):
     # No remembered target and two AVImark charts open: we can't tell which
     # patient is meant, so refuse to paste and leave the note on the clipboard.
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     mock_copy = mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
 
     mock_win32gui.EnumWindows.side_effect = _fake_enum_windows([111, 222])
@@ -288,9 +288,9 @@ def test_focus_and_inject_refuses_when_multiple_charts_and_none_remembered(mocke
 def test_focus_and_inject_falls_back_when_remembered_window_closed(mocker):
     # The remembered chart was closed before the vet clicked Copy & Inject.
     # With only one AVImark window now open, fall back to it.
-    mock_win32gui = mocker.patch("vetscribe.avimark_injector.win32gui")
-    mocker.patch("vetscribe.avimark_injector.win32api")
-    mocker.patch("vetscribe.avimark_injector.win32con")
+    mock_win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32api")
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32con")
     mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
 
     mock_win32gui.IsWindow.return_value = False  # remembered hwnd is gone

@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from vetscribe_backend.llm.transcription.gemini_transcriber import (
+from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import (
     GeminiTranscriber,
     TranscriptionError,
 )

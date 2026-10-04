@@ -1,8 +1,8 @@
 import pytest
 
-from vetscribe_backend.llm.transcription import UnknownProviderError, get_transcriber
-from vetscribe_backend.llm.transcription.gemini_transcriber import GeminiTranscriber
-from vetscribe_backend.llm.transcription.openai_transcriber import OpenAiTranscriber
+from vet_soap_notetaker_backend.llm.transcription import UnknownProviderError, get_transcriber
+from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import GeminiTranscriber
+from vet_soap_notetaker_backend.llm.transcription.openai_transcriber import OpenAiTranscriber
 
 
 def test_get_transcriber_returns_openai_transcriber_for_openai_provider(make_config):

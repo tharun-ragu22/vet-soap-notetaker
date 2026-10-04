@@ -29,7 +29,7 @@ function validateUrl(url: string): string | null {
 }
 
 /**
- * Lets the vet point the app at the clinic's VetScribe backend without a rebuild — the
+ * Lets the vet point the app at the clinic's Vet Soap Notetaker backend without a rebuild — the
  * mobile analogue of the desktop Settings window's endpoint field. The backend URL and
  * optional bearer key are persisted on-device and applied live, so a changed clinic IP
  * is a 10-second edit rather than a fresh EAS build.
@@ -71,7 +71,7 @@ export function SettingsScreen({ settings, onSave, onSaved }: SettingsScreenProp
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Backend connection</Text>
       <Text style={styles.help}>
-        Point VetScribe at the clinic&apos;s backend. Use the server computer&apos;s address on the
+        Point Vet Soap Notetaker at the clinic&apos;s backend. Use the server computer&apos;s address on the
         clinic Wi-Fi — for example http://192.168.1.50:8443
       </Text>
 

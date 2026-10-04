@@ -1,6 +1,6 @@
-# VetScribe Backend (reference implementation)
+# Vet Soap Notetaker Backend (reference implementation)
 
-A minimal reference server that satisfies the HTTP contract VetScribe's `ApiClient` expects
+A minimal reference server that satisfies the HTTP contract Vet Soap Notetaker's `ApiClient` expects
 (`POST /api/soap` with raw WAV bytes, returns JSON with `subjective`/`objective`/`assessment`/`plan`).
 It's a separate project from the desktop tray app — this is meant to run on a server (or locally for
 development), not ship inside the Windows installer.
@@ -30,7 +30,7 @@ Provider credentials (only the ones for your selected providers are required):
 
 `VETSCRIBE_BACKEND_API_KEY` is a separate shared secret (distinct from the provider keys above): if
 set, incoming requests must send `Authorization: Bearer <that value>` — this is the value you'd put in
-VetScribe's own "API Key" setting. If unset, the backend accepts unauthenticated requests.
+Vet Soap Notetaker's own "API Key" setting. If unset, the backend accepts unauthenticated requests.
 
 ### Using a `.env` file
 
@@ -41,7 +41,7 @@ Instead of exporting all of the above as real environment variables, copy `.env.
 cd backend
 cp .env.example .env
 # edit .env with your provider choice and API key(s)
-uv run python -m vetscribe_backend.main
+uv run python -m vet_soap_notetaker_backend.main
 ```
 
 `BackendConfig.from_env()` loads `.env` automatically (via `python-dotenv`) on startup. Real environment
@@ -49,7 +49,7 @@ variables still take precedence over `.env` values if both are set. `.env` is gi
 it.
 
 The SOAP-note system prompt sent to whichever note-generation provider is selected lives in
-`src/vetscribe_backend/llm/prompts.py` (`SOAP_SYSTEM_PROMPT`) — edit it there if you want to change the
+`src/vet_soap_notetaker_backend/llm/prompts.py` (`SOAP_SYSTEM_PROMPT`) — edit it there if you want to change the
 clinical instructions given to the model.
 
 ## Running
@@ -59,12 +59,12 @@ cd backend
 uv sync
 VETSCRIBE_NOTE_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... \
 VETSCRIBE_TRANSCRIPTION_PROVIDER=openai OPENAI_API_KEY=sk-... \
-  uv run python -m vetscribe_backend.main
+  uv run python -m vet_soap_notetaker_backend.main
 ```
 
-Listens on port 8443 by default (override with `PORT`), matching VetScribe's default
+Listens on port 8443 by default (override with `PORT`), matching Vet Soap Notetaker's default
 `api_endpoint` of `https://localhost:8443/api/soap` — note this runs plain HTTP, so for local dev
-point VetScribe's Settings at `http://localhost:8443/api/soap`, or put a TLS-terminating proxy in
+point Vet Soap Notetaker's Settings at `http://localhost:8443/api/soap`, or put a TLS-terminating proxy in
 front of it for anything beyond local testing.
 
 ## History & cross-device sync
@@ -117,7 +117,7 @@ needed to run the suite.
 
 ## Evals
 
-`src/vetscribe_backend/llm/evals/` (grouped with the LLM code it exercises, separate from `tests/`, not
+`src/vet_soap_notetaker_backend/llm/evals/` (grouped with the LLM code it exercises, separate from `tests/`, not
 picked up by `pytest`) holds `pydantic-evals`-based evals for `NoteGenerator.generate()` against a range
 of example transcripts (`llm/evals/cases.py`) — routine visits,
 emergencies, multi-pet visits, vague/garbled transcripts, declined-care conversations, and irrelevant
@@ -130,7 +130,7 @@ needed:
 ```bash
 cd backend
 OLLAMA_BASE_URL=http://localhost:11434 OLLAMA_NOTE_MODEL=gemma4:e4b \
-  uv run python -m vetscribe_backend.llm.evals.note_generator_evals
+  uv run python -m vet_soap_notetaker_backend.llm.evals.note_generator_evals
 ```
 
 Point `OLLAMA_BASE_URL` at any reachable Ollama server (e.g. a tunnel to a GPU box) and
