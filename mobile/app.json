@@ -16,7 +16,6 @@
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Vet Soap Notetaker connects to the clinic's Vet Soap Notetaker backend on the local network to upload exam audio and fetch SOAP notes.",
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true,
           "NSAllowsArbitraryLoads": true
         }
       }
