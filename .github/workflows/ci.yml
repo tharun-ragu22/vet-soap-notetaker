@@ -220,11 +220,10 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
-      - name: Install PyInstaller
-        run: uv pip install pyinstaller
-
       - name: Build VetSoapNotetaker.exe (--onedir)
-        run: uv run pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
+        # PyInstaller is pinned in the `build` dependency group (pyproject.toml),
+        # so the version is reproducible instead of whatever `pip install` grabs.
+        run: uv run --group build pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
 
       - name: Upload VetSoapNotetaker.exe artifact
         uses: actions/upload-artifact@v7
@@ -239,12 +238,9 @@ jobs:
         run: uv sync --locked
         working-directory: backend
 
-      - name: Install PyInstaller (backend env)
-        run: uv pip install pyinstaller
-        working-directory: backend
-
       - name: Build VetSoapNotetakerBackend.exe (--onedir)
-        run: uv run pyinstaller build_spec/backend.spec --distpath dist --workpath build
+        # PyInstaller pinned in the backend's own `build` group (its separate env).
+        run: uv run --group build pyinstaller build_spec/backend.spec --distpath dist --workpath build
         working-directory: backend
 
       - name: Upload VetSoapNotetakerBackend.exe artifact

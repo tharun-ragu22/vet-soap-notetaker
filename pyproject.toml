@@ -22,6 +22,12 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "respx>=0.21.0",
 ]
+# Build-only tooling: PyInstaller freezes the desktop app into the Windows exe
+# the installer ships. Not a runtime dependency (the clinic PC never needs it),
+# so it lives in its own group, installed with `uv run --group build pyinstaller`.
+build = [
+    "pyinstaller>=6.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

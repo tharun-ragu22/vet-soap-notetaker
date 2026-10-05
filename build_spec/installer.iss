@@ -12,9 +12,10 @@
 ; the phone can reach the backend, and a seeded config pointing the desktop app at
 ; the local backend. Uninstall reverses all of it (see [UninstallRun] + [Code]).
 ;
-; Prerequisites -- build BOTH onedir outputs first:
-;   uv run pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
-;   (cd backend && uv run pyinstaller build_spec/backend.spec --distpath dist --workpath build)
+; Prerequisites -- build BOTH onedir outputs first (PyInstaller is pinned in each
+; project's `build` dependency group, so no separate install step is needed):
+;   uv run --group build pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
+;   (cd backend && uv run --group build pyinstaller build_spec/backend.spec --distpath dist --workpath build)
 ; Optionally drop a real backend\.env (provider API keys) next to the backend
 ; source so it ships inside the installer; it's skipped if absent so the repo never
 ; has to carry secrets.
