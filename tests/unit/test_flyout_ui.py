@@ -28,6 +28,19 @@ def test_flyout_window_displays_soap_note_text(tk_root):
     assert "PLAN: text" in displayed_text
 
 
+def test_flyout_window_has_branded_title(tk_root):
+    flyout = FlyoutWindow(
+        master=tk_root,
+        soap_text="text",
+        on_copy_and_inject=lambda: None,
+        on_copy_to_clipboard=lambda: None,
+    )
+
+    # Without an explicit title the window shows Tk's default "tk" in the
+    # taskbar; brand it so the vet sees what the pop-out belongs to.
+    assert flyout.title() == ui_strings.FLYOUT_WINDOW_TITLE
+
+
 def test_copy_and_inject_button_has_expected_label_and_invokes_callback(tk_root):
     calls = []
     flyout = FlyoutWindow(

@@ -6,6 +6,7 @@ renders it and the code that checks for it.
 """
 
 # Window titles
+FLYOUT_WINDOW_TITLE = "Vet Soap Notetaker"
 HISTORY_WINDOW_TITLE = "Vet Soap Notetaker History"
 SETTINGS_WINDOW_TITLE = "Vet Soap Notetaker Settings"
 CALIBRATION_TITLE = "Calibrate AVImark Boxes"

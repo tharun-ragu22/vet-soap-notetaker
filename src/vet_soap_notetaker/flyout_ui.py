@@ -18,6 +18,7 @@ class FlyoutWindow(tk.Toplevel):
         on_open_history=None,
     ):
         super().__init__(master)
+        self.title(ui_strings.FLYOUT_WINDOW_TITLE)
         apply_window_icon(self)
         self.attributes("-topmost", True)
         self.geometry(
