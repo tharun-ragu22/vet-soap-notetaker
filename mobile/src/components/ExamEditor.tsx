@@ -88,10 +88,27 @@ export function ExamEditor({ exam, apiClient, onSaved, onDeleted }: ExamEditorPr
     }
   };
 
+  const isDirty =
+    note.subjective !== exam.subjective ||
+    note.objective !== exam.objective ||
+    note.assessment !== exam.assessment ||
+    note.plan !== exam.plan ||
+    note.transcript !== exam.transcript;
+
   const handleInject = async () => {
     setInjectStatus('sending');
     setInjectError(null);
     try {
+      // Persist the current edits first so the desktop injects what the vet sees,
+      // not the last-saved note -- no Save-first step. The backend builds the
+      // injection from the stored exam, so the save must land before we ask for
+      // it; if it fails we don't request an injection (that would paste a stale
+      // note). Skip the write when nothing changed.
+      if (isDirty) {
+        const updated = await apiClient.updateExam(exam.id, note);
+        setSaveStatus('saved');
+        onSaved?.(updated);
+      }
       await apiClient.requestInjection(exam.id);
       setInjectStatus('sent');
     } catch (e) {

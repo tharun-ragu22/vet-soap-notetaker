@@ -151,6 +151,64 @@ describe('ExamEditor', () => {
     expect(apiClient.requestInjection).toHaveBeenCalledWith('exam-77');
   });
 
+  it('saves the current edits before injecting so the desktop gets what the vet sees', async () => {
+    const apiClient = makeApiClient();
+    const onSaved = jest.fn();
+    render(
+      <ExamEditor exam={makeExam({ id: 'exam-77' })} apiClient={apiClient} onSaved={onSaved} />,
+    );
+
+    // The vet edits a field, then taps Inject *without* tapping Save Changes first.
+    fireEvent.changeText(screen.getByTestId('field-assessment'), 'kennel cough');
+    fireEvent.press(screen.getByText(/inject into avimark/i));
+
+    await waitFor(() => expect(screen.getByText(/sent to the desktop/i)).toBeTruthy());
+    // The edit is persisted as part of injecting...
+    expect(apiClient.updateExam).toHaveBeenCalledWith('exam-77', {
+      subjective: 'S',
+      objective: 'O',
+      assessment: 'kennel cough',
+      plan: 'P',
+      transcript: 'vet: hello',
+    });
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    // ...and the save lands *before* the injection is requested, so the backend
+    // builds the injection from the fresh note, not the stale stored one.
+    const saveOrder = (apiClient.updateExam as jest.Mock).mock.invocationCallOrder[0];
+    const injectOrder = (apiClient.requestInjection as jest.Mock).mock.invocationCallOrder[0];
+    expect(saveOrder).toBeLessThan(injectOrder);
+  });
+
+  it('does not re-save when nothing was edited, but still injects', async () => {
+    const apiClient = makeApiClient();
+    render(<ExamEditor exam={makeExam({ id: 'exam-77' })} apiClient={apiClient} />);
+
+    fireEvent.press(screen.getByText(/inject into avimark/i));
+
+    await waitFor(() => expect(screen.getByText(/sent to the desktop/i)).toBeTruthy());
+    // Nothing changed, so there's no redundant backend write...
+    expect(apiClient.updateExam).not.toHaveBeenCalled();
+    // ...but the injection is still requested.
+    expect(apiClient.requestInjection).toHaveBeenCalledWith('exam-77');
+  });
+
+  it('does not inject when saving the edit fails, to avoid injecting a stale note', async () => {
+    const apiClient = makeApiClient({
+      updateExam: jest.fn(async () => {
+        throw new Error('backend returned 502');
+      }),
+    });
+    render(<ExamEditor exam={makeExam()} apiClient={apiClient} />);
+
+    fireEvent.changeText(screen.getByTestId('field-assessment'), 'kennel cough');
+    fireEvent.press(screen.getByText(/inject into avimark/i));
+
+    await waitFor(() => expect(screen.getByText(/502/)).toBeTruthy());
+    // The save didn't land, so the backend still holds the old note -- we must
+    // not ask it to inject that.
+    expect(apiClient.requestInjection).not.toHaveBeenCalled();
+  });
+
   it('surfaces an injection request failure', async () => {
     const apiClient = makeApiClient({
       requestInjection: jest.fn(async () => {
