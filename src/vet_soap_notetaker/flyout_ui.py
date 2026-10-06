@@ -20,6 +20,11 @@ class FlyoutWindow(tk.Toplevel):
         super().__init__(master)
         self.title(ui_strings.FLYOUT_WINDOW_TITLE)
         apply_window_icon(self)
+        # Held so the button handlers can hand over the note *as currently shown*
+        # (the vet may edit it in the pop-out before acting), not the text the
+        # flyout was opened with.
+        self._copy_and_inject = on_copy_and_inject
+        self._copy_to_clipboard = on_copy_to_clipboard
         self.attributes("-topmost", True)
         self.geometry(
             self.bottom_right_geometry(
@@ -43,14 +48,14 @@ class FlyoutWindow(tk.Toplevel):
         self.copy_and_inject_button = tk.Button(
             button_row,
             text=ui_strings.BUTTON_COPY_AND_INJECT,
-            command=on_copy_and_inject,
+            command=self._on_copy_and_inject,
         )
         self.copy_and_inject_button.pack(side="left")
 
         self.copy_to_clipboard_button = tk.Button(
             button_row,
             text=ui_strings.BUTTON_COPY_SOAP_NOTE,
-            command=on_copy_to_clipboard,
+            command=self._on_copy_to_clipboard,
         )
         self.copy_to_clipboard_button.pack(side="left")
 
@@ -81,6 +86,15 @@ class FlyoutWindow(tk.Toplevel):
         # user having to drag it up.
         self._anchor_bottom_right()
         self.after(0, self._anchor_bottom_right)
+
+    def _current_text(self) -> str:
+        return self.text_widget.get("1.0", "end-1c")
+
+    def _on_copy_and_inject(self):
+        self._copy_and_inject(self._current_text())
+
+    def _on_copy_to_clipboard(self):
+        self._copy_to_clipboard(self._current_text())
 
     def _anchor_bottom_right(self):
         self.update_idletasks()

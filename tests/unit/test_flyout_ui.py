@@ -41,32 +41,55 @@ def test_flyout_window_has_branded_title(tk_root):
     assert flyout.title() == ui_strings.FLYOUT_WINDOW_TITLE
 
 
-def test_copy_and_inject_button_has_expected_label_and_invokes_callback(tk_root):
+def test_copy_and_inject_button_has_expected_label_and_sends_current_text(tk_root):
     calls = []
     flyout = FlyoutWindow(
         master=tk_root,
         soap_text="text",
-        on_copy_and_inject=lambda: calls.append("inject"),
-        on_copy_to_clipboard=lambda: None,
+        on_copy_and_inject=calls.append,
+        on_copy_to_clipboard=lambda text: None,
     )
 
     assert flyout.copy_and_inject_button["text"] == ui_strings.BUTTON_COPY_AND_INJECT
     flyout.copy_and_inject_button.invoke()
-    assert calls == ["inject"]
+    # The callback receives the note currently shown, not a value captured when
+    # the flyout opened -- so a last-second edit here isn't lost on inject.
+    assert calls == ["text"]
 
 
-def test_copy_to_clipboard_button_has_expected_label_and_invokes_callback(tk_root):
+def test_copy_to_clipboard_button_has_expected_label_and_sends_current_text(tk_root):
     calls = []
     flyout = FlyoutWindow(
         master=tk_root,
         soap_text="text",
-        on_copy_and_inject=lambda: None,
-        on_copy_to_clipboard=lambda: calls.append("copy"),
+        on_copy_and_inject=lambda text: None,
+        on_copy_to_clipboard=calls.append,
     )
 
     assert flyout.copy_to_clipboard_button["text"] == ui_strings.BUTTON_COPY_SOAP_NOTE
     flyout.copy_to_clipboard_button.invoke()
-    assert calls == ["copy"]
+    assert calls == ["text"]
+
+
+def test_inject_and_copy_send_the_vets_edited_text(tk_root):
+    injected = []
+    copied = []
+    flyout = FlyoutWindow(
+        master=tk_root,
+        soap_text="original note",
+        on_copy_and_inject=injected.append,
+        on_copy_to_clipboard=copied.append,
+    )
+
+    # The vet tweaks the note in the pop-out before acting on it.
+    flyout.text_widget.delete("1.0", "end")
+    flyout.text_widget.insert("1.0", "edited note")
+
+    flyout.copy_and_inject_button.invoke()
+    flyout.copy_to_clipboard_button.invoke()
+
+    assert injected == ["edited note"]
+    assert copied == ["edited note"]
 
 
 def test_open_history_button_invokes_callback_when_provided(tk_root):

@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import threading
 import tkinter as tk
@@ -241,19 +242,32 @@ class HistoryWindow(tk.Toplevel):
         return any(widget.edit_modified() for widget in self._all_text_widgets())
 
     def _on_save_clicked(self):
-        entry = self._selected_entry()
-        if entry is None:
+        if self._selected_entry() is None:
             return
+        self._persist_current_edits()
+
+    def _persist_current_edits(self):
+        """Save the on-screen fields and return the entry reflecting them.
+
+        Returns the persisted entry when the backend accepts the write (so the
+        next auto-refresh sees no change and doesn't repaint), or an entry built
+        locally from the current fields if the backend is unreachable -- so
+        callers (Save, and Inject) always get the vet's *current* content, never
+        the last-saved content. The caller guarantees a note is selected.
+        """
+        entry = self._selected_entry()
         fields = {
             key: widget.get("1.0", "end-1c") for key, widget in self.field_texts.items()
         }
         transcript = self.transcript_text.get("1.0", "end-1c")
         updated = self.on_save_edit(entry.id, transcript=transcript, **fields)
-        # Reflect the persisted edit locally so the next auto-refresh sees no
-        # change and doesn't repaint (which would otherwise be a no-op flicker).
+        self._mark_clean()
         if updated is not None and self._selected_index is not None:
             self.entries[self._selected_index] = updated
-        self._mark_clean()
+            return updated
+        # Backend unreachable (update returned None): reflect the edits locally
+        # so inject still carries them even though the save didn't land.
+        return dataclasses.replace(entry, transcript=transcript, **fields)
 
     def _on_regenerate_clicked(self):
         if self.on_regenerate is None or self._regenerating:
@@ -372,8 +386,15 @@ class HistoryWindow(tk.Toplevel):
 
     def _on_copy_and_inject_clicked(self):
         entry = self._selected_entry()
-        if entry is not None:
-            self.on_copy_and_inject(entry.soap_text)
+        if entry is None:
+            return
+        # Persist any in-progress edit first so what lands in AVImark is also
+        # what's saved -- the vet shouldn't have to click Save Changes before
+        # injecting. Hand the (current) structured note to the callback so it can
+        # place each SOAP section into its own calibrated AVImark box.
+        if self._has_unsaved_edits():
+            entry = self._persist_current_edits()
+        self.on_copy_and_inject(entry)
 
     def _on_copy_to_clipboard_clicked(self):
         entry = self._selected_entry()

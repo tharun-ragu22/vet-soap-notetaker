@@ -124,7 +124,7 @@ def test_window_shows_newest_entry_by_default(tk_root):
     assert window.field_texts["subjective"].get("1.0", "end-1c") == "Newest"
 
 
-def test_copy_and_inject_button_sends_selected_entry_soap_text(tk_root):
+def test_copy_and_inject_button_sends_selected_entry_note(tk_root):
     entries = [make_entry(subjective="Annual checkup")]
     injected = []
     window = make_window(
@@ -135,8 +135,81 @@ def test_copy_and_inject_button_sends_selected_entry_soap_text(tk_root):
     assert window.copy_and_inject_button["text"] == ui_strings.BUTTON_COPY_AND_INJECT
     window.copy_and_inject_button.invoke()
 
+    # Inject now hands over the structured note (so the app can place each SOAP
+    # section into its own calibrated AVImark box), not a pre-joined string.
     assert len(injected) == 1
-    assert "SUBJECTIVE: Annual checkup" in injected[0]
+    assert injected[0].subjective == "Annual checkup"
+    assert "SUBJECTIVE: Annual checkup" in injected[0].soap_text
+
+
+def test_inject_persists_current_edits_before_injecting(tk_root):
+    saved = []
+    entry = make_entry(subjective="Annual checkup", entry_id="n1")
+
+    def on_save_edit(entry_id, **fields):
+        saved.append((entry_id, fields))
+        # The backend echoes the persisted entry back.
+        from dataclasses import replace
+
+        return replace(entry, **fields)
+
+    injected = []
+    window = make_window(
+        tk_root, [entry], on_save_edit=on_save_edit, on_copy_and_inject=injected.append
+    )
+    window.show_entry(0)
+
+    # The vet edits a field, then clicks Inject *without* clicking Save first.
+    window.field_texts["assessment"].delete("1.0", "end")
+    window.field_texts["assessment"].insert("1.0", "corrected assessment")
+    window.copy_and_inject_button.invoke()
+
+    # The edit is saved as part of injecting...
+    assert len(saved) == 1
+    assert saved[0][1]["assessment"] == "corrected assessment"
+    # ...and the *edited* note is what gets injected, not the stale saved one.
+    assert injected[0].assessment == "corrected assessment"
+
+
+def test_inject_uses_current_edits_even_when_backend_is_unreachable(tk_root):
+    entry = make_entry(subjective="Annual checkup", entry_id="n1")
+    injected = []
+    window = make_window(
+        tk_root,
+        [entry],
+        # Backend down: update returns None (mirrors BackendHistoryStore.update).
+        on_save_edit=lambda entry_id, **fields: None,
+        on_copy_and_inject=injected.append,
+    )
+    window.show_entry(0)
+
+    window.field_texts["plan"].delete("1.0", "end")
+    window.field_texts["plan"].insert("1.0", "recheck in 2 weeks")
+    window.copy_and_inject_button.invoke()
+
+    # Even without a successful save, the note that lands in AVImark reflects the
+    # vet's on-screen edit (built locally), never the last-saved text.
+    assert injected[0].plan == "recheck in 2 weeks"
+
+
+def test_inject_with_no_edits_does_not_save_but_still_injects(tk_root):
+    entry = make_entry(subjective="Annual checkup", entry_id="n1")
+    saved = []
+    injected = []
+    window = make_window(
+        tk_root,
+        [entry],
+        on_save_edit=lambda entry_id, **fields: saved.append(entry_id),
+        on_copy_and_inject=injected.append,
+    )
+    window.show_entry(0)
+
+    window.copy_and_inject_button.invoke()
+
+    # Nothing changed, so there's no redundant backend write...
+    assert saved == []
+    # ...but the note still gets injected.
+    assert injected[0].subjective == "Annual checkup"
 
 
 def test_copy_to_clipboard_button_sends_selected_entry_soap_text(tk_root):

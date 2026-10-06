@@ -624,6 +624,102 @@ def test_remote_injection_calibrated_failure_falls_back_to_flyout(mocker):
     assert kwargs["soap_text"] == _EXPECTED_NOTE
 
 
+def test_inject_note_uses_calibrated_per_box_paste_when_calibration_present(mocker):
+    from vet_soap_notetaker.api_client import SoapNote
+    from vet_soap_notetaker.main import inject_note
+
+    injector = MagicMock()
+    injector.focus_and_inject_fields_calibrated.return_value = True
+    calibration = object()  # opaque sentinel -- inject_note just passes it through
+    note = SoapNote(subjective="s", objective="o", assessment="a", plan="p")
+    fallback = MagicMock()
+
+    result = inject_note(injector, calibration, note, on_fallback=fallback)
+
+    assert result is True
+    injector.focus_and_inject.assert_not_called()
+    args = injector.focus_and_inject_fields_calibrated.call_args.args
+    assert args[0] == [("subjective", "s"), ("objective", "o"), ("assessment", "a"), ("plan", "p")]
+    assert args[1] is calibration
+    assert args[2] == _EXPECTED_NOTE  # single-block fallback text
+    fallback.assert_not_called()
+
+
+def test_inject_note_uses_single_block_paste_when_not_calibrated(mocker):
+    from vet_soap_notetaker.api_client import SoapNote
+    from vet_soap_notetaker.main import inject_note
+
+    injector = MagicMock()
+    injector.focus_and_inject.return_value = True
+    note = SoapNote(subjective="s", objective="o", assessment="a", plan="p")
+
+    result = inject_note(injector, None, note)
+
+    assert result is True
+    injector.focus_and_inject.assert_called_once_with(_EXPECTED_NOTE)
+    injector.focus_and_inject_fields_calibrated.assert_not_called()
+
+
+def test_inject_note_offers_fallback_when_injection_is_refused(mocker):
+    from vet_soap_notetaker.api_client import SoapNote
+    from vet_soap_notetaker.main import inject_note
+
+    injector = MagicMock()
+    injector.focus_and_inject.return_value = False  # no targetable AVImark chart
+    note = SoapNote(subjective="s", objective="o", assessment="a", plan="p")
+    fallback = MagicMock()
+
+    result = inject_note(injector, None, note, on_fallback=fallback)
+
+    assert result is False
+    fallback.assert_called_once_with(_EXPECTED_NOTE)
+
+
+def test_history_inject_callback_persists_then_injects_per_box(mocker, tmp_path):
+    # The History window's inject must save the vet's edit and place it per-box,
+    # the same path as the mobile Inject -- so edits sync and land in the right
+    # AVImark boxes without a separate Save click.
+    mocker.patch("vet_soap_notetaker.main.HistoryWindow")
+    mocker.patch(
+        "vet_soap_notetaker.backend_history_store.get_cache_path",
+        return_value=tmp_path / "history_cache.json",
+    )
+    config = Config(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+        avimark_calibration=_calibration_dict(),
+    )
+    tk_root = MagicMock()
+
+    tray_app, _, _ = build_app(config=config, tk_root=tk_root)
+    calibrated = mocker.patch.object(
+        tray_app.pipeline.injector, "focus_and_inject_fields_calibrated", return_value=True
+    )
+
+    tray_app.show_history()
+    from vet_soap_notetaker.main import HistoryWindow as _HW  # the patched mock
+
+    kwargs = _HW.call_args.kwargs
+    on_inject = kwargs["on_copy_and_inject"]
+
+    # The window hands the (already-persisted) current note to this callback.
+    note = Exam(
+        id="e1",
+        created_at="2026-09-22T00:00:01Z",
+        subjective="s",
+        objective="o",
+        assessment="a",
+        plan="p",
+        transcript="t",
+    )
+    on_inject(note)
+
+    calibrated.assert_called_once()
+    args = calibrated.call_args.args
+    assert args[0] == [("subjective", "s"), ("objective", "o"), ("assessment", "a"), ("plan", "p")]
+
+
 def test_run_bails_out_when_another_instance_already_holds_the_lock(mocker):
     # A second launch (the classic autostart + manual double-click) must not
     # start a second app and backend supervisor -- the second backend would

@@ -50,6 +50,33 @@ def _section_fields(note):
     return [(section, getattr(note, section)) for section in SOAP_SECTIONS]
 
 
+def inject_note(injector, calibration, note, on_fallback=None):
+    """Inject a note into AVImark: per-box when calibrated, else single-block.
+
+    Shared by the mobile Inject path, the History window's Inject, and the
+    hotkey flyout so they place the note the same way. ``note`` is anything with
+    ``subjective``/``objective``/``assessment``/``plan`` attributes (a SoapNote
+    or an Exam). Per-box degrades to a single-block paste when the calibration
+    can't be resolved; if no AVImark chart is safely targetable the inject
+    refuses and ``on_fallback`` (the Safety Flyout) is offered the note instead.
+    Returns whether the note landed in AVImark.
+    """
+    soap_text = format_soap_text(note)
+    if calibration is not None:
+        # Per-box: paste each section straight into its calibrated AVImark box.
+        # Degrades gracefully -- if the boxes can't be resolved it still lands
+        # the whole note as one block (soap_text) into the focused box, and only
+        # returns False when no AVImark chart is safely targetable.
+        injected = injector.focus_and_inject_fields_calibrated(
+            _section_fields(note), calibration, soap_text
+        )
+    else:
+        injected = injector.focus_and_inject(soap_text)
+    if not injected and on_fallback is not None:
+        on_fallback(soap_text)
+    return injected
+
+
 def _point_in_window(window, x, y):
     """Whether screen point (x, y) falls inside a Tk window's current bounds.
 
@@ -100,15 +127,16 @@ def show_flyout(tk_root, injector, soap_text, on_open_history=None):
     # focus); follow_active_avimark then keeps it current as the vet navigates.
     injector.remember_active_window()
 
-    def on_copy_and_inject():
+    def on_copy_and_inject(text):
         # The flyout is a clicked window, so AVImark isn't foreground; actively
         # raise it and paste rather than using the strict inject() guard (which
         # is for the automatic post-hotkey path where AVImark is still focused).
-        injector.focus_and_inject(soap_text)
+        # ``text`` is the note as currently shown, so an edit made here isn't lost.
+        injector.focus_and_inject(text)
         flyout.destroy()
 
-    def on_copy_to_clipboard():
-        pyperclip.copy(soap_text)
+    def on_copy_to_clipboard(text):
+        pyperclip.copy(text)
         flyout.destroy()
 
     open_history = None
@@ -130,12 +158,16 @@ def show_flyout(tk_root, injector, soap_text, on_open_history=None):
     return flyout
 
 
-def show_history(tk_root, injector, history_store, on_regenerate=None):
+def show_history(tk_root, injector, history_store, on_regenerate=None, on_inject=None):
     injector.remember_active_window()
+    # Inject the (already-persisted) current note; the window hands over the
+    # structured entry so build_app's callback can place it per-box via the
+    # calibration. A single-block default keeps direct callers working.
+    on_inject = on_inject or (lambda note: injector.focus_and_inject(note.soap_text))
     window = HistoryWindow(
         master=tk_root,
         load_entries=history_store.list_entries,
-        on_copy_and_inject=lambda soap_text: injector.focus_and_inject(soap_text),
+        on_copy_and_inject=on_inject,
         on_copy_to_clipboard=lambda soap_text: pyperclip.copy(soap_text),
         on_save_edit=lambda entry_id, **fields: history_store.update(entry_id, **fields),
         on_delete=lambda entry_id: history_store.delete(entry_id),
@@ -170,7 +202,19 @@ def build_app(config=None, tk_root=None):
 
     def open_history():
         show_history(
-            tk_root, injector, history_store, on_regenerate=regenerate_from_transcript
+            tk_root,
+            injector,
+            history_store,
+            on_regenerate=regenerate_from_transcript,
+            # Inject the note currently selected/edited in History the same way
+            # the mobile Inject does: per-box when calibrated, with the Safety
+            # Flyout as the fallback when no chart is safely targetable.
+            on_inject=lambda note: inject_note(
+                injector,
+                current_calibration["value"],
+                note,
+                on_fallback=show_note_flyout,
+            ),
         )
 
     # A note flyout offers an "Open History" button; an error flyout doesn't
@@ -207,20 +251,12 @@ def build_app(config=None, tk_root=None):
             plan=exam.get("plan", ""),
             transcript=exam.get("transcript", ""),
         )
-        soap_text = format_soap_text(note)
-        calibration = current_calibration["value"]
-        if calibration is not None:
-            # Per-box: paste each section straight into its calibrated AVImark box.
-            # Degrades gracefully -- if the boxes can't be resolved it still lands
-            # the whole note as one block (soap_text) into the focused box, and
-            # only returns False when no AVImark chart is safely targetable.
-            injected = injector.focus_and_inject_fields_calibrated(
-                _section_fields(note), calibration, soap_text
-            )
-        else:
-            injected = injector.focus_and_inject(soap_text)
-        if not injected:
-            show_note_flyout(soap_text)
+        inject_note(
+            injector,
+            current_calibration["value"],
+            note,
+            on_fallback=show_note_flyout,
+        )
 
     injection_poller = InjectionPoller(
         api_client=api_client,
