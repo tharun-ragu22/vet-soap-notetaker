@@ -99,11 +99,39 @@ Filename: "{sys}\netsh.exe"; \
   Flags: runhidden; RunOnceId: "DelVetSoapNotetakerFirewall"
 
 [Code]
+// Stop the running appliance so its exe/DLLs aren't locked while files are added
+// or removed. Order matters: kill the desktop app FIRST -- it's the backend's
+// supervisor and relaunches the backend every few seconds -- then the backend,
+// so it can't be resurrected mid-operation. taskkill is best-effort: a nonzero
+// exit just means the process wasn't running, which is fine.
+procedure StopAppliance;
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM VetSoapNotetaker.exe',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM VetSoapNotetakerBackend.exe',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+// Before copying files (fresh install, or an upgrade over a running instance),
+// make sure nothing is holding the old files open.
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+    StopAppliance;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   AppDataDir: string;
   ProfileDir: string;
 begin
+  // Stop the appliance before removing files, otherwise the running exe locks
+  // them and the uninstall fails with "some entries could not be removed".
+  if CurUninstallStep = usUninstall then
+    StopAppliance;
+
   // After the program files are gone, offer to remove the data too. A prompt (not
   // automatic) so uninstall is reversible without being silently destructive: the
   // vet keeps their exam history if they might reinstall.
