@@ -151,12 +151,23 @@ class HistoryWindow(tk.Toplevel):
     def refresh(self):
         """Re-read the store and reflect any notes added since the last read.
 
+        Synchronous (fetch + apply, on the calling thread); used by direct
+        callers like the delete path. The timer-driven poll instead reads the
+        store on a worker thread (see ``_poll``) and marshals the result into
+        ``_apply_entries``, so the backend round-trip never stalls the Tk loop.
+        """
+        self._apply_entries(list(self._load_entries()))
+
+    def _apply_entries(self, new_entries):
+        """Reflect a freshly-read entry list into the widgets. Must run on the Tk
+        main thread -- either directly from ``refresh`` or marshalled off the
+        poll worker via ``after``.
+
         If the vet is viewing the newest note (or nothing yet), advance to the
         just-recorded note; if they've deliberately opened an older note, keep
         their selection so they aren't yanked away mid-read. An in-progress
         unsaved edit is never overwritten -- the list still updates around it.
         """
-        new_entries = list(self._load_entries())
         if new_entries == self.entries:
             return
 
@@ -376,11 +387,36 @@ class HistoryWindow(tk.Toplevel):
         self._poll_job = None
         if not self.winfo_exists():
             return
-        try:
-            self.refresh()
-        except Exception:
-            # A history read must never crash or kill the live-refresh loop.
-            logger.exception("failed to refresh history window")
+
+        # Read the store on a worker thread: this fires on a 1s timer and the
+        # read is a blocking backend GET, so doing it here on the Tk loop made
+        # typing and clicking in the window stutter every second. The widget
+        # update is marshalled back onto the main thread via after(). The next
+        # poll is re-armed only once this one has applied, so slow reads can't
+        # pile up overlapping requests.
+        def work():
+            try:
+                new_entries = list(self._load_entries())
+            except Exception:
+                # A history read must never crash or kill the live-refresh loop.
+                logger.exception("failed to refresh history window")
+                new_entries = None
+            try:
+                self.after(0, lambda: self._on_poll_fetched(new_entries))
+            except tk.TclError:
+                # Window destroyed between the fetch and the marshal back.
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_poll_fetched(self, new_entries):
+        if not self.winfo_exists():
+            return
+        if new_entries is not None:
+            try:
+                self._apply_entries(new_entries)
+            except Exception:
+                logger.exception("failed to apply refreshed history")
         if self._poll_interval_ms:
             self._schedule_poll()
 

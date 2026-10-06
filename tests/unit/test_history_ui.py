@@ -443,3 +443,48 @@ def test_auto_refresh_does_not_discard_an_in_progress_unsaved_edit(tk_root):
     # The new note shows up in the list, but the unsaved edit is NOT clobbered.
     assert len(window.listbox.get(0, "end")) == 2
     assert window.field_texts["subjective"].get("1.0", "end-1c") == "half-typed edit"
+
+
+def test_auto_refresh_reads_the_backend_off_the_tk_main_thread(tk_root, monkeypatch):
+    # The live-refresh poll must NOT do its blocking backend read inline on the
+    # Tk main thread -- that call (GET /api/history) stalls typing and clicking
+    # in the window every poll interval. It has to hand the read to a worker
+    # thread and marshal the widget update back via after() (same rule as
+    # regenerate). We capture the worker instead of starting it so the assertion
+    # is deterministic and doesn't need a running mainloop.
+    captured = []
+
+    class _CapturingThread:
+        def __init__(self, target, daemon=None):
+            self._target = target
+            captured.append(self)
+
+        def start(self):
+            pass  # don't run yet -- the test decides when
+
+    monkeypatch.setattr(history_ui.threading, "Thread", _CapturingThread)
+
+    fetched = []
+    entries = [make_entry(subjective="first", entry_id="n1")]
+
+    def load():
+        fetched.append(True)
+        return list(entries)
+
+    window = make_window(tk_root, entries, load_entries=load)
+    fetched.clear()  # ignore the one synchronous read done at construction
+
+    # A note arrives while the window is open, so the poll has real work to apply.
+    entries.insert(0, make_entry(subjective="second", entry_id="n2"))
+    window._poll()
+
+    # The poll must have deferred the read to a worker thread, NOT read inline on
+    # the Tk loop. (The broken version calls refresh() synchronously here.)
+    assert fetched == [], "history poll read the backend on the Tk main thread"
+    assert captured, "history poll did not dispatch the read to a worker thread"
+
+    # Running the worker and flushing its after() callback applies the new note.
+    captured[0]._target()
+    window.update()
+    assert fetched, "worker never read the store"
+    assert len(window.listbox.get(0, "end")) == 2  # the refresh actually applied
