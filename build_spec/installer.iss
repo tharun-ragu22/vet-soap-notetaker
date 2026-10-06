@@ -89,8 +89,13 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{sys}\netsh.exe"; \
   Parameters: "advfirewall firewall add rule name=""{#FirewallRuleName}"" dir=in action=allow protocol=TCP localport={#BackendPort}"; \
   Flags: runhidden; StatusMsg: "Allowing the phone to reach the backend..."
-; Offer to launch the tray app right after a non-silent install.
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; Offer to launch the tray app right after a non-silent install. runasoriginaluser
+; drops the installer's elevated (admin) token so the app starts as the normal
+; logged-in user -- the same way autostart launches it at login. Without this the
+; app inherits the installer's admin integrity level, which (a) leaves an
+; unkillable elevated instance and (b) breaks tray interaction and AVImark
+; injection across the Windows UIPI boundary (elevated app vs non-elevated shell).
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
 ; Reverse the firewall rule on uninstall.

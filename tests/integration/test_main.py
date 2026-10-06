@@ -622,3 +622,22 @@ def test_remote_injection_calibrated_failure_falls_back_to_flyout(mocker):
     mock_flyout_cls.assert_called_once()
     _, kwargs = mock_flyout_cls.call_args
     assert kwargs["soap_text"] == _EXPECTED_NOTE
+
+
+def test_run_bails_out_when_another_instance_already_holds_the_lock(mocker):
+    # A second launch (the classic autostart + manual double-click) must not
+    # start a second app and backend supervisor -- the second backend would
+    # crash-loop fighting the first over port 8443. run() takes a single-instance
+    # lock and exits quietly if another instance already holds it.
+    mocker.patch("vet_soap_notetaker.main.build_logger")
+    guard = mocker.MagicMock()
+    guard.acquire.return_value = False
+    mocker.patch("vet_soap_notetaker.main.SingleInstance", return_value=guard)
+    mock_build_app = mocker.patch("vet_soap_notetaker.main.build_app")
+
+    from vet_soap_notetaker.main import run
+
+    run()
+
+    guard.acquire.assert_called_once()
+    mock_build_app.assert_not_called()

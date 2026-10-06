@@ -25,8 +25,10 @@ from vet_soap_notetaker.backend_supervisor import (
 from vet_soap_notetaker.injection_poller import InjectionPoller
 from vet_soap_notetaker.logger import build_logger
 from vet_soap_notetaker.offline_queue import OfflineQueue
+from vet_soap_notetaker.paths import get_appdata_base_dir
 from vet_soap_notetaker.pipeline import Pipeline, format_soap_text
 from vet_soap_notetaker.settings_ui import SettingsWindow
+from vet_soap_notetaker.single_instance import SingleInstance
 from vet_soap_notetaker import ui_strings
 from vet_soap_notetaker.tray_app import TrayApp
 from vet_soap_notetaker.window_icon import apply_window_icon
@@ -371,6 +373,14 @@ def build_app(config=None, tk_root=None):
 
 def run():
     build_logger()
+    # Single-instance guard: if another copy is already running (autostart put one
+    # up at login and the vet then double-clicked the icon), bow out rather than
+    # start a second backend supervisor that would crash-loop fighting for the
+    # backend port. The lock is released by the OS when this process exits.
+    instance_lock = SingleInstance(get_appdata_base_dir() / "vet_soap_notetaker.lock")
+    if not instance_lock.acquire():
+        logger.info("another instance is already running; exiting this one")
+        return
     logger.info("Vet Soap Notetaker starting up")
     tray_app, hotkey_listener, tk_root = build_app()
     # Bring the backend up first (no-op in dev) so it's listening before the
