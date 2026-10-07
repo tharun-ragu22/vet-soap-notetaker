@@ -33,6 +33,14 @@ from vet_soap_notetaker import ui_strings
 from vet_soap_notetaker.tray_app import TrayApp
 from vet_soap_notetaker.window_icon import apply_window_icon
 
+# Win32 is only present on Windows (stubbed in tests); the app only runs for real
+# there. Used to hit-test calibration clicks against our own window in physical
+# pixels -- the same coordinate space pynput and WindowFromPoint use.
+import win32gui
+
+# GetAncestor(..., GA_ROOT=2) walks a window handle up to its top-level window.
+_GA_ROOT = 2
+
 logger = logging.getLogger("vet_soap_notetaker.main")
 
 CONFIG_PATH = Path.home() / ".vetscribe" / "config.json"
@@ -93,6 +101,25 @@ def _point_in_window(window, x, y):
     return left <= x <= right and top <= y <= bottom
 
 
+def _click_is_on_window(window, x, y):
+    """Whether a global click at screen point (x, y) landed on our Tk ``window``.
+
+    Used during calibration to ignore clicks on our own instruction window so
+    they aren't mistaken for an AVImark box. Hit-tests with ``WindowFromPoint``,
+    which works in physical pixels -- the same space pynput reports and
+    ``capture_calibration_box`` uses -- so it stays correct under Windows display
+    scaling (where Tk's logical geometry wouldn't line up) and also covers the
+    window's title bar and borders. Falls back to a geometric bounds check where
+    Win32 isn't available.
+    """
+    try:
+        clicked_root = win32gui.GetAncestor(win32gui.WindowFromPoint((x, y)), _GA_ROOT)
+        our_root = win32gui.GetAncestor(window.winfo_id(), _GA_ROOT)
+        return clicked_root == our_root
+    except Exception:
+        return _point_in_window(window, x, y)
+
+
 def run_on_main_thread(tk_root, fn):
     # Tkinter widgets may only be created on the thread running the mainloop.
     # Pipeline/offline-queue callbacks fire from background threads, so
@@ -120,6 +147,31 @@ def follow_active_avimark(tk_root, injector, window, interval_ms=FOLLOW_ACTIVE_I
         tk_root.after(interval_ms, track)
 
     tk_root.after(interval_ms, track)
+
+
+CALIBRATION_FOREGROUND_INTERVAL_MS = 300
+
+
+def keep_window_foreground(
+    tk_root, window, interval_ms=CALIBRATION_FOREGROUND_INTERVAL_MS
+):
+    # Keep a Tk window on top of everything until it closes. AVImark becomes the
+    # foreground window each time the vet clicks one of its boxes, which on Windows
+    # can let it cover a plain topmost Toplevel; re-assert topmost and lift the
+    # window on a timer so the calibration prompt stays visible through all four
+    # clicks. Re-arms on the Tk event loop and stops on its own once the window is
+    # gone (closed after the fourth box is captured).
+    def tick():
+        if not window.winfo_exists():
+            return
+        try:
+            window.attributes("-topmost", True)
+            window.lift()
+        except tk.TclError:
+            return
+        tk_root.after(interval_ms, tick)
+
+    tk_root.after(interval_ms, tick)
 
 
 def show_flyout(tk_root, injector, soap_text, on_open_history=None):
@@ -361,6 +413,9 @@ def build_app(config=None, tk_root=None):
         window.attributes("-topmost", True)
         label = tk.Label(window, text="", justify="left", padx=20, pady=20, wraplength=360)
         label.pack()
+        # Keep the prompt on top through all four clicks: each click into AVImark
+        # makes it the foreground window, which can otherwise cover this Toplevel.
+        keep_window_foreground(tk_root, window)
 
         listener = {"value": None}
 
@@ -383,11 +438,11 @@ def build_app(config=None, tk_root=None):
 
         def on_click(x, y, button, pressed):
             # Capture the box on a left-button *press*. Ignore clicks that land on
-            # our own instruction window (so clicking near it doesn't register as a
-            # box), and let the click through to AVImark either way.
+            # our own instruction window (so clicking it doesn't register as a box),
+            # and let the click through to AVImark either way.
             if not pressed or button != mouse.Button.left:
                 return
-            if _point_in_window(window, x, y):
+            if _click_is_on_window(window, x, y):
                 return
             run_on_main_thread(tk_root, lambda: controller.on_click(x, y))
 

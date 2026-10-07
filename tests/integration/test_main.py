@@ -8,7 +8,7 @@ from vet_soap_notetaker.audio_recorder import AudioRecorder
 from vet_soap_notetaker.avimark_injector import AvimarkInjector
 from vet_soap_notetaker.config import Config
 from vet_soap_notetaker.icon_art import STATUS_SAMPLE
-from vet_soap_notetaker.main import build_app, follow_active_avimark
+from vet_soap_notetaker.main import build_app, follow_active_avimark, keep_window_foreground
 from vet_soap_notetaker.pipeline import PipelineState
 
 
@@ -36,6 +36,72 @@ def test_follow_active_avimark_tracks_until_window_closes():
     second_tick()
     injector.track_active_window.assert_called_once()
     assert tk_root.after.call_count == 2
+
+
+def test_keep_window_foreground_reasserts_topmost_until_window_closes():
+    tk_root = MagicMock()
+    window = MagicMock()
+    # winfo_exists: still open on the first tick, gone on the second.
+    window.winfo_exists.side_effect = [True, False]
+
+    keep_window_foreground(tk_root, window, interval_ms=10)
+
+    # Arms on the Tk event loop rather than lifting inline.
+    tk_root.after.assert_called_once()
+    window.lift.assert_not_called()
+
+    # First tick: window open, so re-assert topmost + lift and re-arm.
+    _, first_tick = tk_root.after.call_args[0]
+    first_tick()
+    window.attributes.assert_called_with("-topmost", True)
+    window.lift.assert_called_once()
+    assert tk_root.after.call_count == 2
+
+    # Second tick: window gone, so stop -- no further lift, no re-arm.
+    _, second_tick = tk_root.after.call_args[0]
+    second_tick()
+    window.lift.assert_called_once()
+    assert tk_root.after.call_count == 2
+
+
+def test_click_on_our_window_is_detected_with_a_physical_hit_test(mocker):
+    # A click on the calibration prompt must not be mistaken for an AVImark box.
+    # Detection hit-tests in physical pixels (WindowFromPoint) so it stays correct
+    # under Windows display scaling, where Tk's logical geometry wouldn't line up.
+    from vet_soap_notetaker import main
+
+    window = MagicMock()
+    window.winfo_id.return_value = 222
+    roots = {111: 999, 222: 999, 333: 888}  # 111 and our window 222 share root 999
+    mocker.patch.object(
+        main.win32gui,
+        "WindowFromPoint",
+        create=True,
+        side_effect=lambda pt: {(10, 10): 111, (500, 500): 333}[pt],
+    )
+    mocker.patch.object(
+        main.win32gui, "GetAncestor", create=True, side_effect=lambda hwnd, _flag: roots[hwnd]
+    )
+
+    # Click shares our window's top-level root -> it's on our window -> ignored.
+    assert main._click_is_on_window(window, 10, 10) is True
+    # Click resolves to a different root (AVImark) -> it's a real box click.
+    assert main._click_is_on_window(window, 500, 500) is False
+
+
+def test_click_is_on_window_falls_back_to_geometry_without_win32():
+    # Where Win32 isn't available, fall back to a bounds check so the logic is
+    # still exercised (and importable) off-Windows.
+    from vet_soap_notetaker import main
+
+    window = MagicMock()
+    window.winfo_rootx.return_value = 100
+    window.winfo_rooty.return_value = 100
+    window.winfo_width.return_value = 50
+    window.winfo_height.return_value = 40
+
+    assert main._click_is_on_window(window, 120, 120) is True   # inside bounds
+    assert main._click_is_on_window(window, 500, 500) is False  # outside
 
 
 def test_build_app_wires_pipeline_dependencies_from_config():
