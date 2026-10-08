@@ -2,6 +2,16 @@ import type { AudioBody, Exam, InjectionRequest, SoapNote } from './types';
 
 export class ApiClientError extends Error {}
 
+/**
+ * Default per-request timeout. It must outlast the backend's worst-case response
+ * for a long recording: Files API transcription (up to 300s) + note generation
+ * (up to 120s) + retry backoff. If the phone gave up first, it would show
+ * "Upload failed" and drop a recording the backend was still successfully
+ * processing. A dead/unreachable backend still fails fast (connection error),
+ * so this long ceiling only ever applies while the backend is genuinely working.
+ */
+export const DEFAULT_TIMEOUT_MS = 480_000;
+
 /** Minimal Response shape we depend on — decouples us from the DOM/undici lib. */
 export interface HttpResponse {
   ok: boolean;
@@ -65,7 +75,7 @@ export class ApiClient {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.apiKey = options.apiKey ?? '';
     this.fetch = options.fetch ?? ((globalThis as { fetch?: HttpFetch }).fetch as HttpFetch);
-    this.timeoutMs = options.timeoutMs ?? 60000;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
   /** Upload a recording and get back the persisted, generated exam note. */

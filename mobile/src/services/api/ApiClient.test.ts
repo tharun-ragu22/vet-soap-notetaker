@@ -1,4 +1,4 @@
-import { ApiClient, ApiClientError } from './ApiClient';
+import { ApiClient, ApiClientError, DEFAULT_TIMEOUT_MS } from './ApiClient';
 import type { HttpFetch, HttpResponse } from './ApiClient';
 
 function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {}): HttpResponse {
@@ -260,6 +260,63 @@ describe('ApiClient', () => {
 
       await expect(client.requestInjection('missing')).rejects.toBeInstanceOf(ApiClientError);
       await expect(client.requestInjection('missing')).rejects.toThrow(/404/);
+    });
+  });
+
+  describe('timeout', () => {
+    // A fetch that never resolves on its own, only rejecting when the request is aborted.
+    const hangingFetch: HttpFetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+
+    it('aborts a hung request after the configured timeout', async () => {
+      jest.useFakeTimers();
+      try {
+        const client = new ApiClient({
+          baseUrl: 'http://host:8000',
+          fetch: hangingFetch,
+          timeoutMs: 500,
+        });
+        const promise = client.generateNote(new Uint8Array([1]), 'audio/m4a');
+        const rejection = expect(promise).rejects.toBeInstanceOf(ApiClientError);
+        // advanceTimersByTimeAsync fires the timer AND flushes the microtask
+        // chain, so the abort actually propagates through to the rejection.
+        await jest.advanceTimersByTimeAsync(500);
+        await rejection;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('defaults to a timeout that outlasts the backend transcription path, not 60s', async () => {
+      jest.useFakeTimers();
+      try {
+        const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: hangingFetch });
+        let settled = false;
+        const tracked = client
+          .generateNote(new Uint8Array([1]), 'audio/m4a')
+          .then(
+            () => {
+              settled = true;
+            },
+            () => {
+              settled = true;
+            },
+          );
+
+        // The old 60s default would have aborted here; the new default must not.
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(settled).toBe(false);
+
+        // ...but the timer is real: at the configured default it does abort.
+        await jest.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS - 60_000);
+        await tracked;
+        expect(settled).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 });
