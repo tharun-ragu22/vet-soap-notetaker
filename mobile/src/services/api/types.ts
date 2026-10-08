@@ -12,6 +12,12 @@ export interface Exam extends SoapNote {
   id: string;
   createdAt: string;
   patientName?: string;
+  /**
+   * True when transcription succeeded but note generation is still pending (the
+   * backend returned a 202 partial). The note fields are empty until a retry via
+   * completeNote() fills them in.
+   */
+  notePending?: boolean;
 }
 
 /** Raw audio payload accepted by generateNote (sent as the request body). */

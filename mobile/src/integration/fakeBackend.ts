@@ -19,6 +19,7 @@ interface RawExam {
   assessment: string;
   plan: string;
   transcript: string;
+  note_pending: boolean;
 }
 
 interface RawInjection {
@@ -38,7 +39,13 @@ export interface FakeBackendOptions {
    * How POST /api/soap turns uploaded audio into a note (mirrors the real
    * transcribe+generate pipeline). Defaults to a canned note.
    */
-  noteForAudio?: (audio: unknown) => Omit<RawExam, 'id' | 'created_at' | 'patient_name'>;
+  noteForAudio?: (audio: unknown) => Omit<RawExam, 'id' | 'created_at' | 'patient_name' | 'note_pending'>;
+  /**
+   * When true, transcription still succeeds but note generation fails — POST
+   * /api/soap persists a partial exam and returns 202, and POST /api/exams/:id/note
+   * returns 502. Toggle it off to simulate the provider coming back.
+   */
+  failNoteGeneration?: boolean;
 }
 
 function response(body: unknown, status = 200): HttpResponse {
@@ -59,12 +66,15 @@ export class FakeBackend {
   private clockSeq = 0;
   private readonly apiKey: string;
   private readonly noteForAudio: NonNullable<FakeBackendOptions['noteForAudio']>;
+  /** Mutable so a test can simulate note generation recovering mid-run. */
+  failNoteGeneration: boolean;
 
   /** Plug this into `new ApiClient({ ..., fetch: backend.fetch })`. */
   readonly fetch: HttpFetch;
 
   constructor(options: FakeBackendOptions = {}) {
     this.apiKey = options.apiKey ?? '';
+    this.failNoteGeneration = options.failNoteGeneration ?? false;
     this.noteForAudio =
       options.noteForAudio ??
       (() => ({
@@ -88,6 +98,7 @@ export class FakeBackend {
       assessment: 'A',
       plan: 'P',
       transcript: 'vet: hello',
+      note_pending: false,
       ...overrides,
     };
     this.exams.push(exam);
@@ -131,10 +142,27 @@ export class FakeBackend {
     if (method === 'POST' && pathname === '/api/soap') {
       if (init.body == null) return response({ error: 'empty request body' }, 400);
       const note = this.noteForAudio(init.body);
+      if (this.failNoteGeneration) {
+        // Transcription succeeded, note-gen didn't: persist a partial exam (202).
+        const partial: RawExam = {
+          id: this.nextExamId(),
+          created_at: this.nextClock(),
+          patient_name: null,
+          subjective: '',
+          objective: '',
+          assessment: '',
+          plan: '',
+          transcript: note.transcript,
+          note_pending: true,
+        };
+        this.exams.push(partial);
+        return response(partial, 202);
+      }
       const exam: RawExam = {
         id: this.nextExamId(),
         created_at: this.nextClock(),
         patient_name: null,
+        note_pending: false,
         ...note,
       };
       this.exams.push(exam);
@@ -174,6 +202,22 @@ export class FakeBackend {
           ? response({ error: 'exam not found' }, 404)
           : response({ status: 'deleted' });
       }
+    }
+
+    // POST /api/exams/:id/note — finish a note-pending exam from its transcript
+    const noteMatch = pathname.match(/^\/api\/exams\/([^/]+)\/note$/);
+    if (noteMatch && method === 'POST') {
+      const id = decodeURIComponent(noteMatch[1]);
+      const exam = this.getExam(id);
+      if (!exam) return response({ error: 'exam not found' }, 404);
+      if (this.failNoteGeneration) return response({ error: 'note gen down' }, 502);
+      const note = this.noteForAudio(null);
+      exam.subjective = note.subjective;
+      exam.objective = note.objective;
+      exam.assessment = note.assessment;
+      exam.plan = note.plan;
+      exam.note_pending = false;
+      return response(exam);
     }
 
     // POST /api/exams/:id/inject — enqueue a remote injection request

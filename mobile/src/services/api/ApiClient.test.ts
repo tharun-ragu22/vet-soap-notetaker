@@ -69,7 +69,22 @@ describe('ApiClient', () => {
         assessment: 'A',
         plan: 'P',
         transcript: 'vet: hello',
+        notePending: false,
       });
+    });
+
+    it('maps note_pending=true (202 partial) to notePending on the exam', async () => {
+      const { fetchFn } = stubFetch(() =>
+        jsonResponse(
+          { ...exampleExam, subjective: '', note_pending: true },
+          { status: 202 },
+        ),
+      );
+      const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: fetchFn });
+
+      const exam = await client.generateNote(new Uint8Array([1]), 'audio/m4a');
+
+      expect(exam.notePending).toBe(true);
     });
 
     it('omits the Authorization header when no api key is configured', async () => {
@@ -104,6 +119,41 @@ describe('ApiClient', () => {
       await expect(client.generateNote(new Uint8Array([0]), 'audio/wav')).rejects.toBeInstanceOf(
         ApiClientError,
       );
+    });
+  });
+
+  describe('completeNote', () => {
+    it('POSTs to /api/exams/:id/note and returns the completed exam', async () => {
+      const { fetchFn, calls } = stubFetch(() =>
+        jsonResponse({ ...exampleExam, assessment: 'Otitis', note_pending: false }),
+      );
+      const client = new ApiClient({ baseUrl: 'http://host:8000', apiKey: 'k', fetch: fetchFn });
+
+      const exam = await client.completeNote('exam-1');
+
+      expect(calls[0].url).toBe('http://host:8000/api/exams/exam-1/note');
+      expect(calls[0].method).toBe('POST');
+      expect(calls[0].headers['Authorization']).toBe('Bearer k');
+      expect(exam.assessment).toBe('Otitis');
+      expect(exam.notePending).toBe(false);
+    });
+
+    it('url-encodes the exam id', async () => {
+      const { fetchFn, calls } = stubFetch(() => jsonResponse(exampleExam));
+      const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: fetchFn });
+
+      await client.completeNote('a/b');
+
+      expect(calls[0].url).toBe('http://host:8000/api/exams/a%2Fb/note');
+    });
+
+    it('raises ApiClientError when note generation is still failing (502)', async () => {
+      const { fetchFn } = stubFetch(() =>
+        jsonResponse({ error: 'provider down' }, { ok: false, status: 502 }),
+      );
+      const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: fetchFn });
+
+      await expect(client.completeNote('exam-1')).rejects.toBeInstanceOf(ApiClientError);
     });
   });
 

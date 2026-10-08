@@ -8,8 +8,11 @@ import type { Exam } from '../services/api/types';
 export interface RecorderScreenProps {
   /** The capture state machine (idle → recording → processing → idle). */
   audioService: AudioService;
-  /** Turns a finished recording into a persisted exam (reads the file + POSTs it). */
-  uploadRecording: (result: RecordingResult) => Promise<Exam>;
+  /**
+   * Durably queue the finished recording and attempt it immediately. Resolves to the
+   * exam if it uploaded right away, or null if it's still queued for background retry.
+   */
+  enqueueRecording: (result: RecordingResult) => Promise<Exam | null>;
   /** Called once the backend has generated and stored the note. */
   onRecorded?: (exam: Exam) => void;
 }
@@ -26,12 +29,14 @@ function messageOf(error: unknown): string {
  * the button to idle so it can never become a silent no-op (the desktop Pipeline's
  * hard rule, mirrored here through AudioService).
  */
-export function RecorderScreen({ audioService, uploadRecording, onRecorded }: RecorderScreenProps) {
+export function RecorderScreen({ audioService, enqueueRecording, onRecorded }: RecorderScreenProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const handleStart = useCallback(async () => {
     setError(null);
+    setNotice(null);
     try {
       await audioService.start();
       setPhase('recording');
@@ -54,16 +59,22 @@ export function RecorderScreen({ audioService, uploadRecording, onRecorded }: Re
       return;
     }
     try {
-      const exam = await uploadRecording(result);
-      onRecorded?.(exam);
+      const exam = await enqueueRecording(result);
+      if (exam) {
+        onRecorded?.(exam);
+      } else {
+        // Saved durably but not uploaded yet — the queue will keep retrying.
+        setNotice('Saved — uploading in the background.');
+      }
     } catch (e) {
-      setError(`Upload failed: ${messageOf(e)}`);
+      // enqueue itself failed (couldn't even save the file to disk).
+      setError(`Couldn't save recording: ${messageOf(e)}`);
     } finally {
       // Whether the upload succeeded or failed, return to idle for the next exam.
       audioService.reset();
       setPhase('idle');
     }
-  }, [audioService, uploadRecording, onRecorded]);
+  }, [audioService, enqueueRecording, onRecorded]);
 
   const onPress = phase === 'recording' ? handleStop : handleStart;
   const isProcessing = phase === 'processing';
@@ -95,6 +106,7 @@ export function RecorderScreen({ audioService, uploadRecording, onRecorded }: Re
         <Text style={styles.buttonText}>{label}</Text>
       </Pressable>
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
     </View>
   );
 }
@@ -139,6 +151,11 @@ const styles = StyleSheet.create({
   },
   error: {
     color: '#c0392b',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  notice: {
+    color: '#1b7f4b',
     fontSize: 14,
     textAlign: 'center',
   },

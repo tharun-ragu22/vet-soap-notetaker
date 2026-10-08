@@ -47,6 +47,7 @@ interface RawExam {
   assessment: string;
   plan: string;
   transcript: string;
+  note_pending?: boolean;
 }
 
 interface RawInjectionRequest {
@@ -78,12 +79,28 @@ export class ApiClient {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
-  /** Upload a recording and get back the persisted, generated exam note. */
+  /**
+   * Upload a recording and get back the persisted exam. If the backend returns a
+   * 202 (transcription succeeded but note generation failed), the exam comes back
+   * with `notePending: true` and empty note fields — finish it later with
+   * {@link completeNote}, which needs no re-upload.
+   */
   async generateNote(audio: AudioBody, mimeType: string): Promise<Exam> {
     const raw = await this.request('/api/soap', {
       method: 'POST',
       headers: { 'Content-Type': mimeType },
       body: audio,
+    });
+    return this.toExam(raw as RawExam);
+  }
+
+  /**
+   * Finish a note-pending exam: re-run note generation from its already-saved
+   * transcript on the backend (no audio re-upload, no re-transcription).
+   */
+  async completeNote(examId: string): Promise<Exam> {
+    const raw = await this.request(`/api/exams/${encodeURIComponent(examId)}/note`, {
+      method: 'POST',
     });
     return this.toExam(raw as RawExam);
   }
@@ -201,6 +218,7 @@ export class ApiClient {
       assessment: raw.assessment,
       plan: raw.plan,
       transcript: raw.transcript,
+      notePending: raw.note_pending ?? false,
     };
   }
 }

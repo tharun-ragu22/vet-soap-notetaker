@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, Text, View } from 'react-native';
 
 import { asyncSettingsStorage } from '../config/asyncStorage';
 import {
@@ -16,12 +16,17 @@ import {
   type AppSettings,
   type SettingsStorage,
 } from '../config/settings';
-import { ApiClient } from './api/ApiClient';
+import { ApiClient, ApiClientError } from './api/ApiClient';
 import type { Exam } from './api/types';
 import { AudioService } from './audio/AudioService';
-import { readRecording } from './audio/readRecording';
 import type { RecordingResult } from './audio/types';
 import { useExpoAudioRecorder } from './audio/useExpoAudioRecorder';
+import { asyncQueueStore } from './upload/asyncQueueStore';
+import { expoFileStore } from './upload/expoFileStore';
+import { UploadQueue } from './upload/uploadQueue';
+
+/** How often the queue retries itself while the app is foregrounded. */
+const QUEUE_POLL_MS = 30_000;
 
 /**
  * The app's wired collaborators, provided once at the root and consumed by the route
@@ -31,8 +36,14 @@ import { useExpoAudioRecorder } from './audio/useExpoAudioRecorder';
 export interface Services {
   apiClient: ApiClient;
   audioService: AudioService;
-  /** Reads a finished recording off disk and uploads it, returning the created exam. */
-  uploadRecording: (result: RecordingResult) => Promise<Exam>;
+  /**
+   * Durably queue a finished recording and attempt it immediately. Resolves to the
+   * exam if it uploaded right away (jump straight to the note), or null if it's
+   * still queued — the background queue keeps retrying either way, so nothing is lost.
+   */
+  enqueueRecording: (result: RecordingResult) => Promise<Exam | null>;
+  /** Number of recordings still waiting to upload (drives the pending banner). */
+  pendingUploads: number;
   /** The backend connection currently in effect (editable via the Settings screen). */
   settings: AppSettings;
   /** Persists new settings and rebuilds the ApiClient against them, no restart needed. */
@@ -56,6 +67,7 @@ export function ServicesProvider({
   // Settings are read from on-device storage (falling back to the build-time defaults),
   // so they aren't known until an async load resolves — null means "still loading".
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [pendingUploads, setPendingUploads] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,17 +89,70 @@ export function ServicesProvider({
     [storage],
   );
 
-  const services = useMemo<Services | null>(() => {
-    if (!settings) return null;
-    const apiClient = new ApiClient({ baseUrl: settings.apiUrl, apiKey: settings.apiKey });
-    const audioService = new AudioService(recorder);
-    const uploadRecording = async (result: RecordingResult): Promise<Exam> => {
-      const bytes = await readRecording(result.uri);
-      // expo-audio's HIGH_QUALITY preset records AAC in an .m4a container.
-      return apiClient.generateNote(bytes, 'audio/m4a');
+  const apiClient = useMemo(
+    () => (settings ? new ApiClient({ baseUrl: settings.apiUrl, apiKey: settings.apiKey }) : null),
+    [settings],
+  );
+
+  // One queue, rebuilt only when the backend connection changes (rare — a Settings
+  // edit). Its state is persisted, so a rebuild reloads the pending entries from disk;
+  // nothing is lost. Null until the first settings load resolves.
+  const queue = useMemo(() => {
+    if (!apiClient) return null;
+    return new UploadQueue({
+      store: asyncQueueStore,
+      files: expoFileStore,
+      uploader: {
+        generateNote: (bytes, mime) => apiClient.generateNote(bytes, mime),
+        completeNote: (id) => apiClient.completeNote(id),
+      },
+      onChange: (entries) => setPendingUploads(entries.length),
+    });
+  }, [apiClient]);
+
+  // Restore persisted entries, drain once, then retry on a timer and whenever the
+  // app returns to the foreground (a common moment for connectivity to be back).
+  useEffect(() => {
+    if (!queue) return;
+    void queue.load().then(() => void queue.processOnce());
+    queue.start(QUEUE_POLL_MS);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void queue.processOnce();
+    });
+    return () => {
+      queue.stop();
+      subscription.remove();
     };
-    return { apiClient, audioService, uploadRecording, settings, updateSettings };
-  }, [recorder, settings, updateSettings]);
+  }, [queue]);
+
+  const enqueueRecording = useCallback(
+    async (result: RecordingResult): Promise<Exam | null> => {
+      if (!queue) throw new ApiClientError('no backend configured');
+      // Persist-first: the recording is durable before any upload is attempted.
+      const entry = await queue.enqueue({
+        uri: result.uri,
+        // expo-audio's HIGH_QUALITY preset records AAC in an .m4a container.
+        mimeType: 'audio/m4a',
+        durationMillis: result.durationMillis,
+      });
+      return queue.tryProcess(entry.id);
+    },
+    [queue],
+  );
+
+  const audioService = useMemo(() => new AudioService(recorder), [recorder]);
+
+  const services = useMemo<Services | null>(() => {
+    if (!settings || !apiClient) return null;
+    return {
+      apiClient,
+      audioService,
+      enqueueRecording,
+      pendingUploads,
+      settings,
+      updateSettings,
+    };
+  }, [apiClient, audioService, enqueueRecording, pendingUploads, settings, updateSettings]);
 
   if (!services) {
     return (

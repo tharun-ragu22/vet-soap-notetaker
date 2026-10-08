@@ -31,7 +31,7 @@ const exam: Exam = {
 describe('RecorderScreen', () => {
   it('shows a start control when idle', () => {
     const audioService = new AudioService(makeRecorder());
-    render(<RecorderScreen audioService={audioService} uploadRecording={jest.fn()} />);
+    render(<RecorderScreen audioService={audioService} enqueueRecording={jest.fn()} />);
 
     expect(screen.getByText(/start/i)).toBeTruthy();
   });
@@ -39,7 +39,7 @@ describe('RecorderScreen', () => {
   it('starts the recorder and reflects the recording state when tapped', async () => {
     const recorder = makeRecorder();
     const audioService = new AudioService(recorder);
-    render(<RecorderScreen audioService={audioService} uploadRecording={jest.fn()} />);
+    render(<RecorderScreen audioService={audioService} enqueueRecording={jest.fn()} />);
 
     fireEvent.press(screen.getByText(/start/i));
 
@@ -48,15 +48,15 @@ describe('RecorderScreen', () => {
     expect(audioService.isRecording).toBe(true);
   });
 
-  it('on stop, uploads the recording and reports the created exam, then returns to idle', async () => {
+  it('on stop, queues the recording and reports the exam when it uploads immediately', async () => {
     const recorder = makeRecorder();
     const audioService = new AudioService(recorder);
-    const uploadRecording = jest.fn(async () => exam);
+    const enqueueRecording = jest.fn(async () => exam);
     const onRecorded = jest.fn();
     render(
       <RecorderScreen
         audioService={audioService}
-        uploadRecording={uploadRecording}
+        enqueueRecording={enqueueRecording}
         onRecorded={onRecorded}
       />,
     );
@@ -66,8 +66,31 @@ describe('RecorderScreen', () => {
     fireEvent.press(screen.getByText(/stop/i));
 
     await waitFor(() => expect(onRecorded).toHaveBeenCalledWith(exam));
-    expect(uploadRecording).toHaveBeenCalledWith({ uri: 'file:///rec.m4a', durationMillis: 4200 });
+    expect(enqueueRecording).toHaveBeenCalledWith({ uri: 'file:///rec.m4a', durationMillis: 4200 });
     // back to idle, ready for the next exam
+    await waitFor(() => expect(screen.getByText(/start/i)).toBeTruthy());
+    expect(audioService.state).toBe('idle');
+  });
+
+  it('on stop, shows a background-upload notice when the recording is only queued', async () => {
+    const recorder = makeRecorder();
+    const audioService = new AudioService(recorder);
+    const enqueueRecording = jest.fn(async () => null); // queued, not uploaded yet
+    const onRecorded = jest.fn();
+    render(
+      <RecorderScreen
+        audioService={audioService}
+        enqueueRecording={enqueueRecording}
+        onRecorded={onRecorded}
+      />,
+    );
+
+    fireEvent.press(screen.getByText(/start/i));
+    await waitFor(() => expect(screen.getByText(/stop/i)).toBeTruthy());
+    fireEvent.press(screen.getByText(/stop/i));
+
+    await waitFor(() => expect(screen.getByText(/uploading in the background/i)).toBeTruthy());
+    expect(onRecorded).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByText(/start/i)).toBeTruthy());
     expect(audioService.state).toBe('idle');
   });
@@ -79,7 +102,7 @@ describe('RecorderScreen', () => {
       }),
     });
     const audioService = new AudioService(recorder);
-    render(<RecorderScreen audioService={audioService} uploadRecording={jest.fn()} />);
+    render(<RecorderScreen audioService={audioService} enqueueRecording={jest.fn()} />);
 
     fireEvent.press(screen.getByText(/start/i));
 
@@ -88,19 +111,19 @@ describe('RecorderScreen', () => {
     expect(audioService.state).toBe('idle');
   });
 
-  it('surfaces an upload failure and returns to idle', async () => {
+  it('surfaces a failure to even save the recording and returns to idle', async () => {
     const recorder = makeRecorder();
     const audioService = new AudioService(recorder);
-    const uploadRecording = jest.fn(async () => {
-      throw new Error('backend returned 502');
+    const enqueueRecording = jest.fn(async () => {
+      throw new Error('disk full');
     });
-    render(<RecorderScreen audioService={audioService} uploadRecording={uploadRecording} />);
+    render(<RecorderScreen audioService={audioService} enqueueRecording={enqueueRecording} />);
 
     fireEvent.press(screen.getByText(/start/i));
     await waitFor(() => expect(screen.getByText(/stop/i)).toBeTruthy());
     fireEvent.press(screen.getByText(/stop/i));
 
-    await waitFor(() => expect(screen.getByText(/502/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/couldn't save recording/i)).toBeTruthy());
     await waitFor(() => expect(screen.getByText(/start/i)).toBeTruthy());
     expect(audioService.state).toBe('idle');
   });

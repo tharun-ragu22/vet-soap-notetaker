@@ -6,7 +6,7 @@ import { useServices } from '../services/context';
 
 /** Home route: one-tap exam capture, with History + Settings in the top nav bar. */
 export default function RecorderRoute() {
-  const { audioService, uploadRecording, settings } = useServices();
+  const { audioService, enqueueRecording, pendingUploads, settings } = useServices();
 
   return (
     <View style={styles.container}>
@@ -39,7 +39,7 @@ export default function RecorderRoute() {
       />
       <RecorderScreen
         audioService={audioService}
-        uploadRecording={uploadRecording}
+        enqueueRecording={enqueueRecording}
         onRecorded={(exam) => router.push(`/exam/${exam.id}`)}
       />
       {/* Floated at the top as an overlay so it never shifts the recorder, which
@@ -48,6 +48,14 @@ export default function RecorderRoute() {
         <View style={styles.banner} pointerEvents="none">
           <Text style={styles.notConfigured}>
             No backend set — open Settings to enter the clinic address.
+          </Text>
+        </View>
+      ) : pendingUploads > 0 ? (
+        <View style={styles.banner} pointerEvents="none">
+          <Text style={styles.pending}>
+            {pendingUploads === 1
+              ? '1 recording waiting to upload…'
+              : `${pendingUploads} recordings waiting to upload…`}
           </Text>
         </View>
       ) : null}
@@ -80,6 +88,11 @@ const styles = StyleSheet.create({
   notConfigured: {
     textAlign: 'center',
     color: '#c0392b',
+    fontSize: 14,
+  },
+  pending: {
+    textAlign: 'center',
+    color: '#8a6d1b',
     fontSize: 14,
   },
 });
