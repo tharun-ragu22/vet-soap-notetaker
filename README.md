@@ -242,7 +242,7 @@ and starts the offline-retry background worker.
 
 Diagnostic logs (mic start/stop, foreground window checks, backend response
 codes, injection success/failure) are written to a rotating log file (5MB per
-file, 3 backups kept) at `%APPDATA%\Vet Soap Notetaker\logs\vet_soap_notetaker.log` on Windows,
+file, 3 backups kept) at `%APPDATA%\VetScribe\logs\vet_soap_notetaker.log` on Windows,
 or `~/.vetscribe/logs/vet_soap_notetaker.log` elsewhere. Set the `VETSCRIBE_DEBUG`
 environment variable to any truthy value to log at `DEBUG` instead of `INFO`.
 
