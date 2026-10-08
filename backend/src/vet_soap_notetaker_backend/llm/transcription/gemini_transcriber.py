@@ -1,8 +1,11 @@
 import base64
 
-import httpx
-
 from vet_soap_notetaker_backend.config import BackendConfig
+from vet_soap_notetaker_backend.llm.http_retry import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_TIMEOUT_SECONDS,
+    post_with_retries,
+)
 from vet_soap_notetaker_backend.llm.transcription import Transcriber
 
 ENDPOINT_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -25,10 +28,17 @@ class TranscriptionError(Exception):
 class GeminiTranscriber(Transcriber):
     provider_name = "gemini"
 
-    def __init__(self, api_key: str, model: str, timeout_seconds: float = 60):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+    ):
         self.api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
 
     @classmethod
     def from_config(cls, config: BackendConfig) -> "GeminiTranscriber":
@@ -36,8 +46,8 @@ class GeminiTranscriber(Transcriber):
 
     def transcribe(self, audio_bytes: bytes) -> str:
         audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
-        response = httpx.post(
-            ENDPOINT_TEMPLATE.format(model=self.model),
+        response = post_with_retries(
+            url=ENDPOINT_TEMPLATE.format(model=self.model),
             params={"key": self.api_key},
             json={
                 "contents": [
@@ -50,8 +60,8 @@ class GeminiTranscriber(Transcriber):
                 ]
             },
             timeout=self.timeout_seconds,
+            max_retries=self.max_retries,
         )
-        response.raise_for_status()
         data = response.json()
         try:
             return data["candidates"][0]["content"]["parts"][0]["text"].strip()
