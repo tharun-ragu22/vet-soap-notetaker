@@ -9,9 +9,15 @@ class SoapPipeline:
         self.note_generator = note_generator
 
     def process(self, audio_bytes: bytes) -> SoapResult:
-        transcript = self.transcriber.transcribe(audio_bytes)
+        transcript = self.transcribe(audio_bytes)
         note = self.note_generator.generate(transcript)
         return SoapResult(note=note, transcript=transcript)
+
+    def transcribe(self, audio_bytes: bytes) -> str:
+        # Transcription only. Lets the API persist the transcript even when the
+        # subsequent note generation fails, so note-gen can be retried without
+        # paying for transcription again.
+        return self.transcriber.transcribe(audio_bytes)
 
     def generate_from_transcript(self, transcript: str) -> SoapResult:
         # Skip transcription and re-run only note generation. Used when the vet

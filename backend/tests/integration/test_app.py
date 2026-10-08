@@ -7,24 +7,28 @@ from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import Tran
 
 
 class FakePipeline:
-    def __init__(self, note=None, transcript="", error=None):
-        self.result = SoapResult(note=note, transcript=transcript) if note is not None else None
-        self.error = error
+    def __init__(self, note=None, transcript="", transcribe_error=None, note_error=None):
+        self.note = note
+        self.transcript = transcript
+        # Errors are per-stage: a transcription failure is fatal (502), while a
+        # note-generation failure after a good transcript is recoverable (202 partial).
+        self.transcribe_error = transcribe_error
+        self.note_error = note_error
         self.received_audio = None
         self.received_transcript = None
 
-    def process(self, audio_bytes):
+    def transcribe(self, audio_bytes):
         self.received_audio = audio_bytes
-        if self.error is not None:
-            raise self.error
-        return self.result
+        if self.transcribe_error is not None:
+            raise self.transcribe_error
+        return self.transcript
 
     def generate_from_transcript(self, transcript):
         self.received_transcript = transcript
-        if self.error is not None:
-            raise self.error
+        if self.note_error is not None:
+            raise self.note_error
         # Echo the caller's transcript back, mirroring the real pipeline.
-        return SoapResult(note=self.result.note, transcript=transcript)
+        return SoapResult(note=self.note, transcript=transcript)
 
 
 def test_create_soap_note_returns_200_with_note_and_transcript_json(make_config):
@@ -102,7 +106,7 @@ def test_create_soap_note_accepts_correct_bearer_token(make_config):
 
 
 def test_create_soap_note_returns_502_when_upstream_provider_unreachable(make_config):
-    pipeline = FakePipeline(error=httpx.ConnectError("connection refused"))
+    pipeline = FakePipeline(transcribe_error=httpx.ConnectError("connection refused"))
     app = create_app(config=make_config(), pipeline=pipeline)
     client = TestClient(app)
 
@@ -113,7 +117,7 @@ def test_create_soap_note_returns_502_when_upstream_provider_unreachable(make_co
 
 def test_create_soap_note_returns_502_when_upstream_returns_error_status(make_config):
     pipeline = FakePipeline(
-        error=httpx.HTTPStatusError(
+        transcribe_error=httpx.HTTPStatusError(
             "bad request", request=httpx.Request("POST", "https://example.com"),
             response=httpx.Response(400, request=httpx.Request("POST", "https://example.com")),
         )
@@ -127,7 +131,7 @@ def test_create_soap_note_returns_502_when_upstream_returns_error_status(make_co
 
 
 def test_create_soap_note_returns_502_when_transcription_yields_no_content(make_config):
-    pipeline = FakePipeline(error=TranscriptionError("Gemini returned no transcribable content"))
+    pipeline = FakePipeline(transcribe_error=TranscriptionError("Gemini returned no transcribable content"))
     app = create_app(config=make_config(), pipeline=pipeline)
     client = TestClient(app)
 
@@ -203,7 +207,7 @@ def test_regenerate_requires_bearer_token_when_backend_api_key_configured(make_c
 def test_regenerate_returns_502_when_note_generation_fails(make_config):
     pipeline = FakePipeline(
         note=SoapNote(subjective="s", objective="o", assessment="a", plan="p"),
-        error=httpx.ConnectError("connection refused"),
+        note_error=httpx.ConnectError("connection refused"),
     )
     app = create_app(config=make_config(), pipeline=pipeline)
     client = TestClient(app)
@@ -501,3 +505,89 @@ def test_ack_injection_requires_bearer_token_when_configured(make_config):
     response = client.post("/api/injections/x/ack", json={"outcome": "injected"})
 
     assert response.status_code == 401
+
+
+# --- Partial exam: transcript preserved when note generation fails ----------
+
+
+def test_create_soap_note_returns_202_and_persists_transcript_when_note_gen_fails(make_config):
+    note = SoapNote(subjective="s", objective="o", assessment="a", plan="p")
+    pipeline = FakePipeline(
+        note=note,
+        transcript="owner reports vomiting",
+        note_error=httpx.ConnectError("note gen down"),
+    )
+    store = ExamStore()
+    app = create_app(config=make_config(), pipeline=pipeline, store=store)
+    client = TestClient(app)
+
+    response = client.post("/api/soap", content=b"RIFF....")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["note_pending"] is True
+    assert body["transcript"] == "owner reports vomiting"
+    assert body["subjective"] == ""  # note not generated yet
+    assert body["id"]
+    # The transcript is preserved in history so note-gen can be retried without
+    # re-transcribing the audio.
+    history = client.get("/api/history").json()["exams"]
+    assert history[0]["id"] == body["id"]
+    assert history[0]["note_pending"] is True
+
+
+def test_complete_note_generates_and_persists_from_the_stored_transcript(make_config):
+    store = ExamStore()
+    pending = store.add(
+        SoapNote("", "", "", ""), transcript="owner reports vomiting", note_pending=True
+    )
+    note = SoapNote(subjective="S", objective="O", assessment="A", plan="P", patient_name="Rex")
+    pipeline = FakePipeline(note=note)
+    app = create_app(config=make_config(), pipeline=pipeline, store=store)
+    client = TestClient(app)
+
+    response = client.post(f"/api/exams/{pending.id}/note")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["assessment"] == "A"
+    assert body["patient_name"] == "Rex"
+    assert body["note_pending"] is False
+    assert body["transcript"] == "owner reports vomiting"
+    # Note-gen ran from the stored transcript (no re-transcription).
+    assert pipeline.received_transcript == "owner reports vomiting"
+    assert store.get(pending.id).note_pending is False
+    assert store.get(pending.id).assessment == "A"
+
+
+def test_complete_note_returns_404_for_unknown_exam(make_config):
+    app = create_app(config=make_config(), pipeline=FakePipeline(note=_note()), store=ExamStore())
+    client = TestClient(app)
+
+    assert client.post("/api/exams/missing/note").status_code == 404
+
+
+def test_complete_note_returns_502_and_stays_pending_when_note_gen_still_failing(make_config):
+    store = ExamStore()
+    pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
+    pipeline = FakePipeline(note=_note(), note_error=httpx.ConnectError("still down"))
+    app = create_app(config=make_config(), pipeline=pipeline, store=store)
+    client = TestClient(app)
+
+    response = client.post(f"/api/exams/{pending.id}/note")
+
+    assert response.status_code == 502
+    assert store.get(pending.id).note_pending is True
+
+
+def test_complete_note_requires_bearer_token_when_backend_api_key_configured(make_config):
+    store = ExamStore()
+    pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
+    app = create_app(
+        config=make_config(backend_api_key="secret"),
+        pipeline=FakePipeline(note=_note()),
+        store=store,
+    )
+    client = TestClient(app)
+
+    assert client.post(f"/api/exams/{pending.id}/note").status_code == 401

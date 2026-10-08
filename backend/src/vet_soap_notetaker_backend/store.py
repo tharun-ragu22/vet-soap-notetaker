@@ -21,6 +21,10 @@ class Exam:
     plan: str
     transcript: str
     patient_name: str | None = None
+    # True when transcription succeeded but note generation did not, so the note
+    # fields are empty and awaiting a retry (POST /api/exams/{id}/note). Defaults
+    # False so exams persisted before this field existed load as completed.
+    note_pending: bool = False
 
     def to_dict(self) -> dict:
         # Key order matches the JSON shape the mobile/desktop clients parse.
@@ -33,6 +37,7 @@ class Exam:
             "assessment": self.assessment,
             "plan": self.plan,
             "transcript": self.transcript,
+            "note_pending": self.note_pending,
         }
 
 
@@ -53,7 +58,13 @@ class ExamStore:
         self._clock = clock or (lambda: datetime.now(timezone.utc).isoformat())
         self._lock = threading.Lock()
 
-    def add(self, note: SoapNote, transcript: str, patient_name: str | None = None) -> Exam:
+    def add(
+        self,
+        note: SoapNote,
+        transcript: str,
+        patient_name: str | None = None,
+        note_pending: bool = False,
+    ) -> Exam:
         with self._lock:
             exam = Exam(
                 id=self._id_factory(),
@@ -64,6 +75,7 @@ class ExamStore:
                 plan=note.plan,
                 transcript=transcript,
                 patient_name=patient_name,
+                note_pending=note_pending,
             )
             self._exams[exam.id] = exam
             self._persist()

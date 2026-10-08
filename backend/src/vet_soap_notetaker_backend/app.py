@@ -7,11 +7,15 @@ from vet_soap_notetaker_backend.injection_queue import InjectionQueue
 from vet_soap_notetaker_backend.llm.note_generation import get_note_generator
 from vet_soap_notetaker_backend.llm.note_generation.parsing import NoteParsingError
 from vet_soap_notetaker_backend.llm.pipeline import SoapPipeline
+from vet_soap_notetaker_backend.schemas import SoapNote
 from vet_soap_notetaker_backend.store import ExamStore
 from vet_soap_notetaker_backend.llm.transcription import get_transcriber
 from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import TranscriptionError
 
 _NOTE_FIELDS = ("subjective", "objective", "assessment", "plan", "transcript")
+# Placeholder note for an exam whose transcription succeeded but whose note
+# generation failed; the empty fields are filled in by a later note-gen retry.
+_EMPTY_NOTE = SoapNote(subjective="", objective="", assessment="", plan="")
 
 
 def create_app(
@@ -64,16 +68,57 @@ def create_app(
         if not audio_bytes:
             return JSONResponse({"error": "empty request body"}, status_code=400)
 
+        # Transcribe first. A transcription failure is fatal (502) — there's
+        # nothing worth persisting, and the client retries the whole upload.
         try:
-            result = pipeline.process(audio_bytes)
+            transcript = pipeline.transcribe(audio_bytes)
         except _PROVIDER_ERRORS as exc:
             return _provider_error_response(exc)
+
+        # With a good transcript in hand, generating the note is the only thing
+        # left that can fail. If it does, persist a *partial* exam (transcript
+        # saved, note pending) and return 202 so the client can retry note-gen
+        # alone via POST /api/exams/{id}/note -- no re-transcription.
+        try:
+            result = pipeline.generate_from_transcript(transcript)
+        except _PROVIDER_ERRORS:
+            partial = store.add(_EMPTY_NOTE, transcript, note_pending=True)
+            return JSONResponse(partial.to_dict(), status_code=202)
 
         # Persist so the note syncs to every device (mobile + desktop history).
         exam = store.add(
             result.note, result.transcript, patient_name=result.note.patient_name
         )
         return JSONResponse(exam.to_dict())
+
+    @app.post("/api/exams/{exam_id}/note")
+    async def complete_pending_note(exam_id: str, request: Request):
+        # Finish a partial exam: re-run note generation from its already-saved
+        # transcript (no audio, no re-transcription) and persist the result.
+        unauthorized = _unauthorized(request)
+        if unauthorized is not None:
+            return unauthorized
+
+        exam = store.get(exam_id)
+        if exam is None:
+            return JSONResponse({"error": "exam not found"}, status_code=404)
+
+        try:
+            result = pipeline.generate_from_transcript(exam.transcript)
+        except _PROVIDER_ERRORS as exc:
+            # Leave it pending so the client can retry.
+            return _provider_error_response(exc)
+
+        updated = store.update(
+            exam_id,
+            subjective=result.note.subjective,
+            objective=result.note.objective,
+            assessment=result.note.assessment,
+            plan=result.note.plan,
+            transcript=exam.transcript,
+            patient_name=result.note.patient_name,
+        )
+        return JSONResponse(updated.to_dict())
 
     @app.post("/api/soap/regenerate")
     async def regenerate_soap_note(request: Request):

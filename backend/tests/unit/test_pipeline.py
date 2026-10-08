@@ -36,6 +36,19 @@ def test_process_transcribes_then_generates_note_from_transcript():
     assert result.transcript == "owner reports vomiting"
 
 
+def test_transcribe_returns_only_the_transcript_without_generating_a_note():
+    transcriber = FakeTranscriber(text="owner reports vomiting")
+    note_generator = FakeNoteGenerator(note=SoapNote(subjective="s", objective="o", assessment="a", plan="p"))
+    pipeline = SoapPipeline(transcriber=transcriber, note_generator=note_generator)
+
+    transcript = pipeline.transcribe(b"RIFF....audio-bytes....")
+
+    assert transcript == "owner reports vomiting"
+    assert transcriber.received_audio == b"RIFF....audio-bytes...."
+    # Note generation is not invoked on the transcribe-only path.
+    assert note_generator.received_transcript is None
+
+
 def test_generate_from_transcript_skips_transcription_and_echoes_transcript():
     expected_note = SoapNote(subjective="s", objective="o", assessment="a", plan="p")
     transcriber = FakeTranscriber(text="should not be used")

@@ -30,6 +30,7 @@ def test_add_persists_an_exam_with_generated_id_and_timestamp():
         "assessment": "a",
         "plan": "p",
         "transcript": "owner reports vomiting",
+        "note_pending": False,
     }
 
 
@@ -115,3 +116,40 @@ def test_json_file_store_round_trips_across_instances(tmp_path):
     assert loaded.transcript == "durable"
     assert loaded.patient_name == "Bella"
     assert [e.id for e in reopened.list()] == [exam.id]
+
+
+def test_add_can_mark_an_exam_as_note_pending():
+    store = _fixed_store()
+
+    exam = store.add(_note(), transcript="t", note_pending=True)
+
+    assert exam.note_pending is True
+    assert exam.to_dict()["note_pending"] is True
+    # Defaults to a completed note when not specified.
+    assert store.add(_note(), transcript="t2").note_pending is False
+
+
+def test_update_clears_note_pending_when_the_note_is_filled_in():
+    store = _fixed_store()
+    pending = store.add(_note(), transcript="t", note_pending=True)
+
+    updated = store.update(
+        pending.id,
+        subjective="s",
+        objective="o",
+        assessment="a",
+        plan="p",
+        transcript="t",
+    )
+
+    assert updated.note_pending is False
+
+
+def test_note_pending_round_trips_through_the_json_file_store(tmp_path):
+    path = tmp_path / "exams.json"
+    store = JsonFileExamStore(path)
+    exam = store.add(_note(), transcript="t", note_pending=True)
+
+    reopened = JsonFileExamStore(path)
+
+    assert reopened.get(exam.id).note_pending is True
