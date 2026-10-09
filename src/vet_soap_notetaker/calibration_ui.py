@@ -15,24 +15,60 @@ from vet_soap_notetaker.avimark_calibration import CalibrationSession
 logger = logging.getLogger("vet_soap_notetaker.calibration_ui")
 
 
+def prompt_window_position(screen_width, screen_height, window_width, window_height, margin=24):
+    """Top-left (x, y) to place the calibration prompt, in the bottom-right corner.
+
+    The prompt must not sit on top of the AVImark note boxes the vet is about to
+    click: when it does, the click-filter swallows those clicks and calibration
+    silently freezes on that box (observed on a small laptop, where the prompt's
+    undefined default position landed right over the Plan box). AVImark's note
+    window -- and the mock -- live at the top-left, so the opposite corner keeps
+    the prompt clear. Clamped to the origin so a prompt larger than the screen
+    never ends up off-screen and unreachable. The maximized-AVImark case (where
+    no corner is clear) is handled separately by the on-screen 'drag it aside'
+    warning.
+    """
+    x = max(0, screen_width - window_width - margin)
+    y = max(0, screen_height - window_height - margin)
+    return (x, y)
+
+
 class CalibrationController:
-    def __init__(self, capture, save, prompt, close):
+    def __init__(self, capture, save, prompt, close, warn=None):
         """
         capture(x, y) -> BoxControl : identify the control under a click
         save(BoxCalibration)        : persist the finished calibration (go live)
         prompt(section, done, total): show/update the instruction for the next box
         close()                     : tear down the prompt window + mouse hook
+        warn()                      : tell the vet a click landed on the prompt
+                                      window (covering the box); optional.
         """
         self._session = CalibrationSession(capture_fn=capture)
         self._save = save
         self._prompt = prompt
         self._close = close
+        self._warn = warn or (lambda: None)
 
     def start(self):
         section = self._session.current_section
         done, total = self._session.progress
         logger.info("calibration started; first box: %s", section)
         self._prompt(section, done, total)
+
+    def on_click_on_prompt(self):
+        """Report a calibration click that landed on our own instruction window.
+
+        Such a click isn't an AVImark box, so it must not be captured -- but it
+        must not be *silently* dropped either: that's what made calibration look
+        frozen when the prompt window happened to cover a box. Surfacing it (the
+        window is draggable, so the remedy is to move it aside) turns a dead-end
+        into something recoverable. Ignored once calibration is complete, since
+        the prompt window is gone by then.
+        """
+        if self._session.is_complete():
+            return
+        logger.info("calibration click landed on the prompt window; warning the vet")
+        self._warn()
 
     def on_click(self, screen_x, screen_y):
         """Feed one committed click. Ignored once calibration is complete."""

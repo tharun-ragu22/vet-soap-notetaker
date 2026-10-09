@@ -11,7 +11,7 @@ from vet_soap_notetaker.api_client import ApiClient, SoapNote
 from vet_soap_notetaker.audio_recorder import AudioRecorder
 from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, BoxCalibration
 from vet_soap_notetaker.avimark_injector import AvimarkInjector
-from vet_soap_notetaker.calibration_ui import CalibrationController
+from vet_soap_notetaker.calibration_ui import CalibrationController, prompt_window_position
 from vet_soap_notetaker.config import Config
 from vet_soap_notetaker.flyout_ui import FlyoutWindow
 from vet_soap_notetaker.backend_history_store import BackendHistoryStore
@@ -413,6 +413,19 @@ def build_app(config=None, tk_root=None):
         window.attributes("-topmost", True)
         label = tk.Label(window, text="", justify="left", padx=20, pady=20, wraplength=360)
         label.pack()
+        # Park the prompt in the bottom-right corner, away from the top-left where
+        # AVImark's note window sits -- otherwise, on a small screen, this window
+        # lands on top of a box and the click-filter below silently swallows every
+        # click there (calibration looks frozen). It stays draggable if it still
+        # overlaps (e.g. a maximized AVImark). Size must be realised first.
+        window.update_idletasks()
+        x, y = prompt_window_position(
+            window.winfo_screenwidth(),
+            window.winfo_screenheight(),
+            window.winfo_width(),
+            window.winfo_height(),
+        )
+        window.geometry(f"+{x}+{y}")
         # Keep the prompt on top through all four clicks: each click into AVImark
         # makes it the foreground window, which can otherwise cover this Toplevel.
         keep_window_foreground(tk_root, window)
@@ -424,6 +437,9 @@ def build_app(config=None, tk_root=None):
                 text=ui_strings.calibration_prompt(section, done, total)
             )
 
+        def warn_prompt_covered():
+            label.config(text=ui_strings.CALIBRATION_PROMPT_COVERED)
+
         def close():
             if listener["value"] is not None:
                 listener["value"].stop()
@@ -434,15 +450,19 @@ def build_app(config=None, tk_root=None):
             save=apply_calibration,
             prompt=prompt,
             close=close,
+            warn=warn_prompt_covered,
         )
 
         def on_click(x, y, button, pressed):
-            # Capture the box on a left-button *press*. Ignore clicks that land on
-            # our own instruction window (so clicking it doesn't register as a box),
-            # and let the click through to AVImark either way.
+            # Capture the box on a left-button *press*. A click that lands on our
+            # own instruction window isn't a box -- but rather than drop it
+            # silently (which made calibration look frozen when the window covered
+            # a box), tell the vet to drag the window aside. The click still falls
+            # through to whatever is underneath either way.
             if not pressed or button != mouse.Button.left:
                 return
             if _click_is_on_window(window, x, y):
+                run_on_main_thread(tk_root, controller.on_click_on_prompt)
                 return
             run_on_main_thread(tk_root, lambda: controller.on_click(x, y))
 

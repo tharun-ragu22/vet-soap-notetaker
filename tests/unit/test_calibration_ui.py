@@ -6,11 +6,11 @@ plain callables, so the sequencing is testable without a display or pynput.
 """
 
 from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, BoxCalibration, BoxControl
-from vet_soap_notetaker.calibration_ui import CalibrationController
+from vet_soap_notetaker.calibration_ui import CalibrationController, prompt_window_position
 
 
 def _make(capture=None):
-    events = {"prompts": [], "saved": [], "closed": 0}
+    events = {"prompts": [], "saved": [], "closed": 0, "warned": 0}
 
     def capture_fn(x, y):
         return (capture or (lambda x, y: BoxControl(x, "Edit", 0.0, 0.0)))(x, y)
@@ -24,8 +24,11 @@ def _make(capture=None):
     def close():
         events["closed"] += 1
 
+    def warn():
+        events["warned"] += 1
+
     controller = CalibrationController(
-        capture=capture_fn, save=save, prompt=prompt, close=close
+        capture=capture_fn, save=save, prompt=prompt, close=close, warn=warn
     )
     return controller, events
 
@@ -82,3 +85,47 @@ def test_clicks_after_completion_are_ignored():
 
     assert len(events["saved"]) == 1  # not saved again
     assert events["closed"] == 1
+
+
+def test_click_on_prompt_warns_without_capturing():
+    # A click that landed on our own instruction window (covering the box) must
+    # not be captured as a box, but must tell the vet why nothing happened --
+    # otherwise calibration silently freezes on that box (the small-screen bug).
+    controller, events = _make()
+    controller.start()
+
+    controller.on_click_on_prompt()
+
+    assert events["warned"] == 1
+    # the session did not advance: still prompting for the first box, nothing saved
+    assert events["prompts"] == [("subjective", 0, 4)]
+    assert events["saved"] == []
+    assert events["closed"] == 0
+
+
+def test_click_on_prompt_is_ignored_after_completion():
+    controller, events = _make()
+    controller.start()
+    for i in range(4):
+        controller.on_click(i, 0)
+
+    controller.on_click_on_prompt()  # window already torn down; no-op
+
+    assert events["warned"] == 0
+
+
+def test_prompt_window_position_sits_in_the_bottom_right_corner():
+    # The prompt opens away from the top-left where AVImark's note window (and the
+    # mock) sit, so it can't cover the boxes being clicked. Top-left of the prompt
+    # = screen minus its own size minus a margin.
+    x, y = prompt_window_position(1366, 768, 320, 140, margin=24)
+
+    assert (x, y) == (1366 - 320 - 24, 768 - 140 - 24)
+
+
+def test_prompt_window_position_never_goes_off_screen():
+    # A window larger than the screen clamps to the origin rather than going
+    # negative (off-screen, unreachable).
+    x, y = prompt_window_position(800, 600, 1000, 1000, margin=24)
+
+    assert (x, y) == (0, 0)

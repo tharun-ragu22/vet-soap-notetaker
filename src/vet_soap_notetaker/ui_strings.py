@@ -28,6 +28,13 @@ def calibration_prompt(section, done, total):
         f"click inside the {label} box."
     )
 
+# Shown when a calibration click lands on this prompt window itself (it was
+# covering the box) -- so the click isn't silently swallowed.
+CALIBRATION_PROMPT_COVERED = (
+    "⚠ This window is covering the box. Drag it out of the way, "
+    "then click inside the box."
+)
+
 # Tray menu items
 MENU_OPEN_LAST_SOAP_NOTE = "Open Last SOAP Note"
 MENU_VIEW_HISTORY = "View History"
