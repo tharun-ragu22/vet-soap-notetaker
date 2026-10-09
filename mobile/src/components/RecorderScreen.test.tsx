@@ -1,9 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { AudioService } from '../services/audio/AudioService';
-import type { Recorder, RecordingResult } from '../services/audio/types';
+import type { KeepAwake, Recorder, RecordingResult } from '../services/audio/types';
 import type { Exam } from '../services/api/types';
 import { RecorderScreen } from './RecorderScreen';
+
+function makeKeepAwake(): jest.Mocked<KeepAwake> {
+  return { activate: jest.fn(), deactivate: jest.fn() };
+}
 
 /** A fake Recorder so the whole real AudioService state machine runs in the test. */
 function makeRecorder(overrides: Partial<Recorder> = {}): jest.Mocked<Recorder> {
@@ -109,6 +113,49 @@ describe('RecorderScreen', () => {
     await waitFor(() => expect(screen.getByText(/permission denied/i)).toBeTruthy());
     expect(screen.getByText(/start/i)).toBeTruthy();
     expect(audioService.state).toBe('idle');
+  });
+
+  it('keeps the display awake while recording and releases it on stop', async () => {
+    const recorder = makeRecorder();
+    const audioService = new AudioService(recorder);
+    const keepAwake = makeKeepAwake();
+    render(
+      <RecorderScreen
+        audioService={audioService}
+        enqueueRecording={jest.fn(async () => exam)}
+        keepAwake={keepAwake}
+      />,
+    );
+
+    // idle: the screen is free to sleep
+    expect(keepAwake.activate).not.toHaveBeenCalled();
+
+    fireEvent.press(screen.getByText(/start/i));
+    await waitFor(() => expect(keepAwake.activate).toHaveBeenCalledTimes(1));
+    expect(keepAwake.deactivate).not.toHaveBeenCalled();
+
+    fireEvent.press(screen.getByText(/stop/i));
+    // once recording ends the wake-lock is released so the phone can sleep again
+    await waitFor(() => expect(keepAwake.deactivate).toHaveBeenCalledTimes(1));
+  });
+
+  it('releases the display wake-lock if unmounted mid-recording', async () => {
+    const recorder = makeRecorder();
+    const audioService = new AudioService(recorder);
+    const keepAwake = makeKeepAwake();
+    const { unmount } = render(
+      <RecorderScreen
+        audioService={audioService}
+        enqueueRecording={jest.fn(async () => exam)}
+        keepAwake={keepAwake}
+      />,
+    );
+
+    fireEvent.press(screen.getByText(/start/i));
+    await waitFor(() => expect(keepAwake.activate).toHaveBeenCalledTimes(1));
+
+    unmount();
+    expect(keepAwake.deactivate).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces a failure to even save the recording and returns to idle', async () => {

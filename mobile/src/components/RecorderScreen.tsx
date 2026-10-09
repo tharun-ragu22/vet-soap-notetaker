@@ -1,8 +1,9 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { AudioService } from '../services/audio/AudioService';
-import type { RecordingResult } from '../services/audio/types';
+import { expoKeepAwake } from '../services/audio/expoKeepAwake';
+import type { KeepAwake, RecordingResult } from '../services/audio/types';
 import type { Exam } from '../services/api/types';
 
 export interface RecorderScreenProps {
@@ -15,6 +16,11 @@ export interface RecorderScreenProps {
   enqueueRecording: (result: RecordingResult) => Promise<Exam | null>;
   /** Called once the backend has generated and stored the note. */
   onRecorded?: (exam: Exam) => void;
+  /**
+   * Holds the display awake while recording. Injectable for tests; defaults to the
+   * real expo-keep-awake wrapper.
+   */
+  keepAwake?: KeepAwake;
 }
 
 type Phase = 'idle' | 'recording' | 'processing';
@@ -29,10 +35,25 @@ function messageOf(error: unknown): string {
  * the button to idle so it can never become a silent no-op (the desktop Pipeline's
  * hard rule, mirrored here through AudioService).
  */
-export function RecorderScreen({ audioService, enqueueRecording, onRecorded }: RecorderScreenProps) {
+export function RecorderScreen({
+  audioService,
+  enqueueRecording,
+  onRecorded,
+  keepAwake = expoKeepAwake,
+}: RecorderScreenProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Keep the display on only while actively recording (not idle, and not during the
+  // brief upload — the durable queue survives a sleep/lock, so there's no reason to
+  // burn battery then). The cleanup releases the lock on Stop and on unmount, so
+  // navigating away mid-recording can't leave the screen stuck awake.
+  useEffect(() => {
+    if (phase !== 'recording') return;
+    keepAwake.activate();
+    return () => keepAwake.deactivate();
+  }, [phase, keepAwake]);
 
   const handleStart = useCallback(async () => {
     setError(null);
