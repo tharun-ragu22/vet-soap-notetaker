@@ -5,6 +5,7 @@ import win32clipboard
 import win32con
 import win32gui
 
+from vet_soap_notetaker import dpi
 from vet_soap_notetaker.avimark_calibration import choose_control, descriptor_from_capture
 
 AVIMARK_TITLE_MARKER = "AVImark"
@@ -234,9 +235,23 @@ class AvimarkInjector:
         class_name = win32gui.GetClassName(hwnd)
         top = win32gui.GetAncestor(hwnd, _GA_ROOT)
         parent_rect = win32gui.GetWindowRect(top)
-        return descriptor_from_capture(
+        descriptor = descriptor_from_capture(
             control_id, class_name, parent_rect, screen_x, screen_y
         )
+        # Field diagnostic: if a calibration done on one monitor captures the same
+        # control for every box, this line shows whether that monitor's DPI (and
+        # our thread awareness) explains it -- see dpi.py and _enumerate_candidates.
+        logger.info(
+            "calibration capture at (%s, %s): control_id=%s class=%r rel=(%.3f, %.3f) [%s]",
+            screen_x,
+            screen_y,
+            control_id,
+            class_name,
+            descriptor.rel_x,
+            descriptor.rel_y,
+            dpi.describe_point(screen_x, screen_y),
+        )
+        return descriptor
 
     def _enumerate_candidates(self, parent_hwnd):
         """List every child control of ``parent_hwnd`` with its id/class/rect."""
