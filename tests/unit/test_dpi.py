@@ -30,6 +30,50 @@ def test_describe_point_is_unavailable_without_windows(mocker):
     assert dpi.describe_point(10, 20) == "unavailable"
 
 
+class _FakeUser32:
+    """Records SetThreadDpiAwarenessContext calls and hands back a prior handle."""
+
+    def __init__(self):
+        self.calls = []
+
+    def SetThreadDpiAwarenessContext(self, ctx):
+        self.calls.append(ctx)
+        return "previous-ctx"  # what the OS returns: the context that was in effect
+
+
+def test_physical_pixels_sets_per_monitor_v2_then_restores(mocker):
+    fake = _FakeUser32()
+    mocker.patch.object(dpi, "_user32", return_value=fake)
+
+    with dpi.physical_pixels():
+        # entered: switched this thread to Per-Monitor-v2
+        assert fake.calls == [dpi._PER_MONITOR_AWARE_V2]
+
+    # exited: restored whatever was in effect before
+    assert fake.calls == [dpi._PER_MONITOR_AWARE_V2, "previous-ctx"]
+
+
+def test_physical_pixels_is_a_noop_without_windows(mocker):
+    mocker.patch.object(dpi, "_user32", return_value=None)
+    entered = False
+    with dpi.physical_pixels():
+        entered = True
+    assert entered  # yields and never raises off Windows
+
+
+def test_physical_pixels_restores_even_if_body_raises(mocker):
+    fake = _FakeUser32()
+    mocker.patch.object(dpi, "_user32", return_value=fake)
+
+    try:
+        with dpi.physical_pixels():
+            raise ValueError("boom")
+    except ValueError:
+        pass
+
+    assert fake.calls == [dpi._PER_MONITOR_AWARE_V2, "previous-ctx"]
+
+
 def test_current_awareness_reads_the_thread_context(mocker):
     class FakeUser32:
         def GetThreadDpiAwarenessContext(self):

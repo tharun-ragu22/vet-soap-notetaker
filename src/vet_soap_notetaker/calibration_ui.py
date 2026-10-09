@@ -34,7 +34,7 @@ def prompt_window_position(screen_width, screen_height, window_width, window_hei
 
 
 class CalibrationController:
-    def __init__(self, capture, save, prompt, close, warn=None):
+    def __init__(self, capture, save, prompt, close, warn=None, invalid=None):
         """
         capture(x, y) -> BoxControl : identify the control under a click
         save(BoxCalibration)        : persist the finished calibration (go live)
@@ -42,12 +42,16 @@ class CalibrationController:
         close()                     : tear down the prompt window + mouse hook
         warn()                      : tell the vet a click landed on the prompt
                                       window (covering the box); optional.
+        invalid()                   : tell the vet the capture collapsed (all boxes
+                                      hit one control) and to start over; optional.
         """
+        self._capture = capture
         self._session = CalibrationSession(capture_fn=capture)
         self._save = save
         self._prompt = prompt
         self._close = close
         self._warn = warn or (lambda: None)
+        self._invalid = invalid or (lambda: None)
 
     def start(self):
         section = self._session.current_section
@@ -77,7 +81,18 @@ class CalibrationController:
         section = self._session.record_click(screen_x, screen_y)
         logger.info("captured %s box at (%s, %s)", section, screen_x, screen_y)
         if self._session.is_complete():
-            self._save(self._session.result())
+            result = self._session.result()
+            if result.has_duplicate_controls():
+                # The capture collapsed (every box resolved to one control -- the
+                # multi-monitor DPI bug). Don't persist a calibration that would
+                # paste the whole note into one box; tell the vet and start over.
+                logger.warning(
+                    "calibration captured duplicate controls; discarding and restarting"
+                )
+                self._session = CalibrationSession(capture_fn=self._capture)
+                self._invalid()
+                return
+            self._save(result)
             logger.info("calibration complete; saved all four boxes")
             self._close()
         else:

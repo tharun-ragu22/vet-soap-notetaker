@@ -79,6 +79,18 @@ class BoxCalibration:
     def is_complete(self) -> bool:
         return all(section in self.boxes for section in SOAP_SECTIONS)
 
+    def has_duplicate_controls(self) -> bool:
+        """Whether two sections captured the same (non-zero) control id.
+
+        A real AVImark exam screen has a distinct control per SOAP box, so sharing
+        one id means the capture collapsed -- every click hit-tested to the same
+        control (the multi-monitor DPI bug) -- and resolving it would paste the
+        whole note into one box. Zero ids ("no control id", matched by position)
+        are ignored: repeated zeros aren't a collapse and position tells them apart.
+        """
+        ids = [box.control_id for box in self.boxes.values() if box.control_id]
+        return len(ids) != len(set(ids))
+
     def to_dict(self) -> dict:
         return {section: box.to_dict() for section, box in self.boxes.items()}
 

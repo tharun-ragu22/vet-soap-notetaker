@@ -16,10 +16,15 @@ never raises off Windows (and on Windows too old for the calls), so the pure cod
 paths and the Linux test suite are unaffected.
 """
 
+import contextlib
 import logging
 import sys
 
 logger = logging.getLogger("vet_soap_notetaker.dpi")
+
+# DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 -- a sentinel HANDLE value (not a real
+# pointer) accepted by SetThreadDpiAwarenessContext on Windows 10 1703+.
+_PER_MONITOR_AWARE_V2 = -4
 
 # Names for the values GetAwarenessFromDpiAwarenessContext returns (the
 # PROCESS_DPI_AWARENESS enum), for human-readable diagnostics.
@@ -52,6 +57,34 @@ def _shcore():
         return ctypes.windll.shcore
     except Exception:
         return None
+
+
+@contextlib.contextmanager
+def physical_pixels():
+    """Run the body with this thread in Per-Monitor-v2 DPI awareness, then restore.
+
+    Makes WindowFromPoint / GetWindowRect report true physical pixels on every
+    monitor -- matching the coordinates pynput reports -- so a calibration click
+    on a monitor whose DPI differs from the primary's still hit-tests the right
+    control. Scoped to the *thread*, not the process, so Tk's process-wide
+    System awareness (which it uses to size its own windows) is left untouched.
+    A no-op that never raises off Windows, or on Windows too old for the call.
+    """
+    user32 = _user32()
+    previous = None
+    if user32 is not None:
+        try:
+            previous = user32.SetThreadDpiAwarenessContext(_PER_MONITOR_AWARE_V2)
+        except Exception:
+            previous = None
+    try:
+        yield
+    finally:
+        if previous:
+            try:
+                user32.SetThreadDpiAwarenessContext(previous)
+            except Exception:
+                pass
 
 
 def _awareness_name(code) -> str:

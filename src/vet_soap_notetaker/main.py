@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pyperclip
 
-from vet_soap_notetaker import autostart
+from vet_soap_notetaker import autostart, dpi
 from vet_soap_notetaker.api_client import ApiClient, SoapNote
 from vet_soap_notetaker.audio_recorder import AudioRecorder
 from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, BoxCalibration
@@ -113,8 +113,11 @@ def _click_is_on_window(window, x, y):
     Win32 isn't available.
     """
     try:
-        clicked_root = win32gui.GetAncestor(win32gui.WindowFromPoint((x, y)), _GA_ROOT)
-        our_root = win32gui.GetAncestor(window.winfo_id(), _GA_ROOT)
+        # Physical pixels so the point resolves to the right window on a
+        # non-primary-DPI monitor (same reason as capture_calibration_box).
+        with dpi.physical_pixels():
+            clicked_root = win32gui.GetAncestor(win32gui.WindowFromPoint((x, y)), _GA_ROOT)
+            our_root = win32gui.GetAncestor(window.winfo_id(), _GA_ROOT)
         return clicked_root == our_root
     except Exception:
         return _point_in_window(window, x, y)
@@ -440,6 +443,9 @@ def build_app(config=None, tk_root=None):
         def warn_prompt_covered():
             label.config(text=ui_strings.CALIBRATION_PROMPT_COVERED)
 
+        def warn_calibration_invalid():
+            label.config(text=ui_strings.CALIBRATION_RETRY)
+
         def close():
             if listener["value"] is not None:
                 listener["value"].stop()
@@ -451,6 +457,7 @@ def build_app(config=None, tk_root=None):
             prompt=prompt,
             close=close,
             warn=warn_prompt_covered,
+            invalid=warn_calibration_invalid,
         )
 
         def on_click(x, y, button, pressed):

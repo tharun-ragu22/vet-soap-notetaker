@@ -54,6 +54,37 @@ def test_capture_calibration_box_builds_descriptor_from_the_click(mocker):
     assert box.rel_y == pytest.approx(0.5)  # 200 / 400
 
 
+def test_capture_calibration_box_runs_under_per_monitor_dpi(mocker):
+    # The hit-test must read true physical pixels regardless of which monitor the
+    # click is on, so WindowFromPoint can't be virtualized onto the wrong control.
+    win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    win32gui.WindowFromPoint.return_value = 500
+    win32gui.GetDlgCtrlID.return_value = 1007
+    win32gui.GetClassName.return_value = "Edit"
+    win32gui.GetAncestor.return_value = 100
+    win32gui.GetWindowRect.return_value = (0, 0, 400, 400)
+    cm = mocker.patch("vet_soap_notetaker.avimark_injector.dpi.physical_pixels")
+
+    AvimarkInjector().capture_calibration_box(100, 200)
+
+    cm.assert_called_once_with()
+    cm.return_value.__enter__.assert_called_once()
+    cm.return_value.__exit__.assert_called_once()
+
+
+def test_resolve_calibration_box_runs_under_per_monitor_dpi(mocker):
+    win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    _fake_enum(win32gui, {10: (1002, "Edit", (0, 200, 100, 300))})
+    cm = mocker.patch("vet_soap_notetaker.avimark_injector.dpi.physical_pixels")
+    box = BoxControl(control_id=1002, class_name="Edit", rel_x=0.0, rel_y=0.0)
+
+    AvimarkInjector().resolve_calibration_box(999, box)
+
+    cm.assert_called_once_with()
+    cm.return_value.__enter__.assert_called_once()
+    cm.return_value.__exit__.assert_called_once()
+
+
 # --- resolve -----------------------------------------------------------------
 
 

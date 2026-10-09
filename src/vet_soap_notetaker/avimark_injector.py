@@ -230,11 +230,15 @@ class AvimarkInjector:
         top-level AVImark window, so it can be re-found later even after the window
         is recreated for a different patient.
         """
-        hwnd = win32gui.WindowFromPoint((screen_x, screen_y))
-        control_id = win32gui.GetDlgCtrlID(hwnd)
-        class_name = win32gui.GetClassName(hwnd)
-        top = win32gui.GetAncestor(hwnd, _GA_ROOT)
-        parent_rect = win32gui.GetWindowRect(top)
+        # Per-monitor-v2 so the hit-test reads physical pixels on whichever monitor
+        # the click is on; otherwise a System-aware thread virtualizes the point on
+        # a non-primary-DPI monitor and WindowFromPoint lands on the wrong control.
+        with dpi.physical_pixels():
+            hwnd = win32gui.WindowFromPoint((screen_x, screen_y))
+            control_id = win32gui.GetDlgCtrlID(hwnd)
+            class_name = win32gui.GetClassName(hwnd)
+            top = win32gui.GetAncestor(hwnd, _GA_ROOT)
+            parent_rect = win32gui.GetWindowRect(top)
         descriptor = descriptor_from_capture(
             control_id, class_name, parent_rect, screen_x, screen_y
         )
@@ -273,8 +277,11 @@ class AvimarkInjector:
 
     def resolve_calibration_box(self, parent_hwnd, box):
         """Resolve a calibrated ``box`` back to a live control hwnd under the window."""
-        candidates = self._enumerate_candidates(parent_hwnd)
-        parent_rect = win32gui.GetWindowRect(parent_hwnd)
+        # Same physical-pixel context as capture, so the child rects and the parent
+        # rect are read in the one coordinate space the calibration was taken in.
+        with dpi.physical_pixels():
+            candidates = self._enumerate_candidates(parent_hwnd)
+            parent_rect = win32gui.GetWindowRect(parent_hwnd)
         return choose_control(candidates, box, parent_rect)
 
     def _set_control_text(self, hwnd, text):

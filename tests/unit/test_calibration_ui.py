@@ -10,7 +10,7 @@ from vet_soap_notetaker.calibration_ui import CalibrationController, prompt_wind
 
 
 def _make(capture=None):
-    events = {"prompts": [], "saved": [], "closed": 0, "warned": 0}
+    events = {"prompts": [], "saved": [], "closed": 0, "warned": 0, "invalid": 0}
 
     def capture_fn(x, y):
         return (capture or (lambda x, y: BoxControl(x, "Edit", 0.0, 0.0)))(x, y)
@@ -27,8 +27,11 @@ def _make(capture=None):
     def warn():
         events["warned"] += 1
 
+    def invalid():
+        events["invalid"] += 1
+
     controller = CalibrationController(
-        capture=capture_fn, save=save, prompt=prompt, close=close, warn=warn
+        capture=capture_fn, save=save, prompt=prompt, close=close, warn=warn, invalid=invalid
     )
     return controller, events
 
@@ -112,6 +115,31 @@ def test_click_on_prompt_is_ignored_after_completion():
     controller.on_click_on_prompt()  # window already torn down; no-op
 
     assert events["warned"] == 0
+
+
+def test_degenerate_calibration_is_rejected_and_not_saved():
+    # Every click captured the same control (the multi-monitor DPI collapse):
+    # don't persist a calibration that would paste the whole note into one box;
+    # tell the vet and restart rather than tear down.
+    controller, events = _make(capture=lambda x, y: BoxControl(1001, "Edit", 0.0, 0.0))
+    controller.start()
+    for i in range(4):
+        controller.on_click(i, 0)
+
+    assert events["saved"] == []
+    assert events["closed"] == 0
+    assert events["invalid"] == 1
+
+
+def test_degenerate_calibration_restarts_the_sequence():
+    controller, events = _make(capture=lambda x, y: BoxControl(1001, "Edit", 0.0, 0.0))
+    controller.start()
+    for i in range(4):
+        controller.on_click(i, 0)
+
+    # the session was reset, so the next click captures the first box again
+    controller.on_click(5, 0)
+    assert events["prompts"][-1] == ("objective", 1, 4)
 
 
 def test_prompt_window_position_sits_in_the_bottom_right_corner():

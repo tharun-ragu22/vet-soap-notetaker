@@ -35,6 +35,13 @@ CALIBRATION_PROMPT_COVERED = (
     "then click inside the box."
 )
 
+# Shown when the four clicks all captured the same control (usually a multi-monitor
+# display mismatch), so the calibration is discarded and restarted.
+CALIBRATION_RETRY = (
+    "⚠ That didn't capture four separate boxes — this can happen across two "
+    "monitors. Let's start over: click inside the Subjective box."
+)
+
 # Tray menu items
 MENU_OPEN_LAST_SOAP_NOTE = "Open Last SOAP Note"
 MENU_VIEW_HISTORY = "View History"

@@ -59,6 +59,31 @@ def test_get_returns_the_box_for_a_section_or_none():
     assert cal.get("plan") is None
 
 
+def test_has_duplicate_controls_flags_sections_sharing_a_nonzero_id():
+    # The multi-monitor collapse: every click captured the same control, so all
+    # four sections carry one control id -- resolving them all to one box.
+    collapsed = BoxCalibration(
+        boxes={s: BoxControl(1001, "Edit", 0.1 * i, 0.1 * i) for i, s in enumerate(SOAP_SECTIONS)}
+    )
+    assert collapsed.has_duplicate_controls() is True
+
+
+def test_has_duplicate_controls_is_false_for_distinct_ids():
+    good = BoxCalibration(
+        boxes={s: BoxControl(1001 + i, "Edit", 0.1, 0.1) for i, s in enumerate(SOAP_SECTIONS)}
+    )
+    assert good.has_duplicate_controls() is False
+
+
+def test_has_duplicate_controls_ignores_zero_ids():
+    # id 0 means "no control id" (owner-drawn / unlabeled); those are matched by
+    # position, so repeated zeros are not a collapse and must not be flagged.
+    zeros = BoxCalibration(
+        boxes={s: BoxControl(0, "Edit", 0.1 * i, 0.1 * i) for i, s in enumerate(SOAP_SECTIONS)}
+    )
+    assert zeros.has_duplicate_controls() is False
+
+
 # --- descriptor_from_capture -------------------------------------------------
 
 
