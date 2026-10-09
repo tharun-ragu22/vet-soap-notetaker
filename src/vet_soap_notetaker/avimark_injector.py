@@ -273,6 +273,15 @@ class AvimarkInjector:
             return True
 
         win32gui.EnumChildWindows(parent_hwnd, _collect, None)
+        # Diagnostic: the live control ids under the target window, so a bad resolve
+        # shows whether the box's stored id is even present (id match) or the window
+        # is the wrong one (forcing the position fallback that can collapse boxes).
+        logger.info(
+            "enumerated %d controls under window %s: control_ids=%s",
+            len(results),
+            parent_hwnd,
+            sorted({r["control_id"] for r in results}),
+        )
         return results
 
     def resolve_calibration_box(self, parent_hwnd, box):
@@ -313,6 +322,13 @@ class AvimarkInjector:
                 logger.warning("calibrated paste aborted: no calibration for %r", section)
                 return False
             hwnd = self.resolve_calibration_box(parent_hwnd, box)
+            logger.info(
+                "resolve %r: stored control_id=%s class=%r -> hwnd=%s",
+                section,
+                box.control_id,
+                box.class_name,
+                hwnd,
+            )
             if hwnd is None:
                 logger.warning("calibrated paste aborted: could not resolve %r box", section)
                 return False
