@@ -37,27 +37,28 @@ export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistorySc
   const [status, setStatus] = useState<Status>('loading');
   const [exams, setExams] = useState<Exam[]>([]);
 
-  const load = useCallback(
-    async (quiet = false) => {
-      // A quiet refresh keeps the current list on screen (no full-screen spinner)
-      // so returning to History doesn't flash "Loading…" every time.
-      if (!quiet) setStatus('loading');
-      try {
-        const result = await apiClient.fetchHistory();
+  useEffect(() => {
+    // No list yet to fall back to, so a failed initial load must still show
+    // the error screen. Inlined (rather than calling a shared async helper)
+    // because react-hooks/set-state-in-effect flags *any* call in an effect
+    // body to a named async function that eventually sets state, even from a
+    // deferred .then()/.catch() -- an inline promise chain is the shape it
+    // recognizes as deferred and leaves alone.
+    let active = true;
+    apiClient.fetchHistory().then(
+      (result) => {
+        if (!active) return;
         setExams(result);
         setStatus('ready');
-      } catch {
-        // Don't let a failed background refresh wipe out a list we already have;
-        // only surface the error screen when there's nothing to fall back to.
-        if (!quiet) setStatus('error');
-      }
-    },
-    [apiClient],
-  );
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+      },
+      () => {
+        if (active) setStatus('error');
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [apiClient]);
 
   // Refetch quietly whenever the route reports the screen was re-focused (e.g. the
   // user came back after deleting an exam). Skip the first run: the mount effect
@@ -69,8 +70,33 @@ export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistorySc
       firstFocus.current = false;
       return;
     }
-    void load(true);
-  }, [reloadSignal, load]);
+    let active = true;
+    apiClient.fetchHistory().then(
+      (result) => {
+        if (!active) return;
+        setExams(result);
+        setStatus('ready');
+      },
+      () => {
+        // Don't let a failed background refresh wipe out a list we already have;
+        // only surface the error screen when there's nothing to fall back to.
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [reloadSignal, apiClient]);
+
+  const retry = useCallback(() => {
+    setStatus('loading');
+    apiClient.fetchHistory().then(
+      (result) => {
+        setExams(result);
+        setStatus('ready');
+      },
+      () => setStatus('error'),
+    );
+  }, [apiClient]);
 
   if (status === 'loading') {
     return (
@@ -84,8 +110,8 @@ export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistorySc
   if (status === 'error') {
     return (
       <View style={styles.center}>
-        <Text style={styles.error}>Couldn't load exams.</Text>
-        <Pressable accessibilityRole="button" style={styles.retry} onPress={() => load()}>
+        <Text style={styles.error}>Couldn&apos;t load exams.</Text>
+        <Pressable accessibilityRole="button" style={styles.retry} onPress={retry}>
           <Text style={styles.retryText}>Retry</Text>
         </Pressable>
       </View>

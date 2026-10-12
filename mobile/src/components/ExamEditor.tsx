@@ -20,7 +20,7 @@ export interface ExamEditorProps {
   onDeleted?: () => void;
 }
 
-const SECTIONS: ReadonlyArray<readonly [keyof SoapNote, string]> = [
+const SECTIONS: readonly (readonly [keyof SoapNote, string])[] = [
   ['subjective', 'Subjective'],
   ['objective', 'Objective'],
   ['assessment', 'Assessment'],

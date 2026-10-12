@@ -14,25 +14,32 @@ import { useServices } from '../../services/context';
 export default function ExamRoute() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { apiClient } = useServices();
-  const [exam, setExam] = useState<Exam | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Keyed by id rather than reset imperatively: a result for a stale id (e.g.
+  // navigating straight from one exam to another) is treated as still loading
+  // instead of being flashed on screen, with no synchronous setState in the
+  // effect body to reset exam/error on every id change.
+  const [result, setResult] = useState<{ id: string; exam: Exam | null; error: string | null } | null>(
+    null,
+  );
 
   useEffect(() => {
     let active = true;
-    setExam(null);
-    setError(null);
     apiClient
       .getExam(id)
       .then((loaded) => {
-        if (active) setExam(loaded);
+        if (active) setResult({ id, exam: loaded, error: null });
       })
       .catch(() => {
-        if (active) setError("Couldn't load this exam.");
+        if (active) setResult({ id, exam: null, error: "Couldn't load this exam." });
       });
     return () => {
       active = false;
     };
   }, [apiClient, id]);
+
+  const current = result?.id === id ? result : null;
+  const exam = current?.exam ?? null;
+  const error = current?.error ?? null;
 
   if (error) {
     return (

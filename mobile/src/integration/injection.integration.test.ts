@@ -11,7 +11,7 @@ import { FakeBackend } from './fakeBackend';
 describe('remote injection bridge (integration)', () => {
   async function desktopPoll(backend: FakeBackend) {
     const res = await backend.fetch('http://clinic:8000/api/injections/pending');
-    return (await res.json()) as { requests: Array<Record<string, any>> };
+    return (await res.json()) as { requests: Record<string, any>[] };
   }
 
   async function desktopAck(backend: FakeBackend, id: string, outcome: string) {
