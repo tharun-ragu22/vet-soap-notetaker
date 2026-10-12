@@ -34,11 +34,42 @@ import time
 if sys.platform != "win32":  # pragma: no cover - the whole module is Win32-only
     raise SystemExit("mock_avimark_soap is Windows-only (needs native Win32 controls)")
 
+import ctypes
+
 import win32api
 import win32con
 import win32gui
 
 from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, CalibrationSession
+
+
+def _make_dpi_aware():
+    """Opt this process into physical-pixel (DPI-aware) coordinates.
+
+    Real AVImark is a native DPI-aware app, and so is the Vet Soap Notetaker
+    desktop app (Tk makes its process DPI-aware when it builds the root window).
+    Its calibration works in *physical* pixels on that basis. A plain PyInstaller
+    exe ships with no DPI-aware manifest, so on a display scaled above 100% the
+    mock would run DPI-*unaware* and Windows would virtualize its coordinates --
+    then WindowFromPoint during calibration lands on the wrong control and the
+    injected note falls back to the Safety Flyout. Matching the app's awareness
+    keeps both in the same coordinate space. Best-effort across Windows versions:
+    per-monitor-v2 -> per-monitor -> system; a failure just leaves the default.
+    """
+    try:  # Windows 10 1703+: the most precise context.
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)  # PER_MONITOR_AWARE_V2
+        return
+    except (AttributeError, OSError):
+        pass
+    try:  # Windows 8.1+: PROCESS_PER_MONITOR_DPI_AWARE.
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except (AttributeError, OSError):
+        pass
+    try:  # Vista+: system-DPI aware.
+        ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
 
 TITLE_TEMPLATE = "AVImark - [SOAP Demo Layout {n}]"
 
@@ -302,6 +333,9 @@ def _run_demo(layout):
 
 
 def main():
+    # Must run before any window is created so every HWND lives in the
+    # physical-pixel space the desktop app calibrates against.
+    _make_dpi_aware()
     args = sys.argv[1:]
     layout = 1
     if "--layout" in args:
