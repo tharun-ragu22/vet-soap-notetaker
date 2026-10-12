@@ -9,3 +9,7 @@ build/
 .vetscribe/
 .env
 CLAUDE.md
+
+# Deployment how-to with example clinic IPs/keys-placement steps; local-only
+# per README.md's own docs/ note, never committed.
+docs/deployment.md
