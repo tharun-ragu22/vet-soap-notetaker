@@ -17,6 +17,13 @@ DEFAULT_CONFIG = {
     # serialized via .to_dict()), or None until the vet has calibrated. Kept as a
     # plain dict here so config stays pure data; main.py rehydrates it.
     "avimark_calibration": None,
+    # Product analytics (PostHog), set in Settings. No key = analytics off. The
+    # user id is who events belong to (falls back to desktop-<hostname>); the
+    # environment keeps test runs apart from a demo.
+    "analytics_key": "",
+    "analytics_user_id": "",
+    "analytics_environment": "dev",
+    "analytics_host": "https://us.i.posthog.com",
 }
 
 
@@ -30,6 +37,10 @@ class Config:
     launch_on_startup: bool = False
     avimark_calibration: dict | None = None
     api_generate_timeout_seconds: int = 480
+    analytics_key: str = ""
+    analytics_user_id: str = ""
+    analytics_environment: str = "dev"
+    analytics_host: str = "https://us.i.posthog.com"
 
     @classmethod
     def load(cls, path):

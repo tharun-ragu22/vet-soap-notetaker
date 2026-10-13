@@ -18,6 +18,9 @@ class SettingsWindow(tk.Toplevel):
         self.hotkey_var = tk.StringVar(value=config.hotkey)
         self.target_window_var = tk.StringVar(value=config.target_window_matcher)
         self.launch_on_startup_var = tk.BooleanVar(value=config.launch_on_startup)
+        self.analytics_key_var = tk.StringVar(value=config.analytics_key)
+        self.analytics_user_id_var = tk.StringVar(value=config.analytics_user_id)
+        self.analytics_environment_var = tk.StringVar(value=config.analytics_environment)
 
         tk.Label(self, text=ui_strings.LABEL_API_ENDPOINT).pack()
         self.endpoint_entry = tk.Entry(self, textvariable=self.endpoint_var)
@@ -42,6 +45,21 @@ class SettingsWindow(tk.Toplevel):
         )
         self.launch_on_startup_checkbox.pack()
 
+        # The PostHog project key is public (write-only), so it's a plain field.
+        tk.Label(self, text=ui_strings.LABEL_ANALYTICS_KEY).pack()
+        self.analytics_key_entry = tk.Entry(self, textvariable=self.analytics_key_var)
+        self.analytics_key_entry.pack()
+
+        tk.Label(self, text=ui_strings.LABEL_ANALYTICS_USER_ID).pack()
+        self.analytics_user_id_entry = tk.Entry(self, textvariable=self.analytics_user_id_var)
+        self.analytics_user_id_entry.pack()
+
+        tk.Label(self, text=ui_strings.LABEL_ANALYTICS_ENVIRONMENT).pack()
+        self.analytics_environment_entry = tk.Entry(
+            self, textvariable=self.analytics_environment_var
+        )
+        self.analytics_environment_entry.pack()
+
         self.save_button = tk.Button(
             self, text=ui_strings.BUTTON_SAVE, command=self._on_save_clicked
         )
@@ -55,6 +73,9 @@ class SettingsWindow(tk.Toplevel):
             hotkey=self.hotkey_var.get(),
             target_window_matcher=self.target_window_var.get(),
             launch_on_startup=self.launch_on_startup_var.get(),
+            analytics_key=self.analytics_key_var.get().strip(),
+            analytics_user_id=self.analytics_user_id_var.get().strip(),
+            analytics_environment=self.analytics_environment_var.get().strip(),
         )
         self.on_save(new_config)
         self.destroy()

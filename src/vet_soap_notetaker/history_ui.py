@@ -291,7 +291,7 @@ class HistoryWindow(tk.Toplevel):
 
         def work():
             try:
-                note = self.on_regenerate(transcript)
+                note = self.on_regenerate(transcript, exam_id=entry_id)
             except Exception as exc:  # noqa: BLE001 -- surfaced to the vet below
                 # Bind exc as a default arg: Python clears the `except ... as`
                 # name when the block exits, before this after() callback runs.

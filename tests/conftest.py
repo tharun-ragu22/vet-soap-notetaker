@@ -84,3 +84,16 @@ def _unregister_pystray_window_classes(monkeypatch):
                 unregister(atom)
             except OSError:
                 pass
+
+
+@pytest.fixture(autouse=True)
+def _no_real_posthog_client(monkeypatch):
+    # Tests must never build a real PostHog client (it would send events to the
+    # real project). Record any attempt and fail the test at teardown; tests
+    # that exercise the client inject a fake via client_factory instead.
+    from vet_soap_notetaker import analytics
+
+    built = []
+    monkeypatch.setattr(analytics, "Posthog", lambda *a, **k: built.append((a, k)))
+    yield
+    assert not built, "a test built a real PostHog client"

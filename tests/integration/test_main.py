@@ -919,3 +919,75 @@ def test_a_note_the_queue_gave_up_on_is_reported_in_a_message_only_flyout(mocker
     kwargs = mock_flyout_cls.call_args.kwargs
     assert kwargs["soap_text"] == ui_strings.NOTE_PENDING_GAVE_UP_MESSAGE
     assert kwargs["message_only"] is True
+
+
+# --- Analytics: identity + settings ----------------------------------------
+
+from tests.fakes import RecordingAnalytics  # noqa: E402
+from vet_soap_notetaker.analytics import DesktopAnalytics  # noqa: E402
+
+
+def _config(**overrides):
+    values = dict(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+    )
+    values.update(overrides)
+    return Config(**values)
+
+
+def test_build_app_builds_analytics_from_config_by_default():
+    tray_app, _, _ = build_app(config=_config(), tk_root=MagicMock())
+
+    assert isinstance(tray_app.analytics, DesktopAnalytics)
+    assert tray_app.analytics.enabled is False  # no key configured
+
+
+def test_api_requests_carry_the_analytics_identity(mocker):
+    tracker = RecordingAnalytics(distinct_id="demo-vet-1")
+    tray_app, _, _ = build_app(config=_config(), tk_root=MagicMock(), analytics=tracker)
+
+    headers = tray_app.pipeline.api_client.extra_headers()
+
+    assert headers["X-POSTHOG-DISTINCT-ID"] == "demo-vet-1"
+    assert headers["X-VSN-Client"] == "desktop"
+
+
+def test_saving_settings_reconfigures_analytics_and_reports_which_fields_changed(
+    mocker, tmp_path
+):
+    mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
+    mocker.patch("vet_soap_notetaker.main.autostart")
+    mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
+    mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", tmp_path / "config.json")
+    tracker = RecordingAnalytics()
+    config = _config(api_key="old-secret")
+    tray_app, _, _ = build_app(config=config, tk_root=MagicMock(), analytics=tracker)
+    tray_app.open_settings()
+    apply_settings = mock_settings_cls.call_args.kwargs["on_save"]
+
+    new_config = replace(
+        config, api_key="new-secret", analytics_user_id="demo-vet-1", analytics_environment="demo"
+    )
+    apply_settings(new_config)
+
+    assert tracker.reconfigured == [new_config]
+    props = tracker.only("settings_saved")["properties"]
+    assert props["fields_changed"] == ["analytics_environment", "analytics_user_id", "api_key"]
+    # Names only: never the values (the API key, the user id).
+    assert "new-secret" not in repr(tracker.events)
+    assert "demo-vet-1" not in repr(tracker.events)
+
+
+def test_history_regenerate_tells_the_backend_which_exam(mocker):
+    mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
+    regenerate = mocker.patch.object(
+        ApiClient, "regenerate_soap_note", return_value=SoapNote("s", "o", "a", "p")
+    )
+    tray_app, _, _ = build_app(config=_config(), tk_root=MagicMock())
+    tray_app.show_history()
+
+    mock_history_window.call_args.kwargs["on_regenerate"]("corrected", exam_id="e1")
+
+    regenerate.assert_called_once_with("corrected", exam_id="e1")

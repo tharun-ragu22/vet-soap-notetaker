@@ -48,6 +48,8 @@ class SoapNote:
     assessment: str
     plan: str
     transcript: str = ""
+    # The backend's id for the exam this note belongs to, when it sent one.
+    exam_id: str | None = None
 
 
 @dataclass
@@ -92,6 +94,7 @@ class ApiClient:
         timeout_seconds: float,
         api_key: str = "",
         generate_timeout_seconds: float = DEFAULT_GENERATE_TIMEOUT_SECONDS,
+        extra_headers=None,
     ):
         self.endpoint = endpoint
         # Quick calls (history, saves, injection polls) use timeout_seconds;
@@ -99,6 +102,9 @@ class ApiClient:
         self.timeout_seconds = timeout_seconds
         self.api_key = api_key
         self.generate_timeout_seconds = generate_timeout_seconds
+        # Called for every request so it always reflects the live settings;
+        # main.py passes the analytics identity headers.
+        self.extra_headers = extra_headers or (lambda: {})
 
     def _generate_timeout(self) -> httpx.Timeout:
         return httpx.Timeout(
@@ -106,7 +112,7 @@ class ApiClient:
         )
 
     def _auth_headers(self, extra: dict) -> dict:
-        headers = dict(extra)
+        headers = {**self.extra_headers(), **extra}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
@@ -124,12 +130,19 @@ class ApiClient:
                 assessment=data["assessment"],
                 plan=data["plan"],
                 transcript=data.get("transcript", ""),
+                exam_id=data.get("id"),
             )
         except KeyError as exc:
             raise ApiClientError(f"backend response missing field: {exc}") from exc
 
-    def generate_soap_note(self, audio_bytes: bytes) -> SoapNote:
-        headers = self._auth_headers({"Content-Type": "audio/wav"})
+    def generate_soap_note(
+        self, audio_bytes: bytes, audio_duration_ms: int | None = None
+    ) -> SoapNote:
+        extra = {"Content-Type": "audio/wav"}
+        if audio_duration_ms is not None:
+            # For the backend's analytics (transcription time vs. audio length).
+            extra["X-Audio-Duration-Ms"] = str(int(audio_duration_ms))
+        headers = self._auth_headers(extra)
 
         logger.info("POST %s (timeout=%ss)", self.endpoint, self.generate_timeout_seconds)
         try:
@@ -279,18 +292,23 @@ class ApiClient:
                 f"backend returned {response.status_code}: {response.text}"
             )
 
-    def regenerate_soap_note(self, transcript: str) -> SoapNote:
+    def regenerate_soap_note(self, transcript: str, exam_id: str | None = None) -> SoapNote:
         # Ask the backend to re-run only note generation over a hand-corrected
         # transcript. Derived from the same base endpoint the audio POST uses so
         # only one URL needs configuring.
         url = self.endpoint.rstrip("/") + "/regenerate"
         headers = self._auth_headers({"Content-Type": "application/json"})
 
+        body = {"transcript": transcript}
+        if exam_id:
+            # Lets the backend's analytics tie the regeneration to its exam.
+            body["exam_id"] = exam_id
+
         logger.info("POST %s (timeout=%ss)", url, self.generate_timeout_seconds)
         try:
             response = httpx.post(
                 url,
-                json={"transcript": transcript},
+                json=body,
                 headers=headers,
                 timeout=self._generate_timeout(),
             )

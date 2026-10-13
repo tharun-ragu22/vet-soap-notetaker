@@ -132,3 +132,45 @@ def test_config_round_trips_a_custom_generate_timeout(tmp_path):
     config.save(config_path)
 
     assert Config.load(config_path).api_generate_timeout_seconds == 600
+
+
+def test_analytics_are_off_by_default(tmp_path):
+    config = Config.load(tmp_path / "config.json")
+
+    # No key = nothing is sent; the vet's id and environment are set per install.
+    assert config.analytics_key == ""
+    assert config.analytics_user_id == ""
+    assert config.analytics_environment == "dev"
+    assert config.analytics_host == "https://us.i.posthog.com"
+
+
+def test_existing_config_without_analytics_keys_loads_with_analytics_off(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "api_endpoint": "http://localhost:8443/api/soap",
+        "api_timeout_seconds": 30,
+        "hotkey": "<ctrl>+<shift>+r",
+    }))
+
+    config = Config.load(config_path)
+
+    assert config.analytics_key == ""
+    assert config.analytics_environment == "dev"
+
+
+def test_config_round_trips_the_analytics_settings(tmp_path):
+    config_path = tmp_path / "config.json"
+    Config(
+        api_endpoint="http://localhost:8443/api/soap",
+        api_timeout_seconds=30,
+        hotkey="<ctrl>+<shift>+r",
+        analytics_key="phc_abc",
+        analytics_user_id="demo-vet-1",
+        analytics_environment="demo",
+    ).save(config_path)
+
+    config = Config.load(config_path)
+
+    assert config.analytics_key == "phc_abc"
+    assert config.analytics_user_id == "demo-vet-1"
+    assert config.analytics_environment == "demo"

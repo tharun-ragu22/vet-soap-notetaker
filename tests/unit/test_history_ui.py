@@ -408,8 +408,8 @@ def test_regenerate_sends_edited_transcript_and_shows_note_as_unsaved_edit(
     monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
     received = []
 
-    def fake_regenerate(transcript):
-        received.append(transcript)
+    def fake_regenerate(transcript, exam_id=None):
+        received.append((transcript, exam_id))
         return SoapNote(
             subjective="regenerated subjective",
             objective="regenerated objective",
@@ -427,7 +427,8 @@ def test_regenerate_sends_edited_transcript_and_shows_note_as_unsaved_edit(
     window.regenerate_button.invoke()
     window.update()  # flush the after(0) that applies the result
 
-    assert received == ["corrected transcript"]
+    # The exam id goes along so the backend can tell which note was regenerated.
+    assert received == [("corrected transcript", "n1")]
     assert window.field_texts["assessment"].get("1.0", "end-1c") == "regenerated assessment"
     assert window.field_texts["subjective"].get("1.0", "end-1c") == "regenerated subjective"
     # Left as an unsaved edit so nothing is persisted until the vet hits Save.
@@ -445,7 +446,7 @@ def test_regenerate_with_empty_transcript_warns_and_skips_backend(tk_root, monke
 
     entry = make_entry(subjective="Original", transcript="   ", entry_id="n1")
     window = make_window(
-        tk_root, [entry], on_regenerate=lambda t: called.append(t) or SoapNote("x", "x", "x", "x")
+        tk_root, [entry], on_regenerate=lambda t, exam_id=None: called.append(t) or SoapNote("x", "x", "x", "x")
     )
     window.show_entry(0)
 
@@ -460,7 +461,7 @@ def test_regenerate_result_is_dropped_when_the_vet_selected_another_note(tk_root
         make_entry(subjective="Newest", transcript="a", entry_id="n1"),
         make_entry(subjective="Older", transcript="b", entry_id="n2"),
     ]
-    window = make_window(tk_root, entries, on_regenerate=lambda t: SoapNote("x", "x", "x", "x"))
+    window = make_window(tk_root, entries, on_regenerate=lambda t, exam_id=None: SoapNote("x", "x", "x", "x"))
     window.show_entry(1)  # currently on n2
 
     # A regenerate that was kicked off for n1 finishes late.
@@ -482,7 +483,7 @@ def test_regenerate_failure_surfaces_an_error_and_re_enables_the_button(
         history_ui.messagebox, "showerror", lambda *a, **k: errors.append(a)
     )
 
-    def boom(transcript):
+    def boom(transcript, exam_id=None):
         raise RuntimeError("backend is down")
 
     entry = make_entry(subjective="Original", transcript="orig", entry_id="n1")

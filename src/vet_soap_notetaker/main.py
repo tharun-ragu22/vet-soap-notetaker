@@ -1,12 +1,13 @@
 import logging
 import threading
 import tkinter as tk
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pyperclip
 
 from vet_soap_notetaker import autostart, dpi
+from vet_soap_notetaker.analytics import DesktopAnalytics
 from vet_soap_notetaker.api_client import ApiClient, SoapNote
 from vet_soap_notetaker.audio_recorder import AudioRecorder
 from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, BoxCalibration
@@ -232,11 +233,13 @@ def show_history(tk_root, injector, history_store, on_regenerate=None, on_inject
     return window
 
 
-def build_app(config=None, tk_root=None):
+def build_app(config=None, tk_root=None, analytics=None):
     config = config or Config.load(CONFIG_PATH)
     tk_root = tk_root or tk.Tk()
     tk_root.withdraw()
     apply_window_icon(tk_root)
+    # Metadata-only usage events (see analytics.py); off without a key.
+    analytics = analytics if analytics is not None else DesktopAnalytics(config)
 
     recorder = AudioRecorder()
     api_client = ApiClient(
@@ -244,6 +247,9 @@ def build_app(config=None, tk_root=None):
         config.api_timeout_seconds,
         config.api_key,
         generate_timeout_seconds=config.api_generate_timeout_seconds,
+        # Every request names the analytics user, so the backend's events
+        # (saves, regenerations, timings) land on the same person.
+        extra_headers=analytics.request_headers,
     )
     injector = AvimarkInjector(title_marker=config.target_window_matcher)
     # The live AVImark box calibration (None until the vet calibrates). Held in a
@@ -254,11 +260,11 @@ def build_app(config=None, tk_root=None):
     # app reads); a local cache keeps History usable through a brief outage.
     history_store = BackendHistoryStore(api_client)
 
-    def regenerate_from_transcript(transcript):
+    def regenerate_from_transcript(transcript, exam_id=None):
         # Blocking backend call; HistoryWindow runs this on a worker thread and
         # marshals the result back to the Tk loop itself. Returns the structured
         # note so the window can repopulate its four SOAP fields.
-        return api_client.regenerate_soap_note(transcript)
+        return api_client.regenerate_soap_note(transcript, exam_id=exam_id)
 
     def open_history():
         show_history(
@@ -386,6 +392,7 @@ def build_app(config=None, tk_root=None):
     )
     tray_app.attach_backend_supervisor(backend_supervisor)
     tray_app.attach_tk_root(tk_root)
+    tray_app.analytics = analytics
 
     def dispatch_hotkey_trigger():
         # tray_app.on_hotkey_triggered() runs the full pipeline synchronously,
@@ -406,6 +413,7 @@ def build_app(config=None, tk_root=None):
     current_config = {"value": config}
 
     def apply_settings(new_config):
+        old_config = current_config["value"]
         new_config.save(CONFIG_PATH)
         api_client.endpoint = new_config.api_endpoint
         api_client.timeout_seconds = new_config.api_timeout_seconds
@@ -419,6 +427,14 @@ def build_app(config=None, tk_root=None):
         else:
             autostart.disable()
         current_config["value"] = new_config
+        analytics.reconfigure(new_config)
+        # Field names only -- never values (the API key, the user id).
+        changed = sorted(
+            name
+            for name, value in asdict(new_config).items()
+            if value != getattr(old_config, name)
+        )
+        analytics.capture("settings_saved", {"fields_changed": changed})
 
     def open_settings():
         SettingsWindow(master=tk_root, config=current_config["value"], on_save=apply_settings)

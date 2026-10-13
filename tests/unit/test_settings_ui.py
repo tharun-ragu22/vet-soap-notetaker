@@ -75,3 +75,25 @@ def test_save_button_destroys_window(tk_root):
     window.save_button.invoke()
 
     assert not window.winfo_exists()
+
+
+def test_settings_window_edits_the_analytics_fields(tk_root):
+    config = make_config(
+        analytics_key="phc_old", analytics_user_id="test-tharun", analytics_environment="test"
+    )
+    saved = []
+    window = SettingsWindow(master=tk_root, config=config, on_save=saved.append)
+
+    assert window.analytics_key_var.get() == "phc_old"
+    assert window.analytics_user_id_var.get() == "test-tharun"
+    assert window.analytics_environment_var.get() == "test"
+
+    window.analytics_key_var.set(" phc_new ")
+    window.analytics_user_id_var.set(" demo-vet-1 ")
+    window.analytics_environment_var.set("demo")
+    window.save_button.invoke()
+
+    # Surrounding whitespace from a paste is trimmed.
+    assert saved[0].analytics_key == "phc_new"
+    assert saved[0].analytics_user_id == "demo-vet-1"
+    assert saved[0].analytics_environment == "demo"

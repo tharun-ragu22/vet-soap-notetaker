@@ -724,3 +724,90 @@ def test_complete_note_raises_api_client_error_on_transport_failure():
         client.complete_note("exam-123")
 
     assert isinstance(excinfo.value, ApiClientError)
+
+
+# --- Analytics identity headers --------------------------------------------
+
+_BASE = "https://vet_soap_notetaker.example.com/api"
+_IDENTITY = {"X-POSTHOG-DISTINCT-ID": "demo-vet-1", "X-VSN-Client": "desktop"}
+_NOTE_JSON = {"id": "exam-9", "subjective": "s", "objective": "o", "assessment": "a", "plan": "p"}
+
+
+def _client_with_identity(identity=None):
+    return ApiClient(
+        endpoint=f"{_BASE}/soap",
+        timeout_seconds=30,
+        api_key="secret-token",
+        extra_headers=lambda: dict(identity or _IDENTITY),
+    )
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "method, url, call",
+    [
+        ("POST", f"{_BASE}/soap", lambda c: c.generate_soap_note(b"RIFF")),
+        ("POST", f"{_BASE}/soap/regenerate", lambda c: c.regenerate_soap_note("t")),
+        ("POST", f"{_BASE}/exams/e1/note", lambda c: c.complete_note("e1")),
+        ("GET", f"{_BASE}/history", lambda c: c.fetch_history()),
+        ("DELETE", f"{_BASE}/exams/e1", lambda c: c.delete_exam("e1")),
+        ("GET", f"{_BASE}/injections/pending", lambda c: c.fetch_pending_injections()),
+        ("POST", f"{_BASE}/injections/r1/ack", lambda c: c.ack_injection("r1", "delivered")),
+    ],
+)
+def test_every_request_carries_the_analytics_identity_headers(method, url, call):
+    body = {"exams": [], "requests": [], **_NOTE_JSON}
+    route = respx.route(method=method, url=url).mock(return_value=httpx.Response(200, json=body))
+
+    call(_client_with_identity())
+
+    headers = route.calls.last.request.headers
+    assert headers["X-POSTHOG-DISTINCT-ID"] == "demo-vet-1"
+    assert headers["X-VSN-Client"] == "desktop"
+    assert headers["Authorization"] == "Bearer secret-token"
+
+
+@respx.mock
+def test_identity_headers_are_read_fresh_for_each_request():
+    route = respx.get(f"{_BASE}/history").mock(return_value=httpx.Response(200, json={"exams": []}))
+    identity = dict(_IDENTITY)
+    client = _client_with_identity()
+    client.extra_headers = lambda: dict(identity)
+
+    client.fetch_history()
+    identity["X-POSTHOG-DISTINCT-ID"] = "someone-else"
+    client.fetch_history()
+
+    assert route.calls.last.request.headers["X-POSTHOG-DISTINCT-ID"] == "someone-else"
+
+
+@respx.mock
+def test_generate_soap_note_sends_the_recording_length_and_keeps_the_exam_id():
+    route = respx.post(f"{_BASE}/soap").mock(return_value=httpx.Response(200, json=_NOTE_JSON))
+
+    note = _client_with_identity().generate_soap_note(b"RIFF", audio_duration_ms=93500)
+
+    assert route.calls.last.request.headers["X-Audio-Duration-Ms"] == "93500"
+    assert note.exam_id == "exam-9"
+
+
+@respx.mock
+def test_generate_soap_note_omits_the_recording_length_when_unknown():
+    route = respx.post(f"{_BASE}/soap").mock(return_value=httpx.Response(200, json=_NOTE_JSON))
+
+    ApiClient(endpoint=f"{_BASE}/soap", timeout_seconds=30).generate_soap_note(b"RIFF")
+
+    assert "X-Audio-Duration-Ms" not in route.calls.last.request.headers
+
+
+@respx.mock
+def test_regenerate_soap_note_names_the_exam_when_given():
+    route = respx.post(f"{_BASE}/soap/regenerate").mock(
+        return_value=httpx.Response(200, json=_NOTE_JSON)
+    )
+
+    ApiClient(endpoint=f"{_BASE}/soap", timeout_seconds=30).regenerate_soap_note(
+        "t", exam_id="exam-9"
+    )
+
+    assert json.loads(route.calls.last.request.content) == {"transcript": "t", "exam_id": "exam-9"}
