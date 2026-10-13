@@ -28,6 +28,11 @@ class AvimarkInjector:
         # appeared. focus_and_inject pastes into this exact window so that,
         # with several patient charts open, the note lands in the right one.
         self.target_hwnd = None
+        # How the most recent inject landed, for analytics: "per_box",
+        # "single_block", "single_block_fallback" (calibration couldn't be
+        # resolved), or "refused_no_window" / "refused_ambiguous" /
+        # "refused_not_foreground". None before the first inject.
+        self.last_result = None
 
     def is_avimark_foreground(self) -> bool:
         hwnd = win32gui.GetForegroundWindow()
@@ -46,10 +51,12 @@ class AvimarkInjector:
     def inject(self, text: str) -> bool:
         if not self.is_avimark_foreground():
             logger.warning("injection skipped: AVImark is not the foreground window")
+            self.last_result = "refused_not_foreground"
             return False
         self.copy_to_clipboard(text)
         self._send_ctrl_v()
         logger.info("SOAP note injected into AVImark")
+        self.last_result = "single_block"
         return True
 
     def find_avimark_windows(self):
@@ -147,6 +154,7 @@ class AvimarkInjector:
             matches = self.find_avimark_windows()
             if not matches:
                 logger.warning("injection skipped: no AVImark window found")
+                self.last_result = "refused_no_window"
                 return None
             if len(matches) > 1:
                 logger.warning(
@@ -156,6 +164,7 @@ class AvimarkInjector:
                     len(matches),
                 )
                 self.copy_to_clipboard(fallback_text)
+                self.last_result = "refused_ambiguous"
                 return None
             hwnd = matches[0]
         return hwnd
@@ -192,6 +201,7 @@ class AvimarkInjector:
             logger.warning(
                 "injection skipped: could not bring AVImark to the foreground"
             )
+            self.last_result = "refused_not_foreground"
             return None
         return hwnd
 
@@ -212,6 +222,7 @@ class AvimarkInjector:
         self.copy_to_clipboard(text)
         self._send_ctrl_v()
         logger.info("SOAP note injected into AVImark")
+        self.last_result = "single_block"
         return True
 
     # --- calibrated per-box injection ---------------------------------------
@@ -383,6 +394,7 @@ class AvimarkInjector:
             return False
         self._raise_window(hwnd)
         if self._paste_calibrated(hwnd, section_fields, calibration):
+            self.last_result = "per_box"
             return True
         logger.info("calibrated paste unavailable; falling back to single-block paste")
         if not self.is_avimark_foreground():
@@ -391,9 +403,11 @@ class AvimarkInjector:
                 "single-block fallback; note copied to clipboard for manual paste"
             )
             self.copy_to_clipboard(fallback_text)
+            self.last_result = "refused_not_foreground"
             return False
         self.copy_to_clipboard(fallback_text)
         self._send_ctrl_v()
+        self.last_result = "single_block_fallback"
         return True
 
     def _send_ctrl_v(self):

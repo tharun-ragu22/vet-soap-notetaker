@@ -306,3 +306,51 @@ def test_focus_and_inject_falls_back_when_remembered_window_closed(mocker):
 
     assert result is True
     mock_win32gui.SetForegroundWindow.assert_called_once_with(333)
+
+
+# --- last_result: how the most recent inject landed (for analytics) ----------
+
+
+def _one_window(mocker, windows=(111,), foreground=True):
+    win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    win32gui.IsIconic.return_value = False
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32con")
+    mocker.patch.object(AvimarkInjector, "_remembered_target", return_value=None)
+    mocker.patch.object(AvimarkInjector, "find_avimark_windows", return_value=list(windows))
+    mocker.patch.object(AvimarkInjector, "is_avimark_foreground", return_value=foreground)
+    mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
+    mocker.patch.object(AvimarkInjector, "_send_ctrl_v")
+
+
+def test_last_result_is_single_block_after_a_focus_and_inject(mocker):
+    _one_window(mocker)
+    injector = AvimarkInjector()
+    assert injector.focus_and_inject("note") is True
+    assert injector.last_result == "single_block"
+
+
+def test_last_result_names_why_focus_and_inject_refused(mocker):
+    injector = AvimarkInjector()
+
+    _one_window(mocker, windows=())
+    injector.focus_and_inject("note")
+    assert injector.last_result == "refused_no_window"
+
+    _one_window(mocker, windows=(111, 222))
+    injector.focus_and_inject("note")
+    assert injector.last_result == "refused_ambiguous"
+
+    _one_window(mocker, foreground=False)
+    injector.focus_and_inject("note")
+    assert injector.last_result == "refused_not_foreground"
+
+
+def test_last_result_for_the_hotkey_inject(mocker):
+    _one_window(mocker, foreground=True)
+    injector = AvimarkInjector()
+    injector.inject("note")
+    assert injector.last_result == "single_block"
+
+    _one_window(mocker, foreground=False)
+    injector.inject("note")
+    assert injector.last_result == "refused_not_foreground"

@@ -811,3 +811,12 @@ def test_regenerate_soap_note_names_the_exam_when_given():
     )
 
     assert json.loads(route.calls.last.request.content) == {"transcript": "t", "exam_id": "exam-9"}
+
+
+@respx.mock
+def test_generate_soap_note_raises_backend_unreachable_when_there_is_no_answer():
+    # Lets the pipeline (and its analytics) tell "backend down" from "provider failed".
+    respx.post(f"{_BASE}/soap").mock(side_effect=httpx.ConnectError("refused"))
+
+    with pytest.raises(BackendUnreachableError):
+        ApiClient(endpoint=f"{_BASE}/soap", timeout_seconds=30).generate_soap_note(b"RIFF")

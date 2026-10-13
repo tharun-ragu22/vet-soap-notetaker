@@ -144,7 +144,7 @@ def test_tray_icon_turns_yellow_while_backend_call_is_in_flight():
 
     observed_color_mid_call = {}
 
-    def fake_generate_soap_note(_audio_bytes):
+    def fake_generate_soap_note(_audio_bytes, audio_duration_ms=None):
         icon = tray_app.icon.icon
         observed_color_mid_call["value"] = icon.getpixel(
             (int(icon.width * STATUS_SAMPLE[0]), int(icon.height * STATUS_SAMPLE[1]))
@@ -991,3 +991,140 @@ def test_history_regenerate_tells_the_backend_which_exam(mocker):
     mock_history_window.call_args.kwargs["on_regenerate"]("corrected", exam_id="e1")
 
     regenerate.assert_called_once_with("corrected", exam_id="e1")
+
+
+# --- Analytics: injects, flyouts, history ----------------------------------
+
+
+def _tracked_app(mocker, config=None):
+    tracker = RecordingAnalytics()
+    tray_app, _, tk_root = build_app(
+        config=config or _config(), tk_root=MagicMock(), analytics=tracker
+    )
+    return tray_app, tracker
+
+
+def _inject_returns(mocker, tray_app, method, injected, result):
+    injector = tray_app.pipeline.injector
+
+    def fake(*args, **kwargs):
+        injector.last_result = result
+        return injected
+
+    return mocker.patch.object(injector, method, side_effect=fake)
+
+
+def test_a_remote_inject_reports_the_request_and_how_it_landed(mocker):
+    mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, tracker = _tracked_app(mocker)
+    _inject_returns(mocker, tray_app, "focus_and_inject", True, "single_block")
+
+    tray_app.injection_poller.on_injection(_injection_request())
+
+    assert tracker.only("injection_completed")["properties"] == {
+        "source": "remote",
+        "exam_id": "exam-1",
+        "request_id": "req-1",
+        "result": "single_block",
+        "calibrated": False,
+        "fallback_flyout_shown": False,
+    }
+
+
+def test_a_refused_remote_inject_reports_the_fallback_flyout(mocker):
+    mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, tracker = _tracked_app(mocker)
+    _inject_returns(mocker, tray_app, "focus_and_inject", False, "refused_ambiguous")
+
+    tray_app.injection_poller.on_injection(_injection_request())
+
+    props = tracker.only("injection_completed")["properties"]
+    assert props["result"] == "refused_ambiguous"
+    assert props["fallback_flyout_shown"] is True
+    assert tracker.only("flyout_shown")["properties"] == {"kind": "note", "reason": "inject_refused"}
+
+
+def test_a_calibrated_remote_inject_is_reported_as_calibrated(mocker):
+    mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, tracker = _tracked_app(mocker, _config(avimark_calibration=_calibration_dict()))
+    _inject_returns(mocker, tray_app, "focus_and_inject_fields_calibrated", True, "per_box")
+
+    tray_app.injection_poller.on_injection(_injection_request())
+
+    props = tracker.only("injection_completed")["properties"]
+    assert props["calibrated"] is True
+    assert props["result"] == "per_box"
+
+
+def test_history_open_inject_and_copy_are_reported(mocker, tmp_path):
+    mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
+    mocker.patch("vet_soap_notetaker.main.pyperclip")
+    tray_app, tracker = _tracked_app(mocker)
+    _inject_returns(mocker, tray_app, "focus_and_inject", True, "single_block")
+
+    tray_app.show_history()
+    kwargs = mock_history_window.call_args.kwargs
+    exam = Exam(id="e1", created_at="t", subjective="s", objective="o", assessment="a", plan="p")
+    kwargs["on_copy_and_inject"](exam)
+    kwargs["on_copy_to_clipboard"]("SUBJECTIVE: s")
+
+    assert tracker.only("history_opened")["properties"] == {"opened_from": "tray"}
+    props = tracker.only("injection_completed")["properties"]
+    assert (props["source"], props["exam_id"]) == ("history", "e1")
+    assert tracker.only("note_copied")["properties"] == {"source": "history"}
+
+
+def test_flyout_buttons_are_reported(mocker):
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    mocker.patch("vet_soap_notetaker.main.HistoryWindow")
+    mocker.patch("vet_soap_notetaker.main.pyperclip")
+    tray_app, tracker = _tracked_app(mocker)
+    _inject_returns(mocker, tray_app, "focus_and_inject", True, "single_block")
+
+    for _ in range(3):
+        tray_app.offline_queue.on_note_ready("SUBJECTIVE: note")
+    first, second, third = (c.kwargs for c in mock_flyout_cls.call_args_list)
+    first["on_copy_and_inject"]("SUBJECTIVE: note")
+    second["on_copy_to_clipboard"]("SUBJECTIVE: note")
+    third["on_open_history"]()
+
+    assert [e["properties"] for e in tracker.named("flyout_shown")] == [
+        {"kind": "note", "reason": "offline_note"}
+    ] * 3
+    assert [e["properties"]["action"] for e in tracker.named("flyout_action")] == [
+        "copy_inject",
+        "copy",
+        "open_history",
+    ]
+    assert tracker.only("injection_completed")["properties"]["source"] == "flyout"
+    assert tracker.only("history_opened")["properties"] == {"opened_from": "flyout"}
+
+
+def test_the_tray_last_note_flyout_is_reported(mocker):
+    mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, tracker = _tracked_app(mocker)
+    tray_app.pipeline.last_soap_text = "SUBJECTIVE: last"
+
+    tray_app.open_last_note()
+
+    assert tracker.only("flyout_shown")["properties"] == {"kind": "note", "reason": "tray_last_note"}
+
+
+def test_message_flyouts_are_reported_by_kind_only(mocker):
+    mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, tracker = _tracked_app(mocker)
+
+    tray_app.pipeline.on_error(ui_strings.NOTE_PENDING_MESSAGE)
+    tray_app.pipeline.on_error("SOAP Generation Failed: backend returned 502: ZZ_PATIENT_SENTINEL")
+    tray_app.offline_queue.on_gave_up("exam-1")
+    tray_app.pipeline.state = PipelineState.PROCESSING
+    tray_app.on_hotkey_triggered()
+
+    kinds = [e["properties"] for e in tracker.named("flyout_shown")]
+    assert kinds == [
+        {"kind": "message", "reason": "note_pending"},
+        {"kind": "message", "reason": "error"},
+        {"kind": "message", "reason": "gave_up"},
+        {"kind": "message", "reason": "busy"},
+    ]
+    assert "ZZ_PATIENT_SENTINEL" not in repr(tracker.events)

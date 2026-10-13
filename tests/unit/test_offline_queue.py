@@ -322,3 +322,71 @@ def test_a_note_entry_written_before_attempt_counting_still_loads(tmp_path):
 
     api_client.complete_note.assert_called_once_with("exam-old")
     on_note_ready.assert_called_once()
+
+
+# --- Analytics -----------------------------------------------------------------
+
+from datetime import datetime  # noqa: E402
+
+from tests.fakes import RecordingAnalytics  # noqa: E402
+
+
+def _tracked_queue(tmp_path, api_client, now):
+    tracker = RecordingAnalytics()
+    queue = OfflineQueue(
+        api_client=api_client,
+        on_note_ready=MagicMock(),
+        queue_dir=tmp_path / "queue",
+        analytics=tracker,
+        clock=lambda: now,
+    )
+    return queue, tracker
+
+
+def test_a_recovered_recording_reports_how_long_it_waited_in_the_queue(tmp_path):
+    api_client = MagicMock()
+    api_client.generate_soap_note.return_value = SoapNote("s", "o", "a", "p", exam_id="exam-1")
+    queue, tracker = _tracked_queue(tmp_path, api_client, datetime(2026, 10, 13, 9, 5, 0))
+    (tmp_path / "queue").mkdir()
+    (tmp_path / "queue" / "queued_20261013_090000_000000.wav").write_bytes(b"wav")
+
+    queue.process_once()
+
+    assert tracker.only("note_ready")["properties"] == {
+        "exam_id": "exam-1",
+        "wait_ms": 300000,
+        "via_offline_queue": True,
+        "queued_as": "audio",
+    }
+
+
+def test_a_finished_pending_note_reports_its_wait(tmp_path):
+    api_client = MagicMock()
+    api_client.complete_note.return_value = SoapNote("s", "o", "a", "p", exam_id="exam-2")
+    queue, tracker = _tracked_queue(tmp_path, api_client, datetime(2026, 10, 13, 9, 0, 30))
+    (tmp_path / "queue").mkdir()
+    (tmp_path / "queue" / "queued_20261013_090000_000000.json").write_text(
+        '{"exam_id": "exam-2", "attempts": 0}'
+    )
+
+    queue.process_once()
+
+    props = tracker.only("note_ready")["properties"]
+    assert props["wait_ms"] == 30000
+    assert props["queued_as"] == "pending_note"
+    assert props["exam_id"] == "exam-2"
+
+
+def test_giving_up_on_a_pending_note_is_reported(tmp_path):
+    api_client = MagicMock()
+    api_client.complete_note.side_effect = ApiClientError("backend returned 502")
+    queue, tracker = _tracked_queue(tmp_path, api_client, datetime(2026, 10, 13, 9, 0, 0))
+    queue.enqueue_note_completion("exam-3")
+
+    for _ in range(MAX_NOTE_ATTEMPTS):
+        queue.process_once()
+
+    assert tracker.only("pending_note_gave_up")["properties"] == {
+        "exam_id": "exam-3",
+        "attempts": MAX_NOTE_ATTEMPTS,
+    }

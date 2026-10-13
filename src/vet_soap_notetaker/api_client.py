@@ -154,7 +154,7 @@ class ApiClient:
             )
         except httpx.RequestError as exc:
             logger.error("backend request failed: %s", exc)
-            raise ApiClientError(f"request failed: {exc}") from exc
+            raise BackendUnreachableError(f"request failed: {exc}") from exc
 
         if response.status_code == 202:
             exam_id = self._pending_exam_id(response)

@@ -7,7 +7,7 @@ from pathlib import Path
 import pyperclip
 
 from vet_soap_notetaker import autostart, dpi
-from vet_soap_notetaker.analytics import DesktopAnalytics
+from vet_soap_notetaker.analytics import DesktopAnalytics, NullAnalytics
 from vet_soap_notetaker.api_client import ApiClient, SoapNote
 from vet_soap_notetaker.audio_recorder import AudioRecorder
 from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, BoxCalibration
@@ -59,7 +59,7 @@ def _section_fields(note):
     return [(section, getattr(note, section)) for section in SOAP_SECTIONS]
 
 
-def inject_note(injector, calibration, note, on_fallback=None):
+def inject_note(injector, calibration, note, on_fallback=None, analytics=None, context=None):
     """Inject a note into AVImark: per-box when calibrated, else single-block.
 
     Shared by the mobile Inject path, the History window's Inject, and the
@@ -68,7 +68,8 @@ def inject_note(injector, calibration, note, on_fallback=None):
     or an Exam). Per-box degrades to a single-block paste when the calibration
     can't be resolved; if no AVImark chart is safely targetable the inject
     refuses and ``on_fallback`` (the Safety Flyout) is offered the note instead.
-    Returns whether the note landed in AVImark.
+    Returns whether the note landed in AVImark. Reports how it landed as an
+    ``injection_completed`` event, with ``context`` (source, exam id, ...).
     """
     soap_text = format_soap_text(note)
     if calibration is not None:
@@ -83,6 +84,15 @@ def inject_note(injector, calibration, note, on_fallback=None):
         injected = injector.focus_and_inject(soap_text)
     if not injected and on_fallback is not None:
         on_fallback(soap_text)
+    (analytics or NullAnalytics()).capture(
+        "injection_completed",
+        {
+            **(context or {}),
+            "result": injector.last_result,
+            "calibrated": calibration is not None,
+            "fallback_flyout_shown": not injected and on_fallback is not None,
+        },
+    )
     return injected
 
 
@@ -178,21 +188,34 @@ def keep_window_foreground(
     tk_root.after(interval_ms, tick)
 
 
-def show_flyout(tk_root, injector, soap_text, on_open_history=None):
+def show_flyout(tk_root, injector, soap_text, on_open_history=None, analytics=None):
     # Seed the target with the chart in front right now (before the flyout takes
     # focus); follow_active_avimark then keeps it current as the vet navigates.
     injector.remember_active_window()
+    analytics = analytics or NullAnalytics()
 
     def on_copy_and_inject(text):
         # The flyout is a clicked window, so AVImark isn't foreground; actively
         # raise it and paste rather than using the strict inject() guard (which
         # is for the automatic post-hotkey path where AVImark is still focused).
         # ``text`` is the note as currently shown, so an edit made here isn't lost.
-        injector.focus_and_inject(text)
+        injected = injector.focus_and_inject(text)
+        analytics.capture("flyout_action", {"action": "copy_inject"})
+        analytics.capture(
+            "injection_completed",
+            {
+                "source": "flyout",
+                "result": injector.last_result,
+                "calibrated": False,
+                "fallback_flyout_shown": False,
+                "injected": injected,
+            },
+        )
         flyout.destroy()
 
     def on_copy_to_clipboard(text):
         pyperclip.copy(text)
+        analytics.capture("flyout_action", {"action": "copy"})
         flyout.destroy()
 
     open_history = None
@@ -200,6 +223,7 @@ def show_flyout(tk_root, injector, soap_text, on_open_history=None):
         # Close the transient popup as we hand the vet over to the full history
         # window (where they can read the transcript and older notes).
         def open_history():
+            analytics.capture("flyout_action", {"action": "open_history"})
             flyout.destroy()
             on_open_history()
 
@@ -214,7 +238,9 @@ def show_flyout(tk_root, injector, soap_text, on_open_history=None):
     return flyout
 
 
-def show_history(tk_root, injector, history_store, on_regenerate=None, on_inject=None):
+def show_history(
+    tk_root, injector, history_store, on_regenerate=None, on_inject=None, on_copy=None
+):
     injector.remember_active_window()
     # Inject the (already-persisted) current note; the window hands over the
     # structured entry so build_app's callback can place it per-box via the
@@ -224,13 +250,20 @@ def show_history(tk_root, injector, history_store, on_regenerate=None, on_inject
         master=tk_root,
         load_entries=history_store.list_entries,
         on_copy_and_inject=on_inject,
-        on_copy_to_clipboard=lambda soap_text: pyperclip.copy(soap_text),
+        on_copy_to_clipboard=on_copy or (lambda soap_text: pyperclip.copy(soap_text)),
         on_save_edit=lambda entry_id, **fields: history_store.update(entry_id, **fields),
         on_delete=lambda entry_id: history_store.delete(entry_id),
         on_regenerate=on_regenerate,
     )
     follow_active_avimark(tk_root, injector, window)
     return window
+
+
+def _message_reason(message):
+    # Which kind of pipeline message this is, for analytics (never the text).
+    if message == ui_strings.NOTE_PENDING_MESSAGE:
+        return "note_pending"
+    return "error"
 
 
 def build_app(config=None, tk_root=None, analytics=None):
@@ -266,7 +299,12 @@ def build_app(config=None, tk_root=None, analytics=None):
         # note so the window can repopulate its four SOAP fields.
         return api_client.regenerate_soap_note(transcript, exam_id=exam_id)
 
-    def open_history():
+    def copy_from_history(soap_text):
+        pyperclip.copy(soap_text)
+        analytics.capture("note_copied", {"source": "history"})
+
+    def open_history(opened_from="tray"):
+        analytics.capture("history_opened", {"opened_from": opened_from})
         show_history(
             tk_root,
             injector,
@@ -279,23 +317,31 @@ def build_app(config=None, tk_root=None, analytics=None):
                 injector,
                 current_calibration["value"],
                 note,
-                on_fallback=show_note_flyout,
+                on_fallback=lambda text: show_note_flyout(text, reason="inject_refused"),
+                analytics=analytics,
+                context={"source": "history", "exam_id": getattr(note, "id", None)},
             ),
+            on_copy=copy_from_history,
         )
 
     # A note flyout also offers an "Open History" button. Errors and status
     # notices don't use show_flyout at all -- they go through show_message.
-    def show_note_flyout(soap_text):
+    # ``reason`` says why the note popped up (for analytics only).
+    def show_note_flyout(soap_text, reason):
+        analytics.capture("flyout_shown", {"kind": "note", "reason": reason})
         show_flyout(
             tk_root,
             injector,
             soap_text,
-            on_open_history=open_history,
+            on_open_history=lambda: open_history(opened_from="flyout"),
+            analytics=analytics,
         )
 
-    def show_message(text):
+    def show_message(text, reason):
         # A status notice, not a note: message-only, so it has no Copy & Inject
-        # and its text can never be pasted into a patient's chart.
+        # and its text can never be pasted into a patient's chart. Only the
+        # reason is reported, never the text (errors carry backend bodies).
+        analytics.capture("flyout_shown", {"kind": "message", "reason": reason})
         return FlyoutWindow(
             master=tk_root,
             soap_text=text,
@@ -307,11 +353,13 @@ def build_app(config=None, tk_root=None, analytics=None):
     offline_queue = OfflineQueue(
         api_client=api_client,
         on_note_ready=lambda soap_text: run_on_main_thread(
-            tk_root, lambda: show_note_flyout(soap_text)
+            tk_root, lambda: show_note_flyout(soap_text, reason="offline_note")
         ),
         on_gave_up=lambda exam_id: run_on_main_thread(
-            tk_root, lambda: show_message(ui_strings.NOTE_PENDING_GAVE_UP_MESSAGE)
+            tk_root,
+            lambda: show_message(ui_strings.NOTE_PENDING_GAVE_UP_MESSAGE, reason="gave_up"),
         ),
+        analytics=analytics,
     )
 
     def handle_remote_injection(request):
@@ -335,7 +383,13 @@ def build_app(config=None, tk_root=None, analytics=None):
             injector,
             current_calibration["value"],
             note,
-            on_fallback=show_note_flyout,
+            on_fallback=lambda text: show_note_flyout(text, reason="inject_refused"),
+            analytics=analytics,
+            context={
+                "source": "remote",
+                "exam_id": request.get("exam_id"),
+                "request_id": request.get("id"),
+            },
         )
 
     injection_poller = InjectionPoller(
@@ -354,26 +408,31 @@ def build_app(config=None, tk_root=None, analytics=None):
         window = busy_notice["window"]
         if window is not None and window.winfo_exists():
             return
-        busy_notice["window"] = show_message(ui_strings.STILL_PROCESSING_PREVIOUS_NOTE)
+        busy_notice["window"] = show_message(
+            ui_strings.STILL_PROCESSING_PREVIOUS_NOTE, reason="busy"
+        )
 
     pipeline = Pipeline(
         recorder=recorder,
         api_client=api_client,
         injector=injector,
         on_flyout_needed=lambda soap_text: run_on_main_thread(
-            tk_root, lambda: show_note_flyout(soap_text)
+            tk_root, lambda: show_note_flyout(soap_text, reason="inject_refused")
         ),
         # Errors and status messages are not notes: message-only, so they can
         # never be pasted into a chart (and need no AVImark window tracking).
-        on_error=lambda message: run_on_main_thread(tk_root, lambda: show_message(message)),
+        on_error=lambda message: run_on_main_thread(
+            tk_root, lambda: show_message(message, reason=_message_reason(message))
+        ),
         offline_queue=offline_queue,
         on_busy=lambda: run_on_main_thread(tk_root, show_busy_notice),
+        analytics=analytics,
     )
 
     tray_app = TrayApp(
         pipeline=pipeline,
         on_show_note=lambda soap_text: run_on_main_thread(
-            tk_root, lambda: show_note_flyout(soap_text)
+            tk_root, lambda: show_note_flyout(soap_text, reason="tray_last_note")
         ),
         on_show_history=lambda: run_on_main_thread(tk_root, open_history),
     )

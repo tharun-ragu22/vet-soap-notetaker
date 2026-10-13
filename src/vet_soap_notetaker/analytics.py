@@ -32,6 +32,13 @@ def _posthog_client(key: str, host: str):
     return Posthog(key, host=host, capture_exception_code_variables=False)
 
 
+class NullAnalytics:
+    """Analytics switched off -- the default for components built without one."""
+
+    def capture(self, event: str, properties: dict | None = None) -> None:
+        pass
+
+
 class DesktopAnalytics:
     """Sends events to PostHog as the configured user, stamped with the
     properties every event shares. The client batches on its own background

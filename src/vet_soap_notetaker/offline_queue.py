@@ -4,6 +4,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from vet_soap_notetaker.analytics import NullAnalytics
 from vet_soap_notetaker.api_client import (
     ApiClientError,
     BackendUnreachableError,
@@ -25,6 +26,9 @@ def get_queue_dir() -> Path:
 # pending in History for a manual Regenerate. An unreachable backend doesn't
 # count: like queued audio, that keeps retrying until it's back.
 MAX_NOTE_ATTEMPTS = 10
+
+# Queue entries are named queued_<timestamp>, so they sort in recording order.
+_STEM_FORMAT = "%Y%m%d_%H%M%S_%f"
 
 # Outcome of processing one queue entry.
 _DONE = "done"  # note ready, entry removed
@@ -56,8 +60,12 @@ class OfflineQueue:
         queue_dir=None,
         poll_interval_seconds=60,
         on_gave_up=None,
+        analytics=None,
+        clock=datetime.now,
     ):
         self.api_client = api_client
+        self.analytics = analytics or NullAnalytics()
+        self._clock = clock
         self.on_note_ready = on_note_ready
         # Called with the exam id when a pending note hits MAX_NOTE_ATTEMPTS.
         self.on_gave_up = on_gave_up or (lambda exam_id: None)
@@ -70,7 +78,25 @@ class OfflineQueue:
 
     @staticmethod
     def _new_stem():
-        return f"queued_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        return f"queued_{datetime.now().strftime(_STEM_FORMAT)}"
+
+    def _report_note_ready(self, path, soap_note, queued_as):
+        # How long the vet waited for this note, measured from when it was
+        # queued (the stem's timestamp) -- for analytics.
+        try:
+            queued_at = datetime.strptime(path.stem, f"queued_{_STEM_FORMAT}")
+            wait_ms = int((self._clock() - queued_at).total_seconds() * 1000)
+        except ValueError:
+            wait_ms = None
+        self.analytics.capture(
+            "note_ready",
+            {
+                "exam_id": soap_note.exam_id,
+                "wait_ms": wait_ms,
+                "via_offline_queue": True,
+                "queued_as": queued_as,
+            },
+        )
 
     def enqueue(self, audio_bytes: bytes) -> Path:
         self.queue_dir.mkdir(parents=True, exist_ok=True)
@@ -145,6 +171,7 @@ class OfflineQueue:
             return _STOP
         path.unlink()
         logger.info("queued recording %s processed successfully", path)
+        self._report_note_ready(path, soap_note, "audio")
         # The backend persisted this exam when generate_soap_note() succeeded,
         # so it's already in the shared history the window reads -- no local save.
         self.on_note_ready(format_soap_text(soap_note))
@@ -177,6 +204,9 @@ class OfflineQueue:
                     exam_id, attempts, exc,
                 )
                 path.unlink()
+                self.analytics.capture(
+                    "pending_note_gave_up", {"exam_id": exam_id, "attempts": attempts}
+                )
                 self.on_gave_up(exam_id)
                 # Nothing wrong with the connection, so move on to the next entry.
                 return _DROPPED
@@ -188,6 +218,7 @@ class OfflineQueue:
             return _STOP
         path.unlink()
         logger.info("pending note for exam %s completed", exam_id)
+        self._report_note_ready(path, soap_note, "pending_note")
         self.on_note_ready(format_soap_text(soap_note))
         return _DONE
 

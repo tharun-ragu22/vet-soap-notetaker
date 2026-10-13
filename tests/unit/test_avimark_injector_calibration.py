@@ -313,3 +313,35 @@ def test_focus_and_inject_fields_calibrated_fallback_refuses_when_not_foreground
     ctrl_v.assert_not_called()
     # note is left on the clipboard so the vet can paste it manually
     copy.assert_called_once_with("the blob")
+
+
+# --- last_result for the calibrated path -------------------------------------
+
+
+def _calibrated(mocker, pasted, foreground=True, target=111):
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    mocker.patch.object(AvimarkInjector, "_remembered_target", return_value=target)
+    mocker.patch.object(AvimarkInjector, "find_avimark_windows", return_value=[])
+    mocker.patch.object(AvimarkInjector, "_raise_window")
+    mocker.patch.object(AvimarkInjector, "_paste_calibrated", return_value=pasted)
+    mocker.patch.object(AvimarkInjector, "is_avimark_foreground", return_value=foreground)
+    mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
+    mocker.patch.object(AvimarkInjector, "_send_ctrl_v")
+
+
+@pytest.mark.parametrize(
+    "pasted, foreground, target, expected",
+    [
+        (True, True, 111, "per_box"),
+        (False, True, 111, "single_block_fallback"),
+        (False, False, 111, "refused_not_foreground"),
+        (True, True, None, "refused_no_window"),
+    ],
+)
+def test_last_result_for_the_calibrated_inject(mocker, pasted, foreground, target, expected):
+    _calibrated(mocker, pasted, foreground, target)
+    injector = AvimarkInjector()
+
+    injector.focus_and_inject_fields_calibrated(_fields(), _full_calibration(), "note")
+
+    assert injector.last_result == expected
