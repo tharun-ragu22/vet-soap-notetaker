@@ -195,3 +195,17 @@ def test_quit_stops_attached_injection_poller():
     tray_app.quit()
 
     injection_poller.stop.assert_called_once()
+
+
+def test_quit_reports_and_flushes_analytics():
+    from tests.fakes import RecordingAnalytics
+
+    tray_app, _pipeline = make_tray_app(state=PipelineState.IDLE)
+    tray_app.icon.stop = MagicMock()
+    tracker = RecordingAnalytics()
+    tray_app.attach_analytics(tracker)
+
+    tray_app.quit()
+
+    assert tracker.named("app_quit")
+    assert tracker.shut_down

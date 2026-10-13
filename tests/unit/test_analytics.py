@@ -25,6 +25,11 @@ class FakeClient:
             raise RuntimeError("network down")
         self.shut_down = True
 
+    def capture_exception(self, exc, **kwargs):
+        if self.fail:
+            raise RuntimeError("network down")
+        self.captured.append(("$exception", {"exc": exc, **kwargs}))
+
 
 class Factory:
     def __init__(self, fail=False):
@@ -161,3 +166,98 @@ def test_the_default_client_is_posthog_without_exception_or_variable_capture(mon
     assert built["key"] == "phc_test"
     assert built["host"] == "https://eu.i.posthog.com"
     assert not built.get("capture_exception_code_variables")
+    # The SDK's own autocapture would send crashes with no user id; we install
+    # our own hooks instead (install_crash_capture).
+    assert not built.get("enable_exception_autocapture")
+    assert built["before_send"] is analytics.scrub_exception_messages
+
+
+# --- Crash capture -------------------------------------------------------------
+
+import sys  # noqa: E402
+import threading  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
+
+from vet_soap_notetaker.analytics import scrub_exception_messages  # noqa: E402
+
+
+def _exception_event(value="backend returned 502: ZZ_PATIENT_SENTINEL"):
+    return {
+        "event": "$exception",
+        "properties": {
+            "$exception_list": [
+                {
+                    "type": "ApiClientError",
+                    "value": value,
+                    "stacktrace": {
+                        "frames": [
+                            {"function": "inject_note", "lineno": 7, "vars": {"note": value}}
+                        ]
+                    },
+                }
+            ],
+            "$exception_message": value,
+            "app": "desktop",
+        },
+    }
+
+
+def test_scrubbing_keeps_the_type_and_stack_but_drops_messages_and_variables():
+    event = scrub_exception_messages(_exception_event())
+
+    entry = event["properties"]["$exception_list"][0]
+    assert entry["type"] == "ApiClientError"
+    assert entry["stacktrace"]["frames"][0]["function"] == "inject_note"
+    assert "ZZ_PATIENT_SENTINEL" not in repr(event)
+
+
+def test_scrubbing_leaves_ordinary_events_alone():
+    event = {"event": "note_ready", "properties": {"wait_ms": 5}}
+    assert scrub_exception_messages(event) == {"event": "note_ready", "properties": {"wait_ms": 5}}
+
+
+def test_capture_exception_reports_as_the_user_with_shared_properties(monkeypatch):
+    monkeypatch.setattr(analytics, "_app_version", lambda: "1.2.3")
+    factory = Factory()
+    tracker = DesktopAnalytics(make_config(), client_factory=factory)
+    error = ValueError("boom")
+
+    tracker.capture_exception(error)
+
+    event, kwargs = factory.clients[0].captured[0]
+    assert event == "$exception"
+    assert kwargs["exc"] is error
+    assert kwargs["distinct_id"] == "test-tharun"
+    assert kwargs["properties"]["app"] == "desktop"
+
+
+def test_capture_exception_is_a_no_op_when_off_and_never_raises():
+    DesktopAnalytics(make_config(analytics_key=""), client_factory=Factory()).capture_exception(
+        ValueError("x")
+    )
+    DesktopAnalytics(make_config(), client_factory=Factory(fail=True)).capture_exception(
+        ValueError("x")
+    )
+
+
+def test_install_crash_capture_reports_uncaught_errors_then_runs_the_previous_hooks(monkeypatch):
+    previous = []
+    monkeypatch.setattr(sys, "excepthook", lambda *exc_info: previous.append("sys"))
+    monkeypatch.setattr(threading, "excepthook", lambda args: previous.append("thread"))
+    tk_root = MagicMock()
+    original_tk_hook = tk_root.report_callback_exception
+    tracker = DesktopAnalytics(make_config(), client_factory=Factory())
+    captured = []
+    monkeypatch.setattr(tracker, "capture_exception", captured.append)
+
+    tracker.install_crash_capture(tk_root)
+    main_error, thread_error, tk_error = ValueError("a"), KeyError("b"), TypeError("c")
+    sys.excepthook(ValueError, main_error, None)
+    threading.excepthook(
+        MagicMock(exc_type=KeyError, exc_value=thread_error, exc_traceback=None)
+    )
+    tk_root.report_callback_exception(TypeError, tk_error, None)
+
+    assert captured == [main_error, thread_error, tk_error]
+    assert previous == ["sys", "thread"]
+    original_tk_hook.assert_called_once_with(TypeError, tk_error, None)

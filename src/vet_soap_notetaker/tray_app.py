@@ -40,6 +40,7 @@ class TrayApp:
         self.injection_poller = None
         self.backend_supervisor = None
         self.tk_root = None
+        self.analytics = None
         self.on_open_settings = on_open_settings or (lambda: None)
         self.on_show_note = on_show_note or (lambda soap_text: None)
         self.on_show_history = on_show_history or (lambda: None)
@@ -90,6 +91,9 @@ class TrayApp:
     def attach_tk_root(self, tk_root):
         self.tk_root = tk_root
 
+    def attach_analytics(self, analytics):
+        self.analytics = analytics
+
     def update_icon_for_state(self):
         self.icon.icon = build_icon_image(STATE_COLORS[self.pipeline.state])
         # pystray's win32 backend bakes each menu item's enabled/text state into
@@ -137,6 +141,10 @@ class TrayApp:
         # first, then bring the backend process down so we don't leave an orphan.
         if self.backend_supervisor is not None:
             self.backend_supervisor.stop()
+        # Send whatever analytics are still batched before the process exits.
+        if self.analytics is not None:
+            self.analytics.capture("app_quit")
+            self.analytics.shutdown()
         self.icon.stop()
         if self.tk_root is not None:
             self.tk_root.after(0, self.tk_root.quit)

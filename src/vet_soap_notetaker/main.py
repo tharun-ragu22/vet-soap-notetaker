@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 import tkinter as tk
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -451,7 +452,7 @@ def build_app(config=None, tk_root=None, analytics=None):
     )
     tray_app.attach_backend_supervisor(backend_supervisor)
     tray_app.attach_tk_root(tk_root)
-    tray_app.analytics = analytics
+    tray_app.attach_analytics(analytics)
 
     def dispatch_hotkey_trigger():
         # tray_app.on_hotkey_triggered() runs the full pipeline synchronously,
@@ -541,16 +542,35 @@ def build_app(config=None, tk_root=None, analytics=None):
         keep_window_foreground(tk_root, window)
 
         listener = {"value": None}
+        # For analytics: how the calibration went (counts and timing only).
+        progress = {
+            "started_at": time.monotonic(),
+            "boxes_captured": 0,
+            "invalid_restarts": 0,
+            "prompt_clicks": 0,
+        }
+        analytics.capture(
+            "calibration_started",
+            {"is_recalibration": current_calibration["value"] is not None},
+        )
+
+        def duration_ms():
+            return int((time.monotonic() - progress["started_at"]) * 1000)
 
         def prompt(section, done, total):
+            progress["boxes_captured"] = done
             label.config(
                 text=ui_strings.calibration_prompt(section, done, total)
             )
 
         def warn_prompt_covered():
+            progress["prompt_clicks"] += 1
             label.config(text=ui_strings.CALIBRATION_PROMPT_COVERED)
 
         def warn_calibration_invalid():
+            progress["invalid_restarts"] += 1
+            progress["boxes_captured"] = 0
+            analytics.capture("calibration_invalid", {"attempt": progress["invalid_restarts"]})
             label.config(text=ui_strings.CALIBRATION_RETRY)
 
         def close():
@@ -558,9 +578,35 @@ def build_app(config=None, tk_root=None, analytics=None):
                 listener["value"].stop()
             window.destroy()
 
+        def save(calibration):
+            apply_calibration(calibration)
+            analytics.capture(
+                "calibration_completed",
+                {
+                    "duration_ms": duration_ms(),
+                    "invalid_restarts": progress["invalid_restarts"],
+                    "prompt_clicks": progress["prompt_clicks"],
+                },
+            )
+
+        def closed_by_vet():
+            # The vet closed the prompt (X) before finishing. Stop the global
+            # mouse hook too -- otherwise it keeps capturing every click.
+            analytics.capture(
+                "calibration_abandoned",
+                {
+                    "boxes_captured": progress["boxes_captured"],
+                    "duration_ms": duration_ms(),
+                    "invalid_restarts": progress["invalid_restarts"],
+                },
+            )
+            close()
+
+        window.protocol("WM_DELETE_WINDOW", closed_by_vet)
+
         controller = CalibrationController(
             capture=injector.capture_calibration_box,
-            save=apply_calibration,
+            save=save,
             prompt=prompt,
             close=close,
             warn=warn_prompt_covered,
@@ -593,6 +639,13 @@ def build_app(config=None, tk_root=None, analytics=None):
     # follow_active_avimark after-loop is keeping the Tcl interpreter busy.
     tray_app.on_open_settings = lambda: run_on_main_thread(tk_root, open_settings)
 
+    analytics.capture(
+        "app_started",
+        {
+            "calibrated": current_calibration["value"] is not None,
+            "launch_on_startup": config.launch_on_startup,
+        },
+    )
     return tray_app, hotkey_listener, tk_root
 
 
@@ -608,6 +661,8 @@ def run():
         return
     logger.info("Vet Soap Notetaker starting up")
     tray_app, hotkey_listener, tk_root = build_app()
+    # Report uncaught errors (type + stack only) to PostHog's Error Tracking.
+    tray_app.analytics.install_crash_capture(tk_root)
     # Bring the backend up first (no-op in dev) so it's listening before the
     # pollers below start reaching for it.
     tray_app.backend_supervisor.start()

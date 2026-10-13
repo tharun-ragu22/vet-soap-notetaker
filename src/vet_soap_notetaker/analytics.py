@@ -12,6 +12,8 @@ key, user id and environment are set in Settings and applied live through
 
 import logging
 import socket
+import sys
+import threading
 from importlib import metadata
 
 from posthog import Posthog
@@ -26,10 +28,36 @@ def _app_version() -> str:
         return "unknown"
 
 
+def scrub_exception_messages(event):
+    """PostHog ``before_send`` hook: strip error *messages* from crash reports.
+
+    Keeps each exception's type and stack (file, function, line -- our own
+    code), drops its message and any captured variables: an ApiClientError's
+    message carries a backend response body, and a frame's variables can hold
+    the note or transcript. Ordinary events pass through unchanged.
+    """
+    if not event or event.get("event") != "$exception":
+        return event
+    properties = event.get("properties") or {}
+    for entry in properties.get("$exception_list") or []:
+        entry["value"] = ""
+        for frame in (entry.get("stacktrace") or {}).get("frames") or []:
+            frame.pop("vars", None)
+    for key in ("$exception_message", "$exception_values"):
+        properties.pop(key, None)
+    return event
+
+
 def _posthog_client(key: str, host: str):
-    # Local-variable capture stays off: a crashing frame's locals can hold the
-    # note or transcript.
-    return Posthog(key, host=host, capture_exception_code_variables=False)
+    # The SDK's own exception autocapture stays off (it sends crashes with no
+    # user id) -- see install_crash_capture. Local-variable capture stays off
+    # too, and every event passes through the message scrubber.
+    return Posthog(
+        key,
+        host=host,
+        capture_exception_code_variables=False,
+        before_send=scrub_exception_messages,
+    )
 
 
 class NullAnalytics:
@@ -91,6 +119,46 @@ class DesktopAnalytics:
             )
         except Exception:
             logger.warning("Failed to record analytics event %s", event, exc_info=True)
+
+    def capture_exception(self, exc: BaseException) -> None:
+        # A crash report for PostHog's Error Tracking: type + stack only (the
+        # message is scrubbed by scrub_exception_messages before sending).
+        if self._client is None:
+            return
+        shared = {"app": "desktop", "environment": self.environment, "app_version": self._version}
+        try:
+            self._client.capture_exception(
+                exc, distinct_id=self.distinct_id, properties=shared
+            )
+        except Exception:
+            logger.warning("Failed to record a crash report", exc_info=True)
+
+    def install_crash_capture(self, tk_root) -> None:
+        """Report every uncaught error -- main thread, background threads (the
+        hotkey worker, offline queue, injection poller) and Tk callbacks (button
+        handlers, after() jobs, which never reach sys.excepthook) -- then hand it
+        on to whatever handled it before, so logging/printing is unchanged.
+        Called once, from run(); the hooks read the live client, so a key
+        entered later in Settings is picked up."""
+        previous_sys_hook = sys.excepthook
+        previous_thread_hook = threading.excepthook
+        previous_tk_hook = tk_root.report_callback_exception
+
+        def sys_hook(exc_type, exc_value, exc_traceback):
+            self.capture_exception(exc_value)
+            previous_sys_hook(exc_type, exc_value, exc_traceback)
+
+        def thread_hook(args):
+            self.capture_exception(args.exc_value)
+            previous_thread_hook(args)
+
+        def tk_hook(exc_type, exc_value, exc_traceback):
+            self.capture_exception(exc_value)
+            previous_tk_hook(exc_type, exc_value, exc_traceback)
+
+        sys.excepthook = sys_hook
+        threading.excepthook = thread_hook
+        tk_root.report_callback_exception = tk_hook
 
     def shutdown(self) -> None:
         # Flush whatever is batched. Called on quit and before swapping clients.

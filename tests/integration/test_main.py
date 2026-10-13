@@ -1128,3 +1128,136 @@ def test_message_flyouts_are_reported_by_kind_only(mocker):
         {"kind": "message", "reason": "busy"},
     ]
     assert "ZZ_PATIENT_SENTINEL" not in repr(tracker.events)
+
+
+# --- Analytics: calibration, lifecycle, privacy -----------------------------
+
+from vet_soap_notetaker.avimark_calibration import BoxCalibration  # noqa: E402
+
+
+def _start_calibration(mocker, tmp_path, config=None):
+    mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", tmp_path / "config.json")
+    toplevel = mocker.patch("vet_soap_notetaker.main.tk.Toplevel")
+    window = toplevel.return_value
+    window.winfo_screenwidth.return_value = 1920
+    window.winfo_screenheight.return_value = 1080
+    window.winfo_width.return_value = 300
+    window.winfo_height.return_value = 120
+    mocker.patch("vet_soap_notetaker.main.tk.Label")
+    listener_cls = mocker.patch("pynput.mouse.Listener")
+    controller_cls = mocker.patch("vet_soap_notetaker.main.CalibrationController")
+    tracker = RecordingAnalytics()
+    tray_app, _, _ = build_app(config=config or _config(), tk_root=MagicMock(), analytics=tracker)
+
+    tray_app.calibrate()
+
+    callbacks = controller_cls.call_args.kwargs
+    on_close = next(
+        call.args[1] for call in window.protocol.call_args_list
+        if call.args[0] == "WM_DELETE_WINDOW"
+    )
+    return tracker, callbacks, on_close, window, listener_cls.return_value
+
+
+def test_a_completed_calibration_reports_restarts_and_prompt_clicks(mocker, tmp_path):
+    tracker, callbacks, _, _, _ = _start_calibration(mocker, tmp_path)
+
+    callbacks["prompt"]("objective", 1, 4)
+    callbacks["warn"]()
+    callbacks["invalid"]()
+    callbacks["save"](BoxCalibration.from_dict(_calibration_dict()))
+    callbacks["close"]()
+
+    assert tracker.only("calibration_started")["properties"] == {"is_recalibration": False}
+    assert tracker.only("calibration_invalid")["properties"] == {"attempt": 1}
+    props = tracker.only("calibration_completed")["properties"]
+    assert props["invalid_restarts"] == 1
+    assert props["prompt_clicks"] == 1
+    assert isinstance(props["duration_ms"], int)
+    assert tracker.named("calibration_abandoned") == []
+
+
+def test_closing_the_calibration_window_stops_the_mouse_hook_and_reports_it(mocker, tmp_path):
+    tracker, callbacks, on_close, window, listener = _start_calibration(mocker, tmp_path)
+    callbacks["prompt"]("subjective", 0, 4)
+    callbacks["prompt"]("objective", 1, 4)
+
+    on_close()
+
+    # Before this, closing with X left the global mouse hook running.
+    listener.stop.assert_called_once()
+    window.destroy.assert_called_once()
+    props = tracker.only("calibration_abandoned")["properties"]
+    assert props["boxes_captured"] == 1
+    assert isinstance(props["duration_ms"], int)
+
+
+def test_recalibrating_is_reported_as_such(mocker, tmp_path):
+    tracker, _, _, _, _ = _start_calibration(
+        mocker, tmp_path, _config(avimark_calibration=_calibration_dict())
+    )
+    assert tracker.only("calibration_started")["properties"] == {"is_recalibration": True}
+
+
+def test_build_app_reports_app_started_and_attaches_analytics_to_the_tray():
+    tracker = RecordingAnalytics()
+    tray_app, _, _ = build_app(
+        config=_config(avimark_calibration=_calibration_dict()), tk_root=MagicMock(), analytics=tracker
+    )
+
+    assert tracker.only("app_started")["properties"] == {
+        "calibrated": True,
+        "launch_on_startup": False,
+    }
+    assert tray_app.analytics is tracker
+
+
+def test_no_desktop_event_ever_carries_patient_data(mocker, tmp_path):
+    sentinel = "ZZ_PATIENT_SENTINEL"
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
+    mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
+    mocker.patch("vet_soap_notetaker.main.pyperclip")
+    mocker.patch("vet_soap_notetaker.main.autostart")
+    mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
+    mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", tmp_path / "config.json")
+    tracker = RecordingAnalytics()
+    tray_app, _, _ = build_app(config=_config(), tk_root=MagicMock(), analytics=tracker)
+    pipeline = tray_app.pipeline
+    _inject_returns(mocker, tray_app, "focus_and_inject", False, "refused_no_window")
+    note = SoapNote(sentinel, sentinel, sentinel, sentinel, transcript=sentinel, exam_id="e1")
+
+    # Hotkey: record -> note (refused, flyout) -> then a failing one.
+    pipeline.recorder = MagicMock(save_wav=lambda path: path.write_bytes(sentinel.encode()))
+    pipeline.api_client = MagicMock(generate_soap_note=MagicMock(return_value=note))
+    pipeline.injector.inject = MagicMock(return_value=False)
+    pipeline.toggle_recording()
+    pipeline.toggle_recording()
+    from vet_soap_notetaker.api_client import ApiClientError
+    pipeline.api_client.generate_soap_note.side_effect = ApiClientError(f"502: {sentinel}")
+    pipeline.recordings_dir = tmp_path / "recordings"
+    pipeline.offline_queue = None
+    pipeline.toggle_recording()
+    pipeline.toggle_recording()
+    # Remote inject, offline note, flyout buttons, history, settings.
+    request = _injection_request()
+    request["exam"] = {f: sentinel for f in ("subjective", "objective", "assessment", "plan", "transcript")}
+    tray_app.injection_poller.on_injection(request)
+    tray_app.offline_queue.on_note_ready(f"SUBJECTIVE: {sentinel}")
+    flyout_kwargs = mock_flyout_cls.call_args.kwargs
+    flyout_kwargs["on_copy_and_inject"](sentinel)
+    flyout_kwargs["on_copy_to_clipboard"](sentinel)
+    tray_app.show_history()
+    history = mock_history_window.call_args.kwargs
+    history["on_copy_and_inject"](
+        Exam(id="e1", created_at="t", subjective=sentinel, objective=sentinel,
+             assessment=sentinel, plan=sentinel, patient_name=sentinel)
+    )
+    history["on_copy_to_clipboard"](sentinel)
+    tray_app.open_settings()
+    mock_settings_cls.call_args.kwargs["on_save"](
+        replace(_config(), api_key=sentinel, analytics_user_id=sentinel)
+    )
+
+    assert len(tracker.events) >= 15
+    assert sentinel not in repr(tracker.events)
