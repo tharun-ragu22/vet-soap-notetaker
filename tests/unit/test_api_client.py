@@ -8,6 +8,8 @@ from vet_soap_notetaker.api_client import (
     GENERATE_CONNECT_TIMEOUT_SECONDS,
     ApiClient,
     ApiClientError,
+    ExamNotFoundError,
+    NotePendingError,
 )
 
 
@@ -611,3 +613,108 @@ def test_quick_calls_keep_the_short_timeout():
 
     assert _sent_timeout(history)["read"] == 30
     assert _sent_timeout(pending)["read"] == 30
+
+
+_PENDING_EXAM_JSON = {
+    "id": "exam-123",
+    "created_at": "2026-10-13T00:00:00+00:00",
+    "patient_name": None,
+    "subjective": "",
+    "objective": "",
+    "assessment": "",
+    "plan": "",
+    "transcript": "ZZ_TRANSCRIPT_SENTINEL owner reports vomiting",
+    "note_pending": True,
+}
+
+
+@respx.mock
+def test_generate_soap_note_raises_note_pending_with_the_exam_id_on_202():
+    # 202 = transcript saved on the backend, note generation failed. The caller
+    # finishes the note via complete_note(exam_id) instead of re-uploading audio.
+    respx.post("https://vet_soap_notetaker.example.com/api/soap").mock(
+        return_value=httpx.Response(202, json=_PENDING_EXAM_JSON)
+    )
+    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
+
+    with pytest.raises(NotePendingError) as excinfo:
+        client.generate_soap_note(b"RIFF....")
+
+    assert excinfo.value.exam_id == "exam-123"
+    # It's still an ApiClientError, so callers that don't know about it fail safe.
+    assert isinstance(excinfo.value, ApiClientError)
+    # The response body (with the transcript) must not leak into the message,
+    # which ends up in the error flyout and the log file.
+    assert "ZZ_TRANSCRIPT_SENTINEL" not in str(excinfo.value)
+
+
+@respx.mock
+def test_generate_soap_note_treats_a_202_without_an_exam_id_as_a_plain_error():
+    respx.post("https://vet_soap_notetaker.example.com/api/soap").mock(
+        return_value=httpx.Response(202, json={"unexpected": True})
+    )
+    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
+
+    with pytest.raises(ApiClientError) as excinfo:
+        client.generate_soap_note(b"RIFF....")
+
+    assert not isinstance(excinfo.value, NotePendingError)
+
+
+@respx.mock
+def test_complete_note_posts_to_the_exam_note_endpoint_and_returns_the_note():
+    route = respx.post("https://vet_soap_notetaker.example.com/api/exams/exam-123/note").mock(
+        return_value=httpx.Response(
+            200, json={**_PENDING_EXAM_JSON, **_NOTE_JSON, "note_pending": False}
+        )
+    )
+    client = ApiClient(
+        endpoint="https://vet_soap_notetaker.example.com/api/soap",
+        timeout_seconds=30,
+        api_key="secret-token",
+    )
+
+    note = client.complete_note("exam-123")
+
+    assert note.subjective == "s"
+    assert note.plan == "p"
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer secret-token"
+    # Note generation can take minutes: long read, short connect.
+    assert _sent_timeout(route)["read"] == 480
+    assert _sent_timeout(route)["connect"] == GENERATE_CONNECT_TIMEOUT_SECONDS
+
+
+@respx.mock
+def test_complete_note_raises_exam_not_found_on_404():
+    respx.post("https://vet_soap_notetaker.example.com/api/exams/gone/note").mock(
+        return_value=httpx.Response(404, json={"error": "exam not found"})
+    )
+    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
+
+    with pytest.raises(ExamNotFoundError):
+        client.complete_note("gone")
+
+
+@respx.mock
+def test_complete_note_raises_api_client_error_when_note_generation_still_fails():
+    respx.post("https://vet_soap_notetaker.example.com/api/exams/exam-123/note").mock(
+        return_value=httpx.Response(502, json={"error": "upstream provider error"})
+    )
+    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
+
+    with pytest.raises(ApiClientError) as excinfo:
+        client.complete_note("exam-123")
+
+    assert not isinstance(excinfo.value, ExamNotFoundError)
+
+
+@respx.mock
+def test_complete_note_raises_api_client_error_on_transport_failure():
+    respx.post("https://vet_soap_notetaker.example.com/api/exams/exam-123/note").mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
+
+    with pytest.raises(ApiClientError):
+        client.complete_note("exam-123")

@@ -49,6 +49,14 @@ STILL_PROCESSING_PREVIOUS_NOTE = (
     "green, then press the hotkey again to start the next recording."
 )
 
+# Shown when the backend saved the recording's transcript but couldn't generate
+# the note yet (HTTP 202); the offline queue keeps retrying the note alone.
+NOTE_PENDING_MESSAGE = (
+    "The recording was transcribed and saved, but the SOAP note couldn't be "
+    "generated yet. It will retry automatically and pop up when ready -- it's "
+    "also in History."
+)
+
 # Tray menu items
 MENU_OPEN_LAST_SOAP_NOTE = "Open Last SOAP Note"
 MENU_VIEW_HISTORY = "View History"

@@ -3,7 +3,12 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from vet_soap_notetaker.api_client import ApiClientError, SoapNote
+from vet_soap_notetaker.api_client import (
+    ApiClientError,
+    ExamNotFoundError,
+    NotePendingError,
+    SoapNote,
+)
 from vet_soap_notetaker.offline_queue import OfflineQueue, get_queue_dir
 
 
@@ -88,3 +93,131 @@ def test_start_runs_process_once_on_background_thread_until_stopped(tmp_path):
         queue.stop()
 
     assert not queue._thread.is_alive()
+
+
+def _note(tag):
+    return SoapNote(subjective=f"s{tag}", objective="o", assessment="a", plan="p")
+
+
+def test_enqueue_note_completion_writes_an_entry_that_is_not_listed_as_audio(tmp_path):
+    queue = OfflineQueue(
+        api_client=MagicMock(), on_note_ready=MagicMock(), queue_dir=tmp_path / "queue"
+    )
+
+    path = queue.enqueue_note_completion("exam-123")
+
+    assert path.exists()
+    assert path.parent == tmp_path / "queue"
+    assert queue.queued_files() == []
+
+
+def test_process_once_finishes_a_queued_note_and_removes_the_entry(tmp_path):
+    api_client = MagicMock()
+    api_client.complete_note.return_value = _note("1")
+    on_note_ready = MagicMock()
+    queue = OfflineQueue(
+        api_client=api_client, on_note_ready=on_note_ready, queue_dir=tmp_path / "queue"
+    )
+    entry = queue.enqueue_note_completion("exam-123")
+
+    processed = queue.process_once()
+
+    api_client.complete_note.assert_called_once_with("exam-123")
+    api_client.generate_soap_note.assert_not_called()
+    assert processed == [entry]
+    assert not entry.exists()
+    on_note_ready.assert_called_once()
+    assert "SUBJECTIVE: s1" in on_note_ready.call_args[0][0]
+
+
+def test_process_once_drops_a_queued_note_whose_exam_was_deleted(tmp_path):
+    api_client = MagicMock()
+    api_client.complete_note.side_effect = ExamNotFoundError("exam not found")
+    on_note_ready = MagicMock()
+    queue = OfflineQueue(
+        api_client=api_client, on_note_ready=on_note_ready, queue_dir=tmp_path / "queue"
+    )
+    entry = queue.enqueue_note_completion("exam-gone")
+
+    queue.process_once()
+
+    assert not entry.exists()
+    on_note_ready.assert_not_called()
+
+
+def test_process_once_keeps_a_queued_note_and_stops_when_the_backend_still_fails(tmp_path):
+    api_client = MagicMock()
+    api_client.complete_note.side_effect = ApiClientError("still down")
+    queue = OfflineQueue(
+        api_client=api_client, on_note_ready=MagicMock(), queue_dir=tmp_path / "queue"
+    )
+    first = queue.enqueue_note_completion("exam-1")
+    time.sleep(0.01)
+    second = queue.enqueue_note_completion("exam-2")
+
+    processed = queue.process_once()
+
+    assert processed == []
+    assert first.exists() and second.exists()
+    api_client.complete_note.assert_called_once_with("exam-1")
+
+
+def test_queued_audio_that_gets_a_202_becomes_a_note_entry_and_is_finished(tmp_path):
+    # The retried upload got transcribed but note generation failed again:
+    # drop the audio (the transcript is saved) and finish the note instead.
+    api_client = MagicMock()
+    api_client.generate_soap_note.side_effect = NotePendingError("exam-123")
+    api_client.complete_note.return_value = _note("1")
+    on_note_ready = MagicMock()
+    queue_dir = tmp_path / "queue"
+    queue = OfflineQueue(api_client=api_client, on_note_ready=on_note_ready, queue_dir=queue_dir)
+    audio = queue.enqueue(b"audio-1")
+
+    queue.process_once()
+
+    assert not audio.exists()
+    api_client.complete_note.assert_called_once_with("exam-123")
+    on_note_ready.assert_called_once()
+    assert list(queue_dir.iterdir()) == []
+
+
+def test_queued_audio_that_gets_a_202_keeps_a_note_entry_when_finishing_fails(tmp_path):
+    api_client = MagicMock()
+    api_client.generate_soap_note.side_effect = NotePendingError("exam-123")
+    api_client.complete_note.side_effect = ApiClientError("still failing")
+    queue_dir = tmp_path / "queue"
+    queue = OfflineQueue(api_client=api_client, on_note_ready=MagicMock(), queue_dir=queue_dir)
+    audio = queue.enqueue(b"audio-1")
+
+    queue.process_once()
+
+    assert not audio.exists()
+    assert queue.queued_files() == []
+    remaining = list(queue_dir.iterdir())
+    assert len(remaining) == 1
+
+    # Next poll: only the cheap note completion is retried, never the upload.
+    api_client.complete_note.side_effect = None
+    api_client.complete_note.return_value = _note("1")
+    queue.process_once()
+    assert api_client.generate_soap_note.call_count == 1
+    assert list(queue_dir.iterdir()) == []
+
+
+def test_process_once_handles_audio_and_note_entries_in_recording_order(tmp_path):
+    calls = []
+    api_client = MagicMock()
+    api_client.generate_soap_note.side_effect = lambda audio: calls.append(("audio", audio)) or _note("a")
+    api_client.complete_note.side_effect = lambda exam_id: calls.append(("note", exam_id)) or _note("n")
+    queue = OfflineQueue(
+        api_client=api_client, on_note_ready=MagicMock(), queue_dir=tmp_path / "queue"
+    )
+    queue.enqueue_note_completion("exam-1")
+    time.sleep(0.01)
+    queue.enqueue(b"audio-2")
+    time.sleep(0.01)
+    queue.enqueue_note_completion("exam-3")
+
+    queue.process_once()
+
+    assert calls == [("note", "exam-1"), ("audio", b"audio-2"), ("note", "exam-3")]

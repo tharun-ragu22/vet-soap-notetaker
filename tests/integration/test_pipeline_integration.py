@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
-from vet_soap_notetaker.api_client import ApiClientError, SoapNote
+from vet_soap_notetaker import ui_strings
+from vet_soap_notetaker.api_client import ApiClientError, NotePendingError, SoapNote
 from vet_soap_notetaker.pipeline import Pipeline, PipelineState
 
 
@@ -207,3 +208,75 @@ def test_toggle_recording_does_not_report_busy_outside_processing():
     pipeline.toggle_recording()  # IDLE -> RECORDING
 
     on_busy.assert_not_called()
+
+
+def _recording_pipeline(tmp_path, api_client, **overrides):
+    recorder = MagicMock(
+        save_wav=MagicMock(side_effect=lambda path: path.write_bytes(b"fake-wav-bytes"))
+    )
+    deps_overrides = dict(
+        recorder=recorder,
+        api_client=api_client,
+        recordings_dir=tmp_path / "recordings",
+        offline_queue=MagicMock(),
+        on_error=MagicMock(),
+    )
+    deps_overrides.update(overrides)
+    pipeline, deps = make_pipeline(**deps_overrides)
+    pipeline.state = PipelineState.RECORDING
+    return pipeline, deps
+
+
+def test_note_pending_is_finished_from_the_saved_transcript_instead_of_reuploading(tmp_path):
+    # 202: the backend saved the transcript but note generation failed. Finish
+    # that exam's note -- no second transcription, no duplicate exam.
+    api_client = MagicMock(
+        generate_soap_note=MagicMock(side_effect=NotePendingError("exam-123")),
+        complete_note=MagicMock(
+            return_value=SoapNote(subjective="s", objective="o", assessment="a", plan="p")
+        ),
+    )
+    pipeline, deps = _recording_pipeline(
+        tmp_path, api_client, injector=MagicMock(inject=MagicMock(return_value=True))
+    )
+
+    pipeline.toggle_recording()
+
+    api_client.complete_note.assert_called_once_with("exam-123")
+    deps["injector"].inject.assert_called_once()
+    assert "SUBJECTIVE: s" in deps["injector"].inject.call_args[0][0]
+    deps["offline_queue"].enqueue.assert_not_called()
+    deps["on_error"].assert_not_called()
+    assert pipeline.last_soap_text.startswith("SUBJECTIVE: s")
+    assert pipeline.state == PipelineState.IDLE
+
+
+def test_note_pending_that_cant_be_finished_yet_is_queued_by_exam_id_not_audio(tmp_path):
+    api_client = MagicMock(
+        generate_soap_note=MagicMock(side_effect=NotePendingError("exam-123")),
+        complete_note=MagicMock(side_effect=ApiClientError("note generation still failing")),
+    )
+    pipeline, deps = _recording_pipeline(tmp_path, api_client)
+
+    pipeline.toggle_recording()
+
+    deps["offline_queue"].enqueue_note_completion.assert_called_once_with("exam-123")
+    deps["offline_queue"].enqueue.assert_not_called()
+    deps["on_error"].assert_called_once_with(ui_strings.NOTE_PENDING_MESSAGE)
+    deps["injector"].inject.assert_not_called()
+    # The transcript is safe on the backend, so the audio isn't archived.
+    assert list((tmp_path / "recordings").glob("*.wav")) == []
+    assert pipeline.state == PipelineState.IDLE
+
+
+def test_note_pending_without_an_offline_queue_still_returns_to_idle(tmp_path):
+    api_client = MagicMock(
+        generate_soap_note=MagicMock(side_effect=NotePendingError("exam-123")),
+        complete_note=MagicMock(side_effect=ApiClientError("still failing")),
+    )
+    pipeline, deps = _recording_pipeline(tmp_path, api_client, offline_queue=None)
+
+    pipeline.toggle_recording()
+
+    deps["on_error"].assert_called_once_with(ui_strings.NOTE_PENDING_MESSAGE)
+    assert pipeline.state == PipelineState.IDLE

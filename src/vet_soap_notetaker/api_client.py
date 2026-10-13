@@ -17,6 +17,25 @@ class ApiClientError(Exception):
     pass
 
 
+class NotePendingError(ApiClientError):
+    """The backend transcribed and saved the recording (HTTP 202) but couldn't
+    generate the note. Finish it with ``complete_note(exam_id)`` -- re-uploading
+    the audio would pay for transcription again and leave a duplicate exam.
+
+    Subclasses ApiClientError so a caller that doesn't know about it still
+    treats it as a failure and keeps the audio (the old, safe behavior)."""
+
+    def __init__(self, exam_id: str):
+        # Deliberately not the response body: it carries the transcript, and
+        # this message is shown in the error flyout and written to the log.
+        super().__init__(f"transcript saved, SOAP note pending (exam {exam_id})")
+        self.exam_id = exam_id
+
+
+class ExamNotFoundError(ApiClientError):
+    """The exam no longer exists on the backend (e.g. the vet deleted it)."""
+
+
 @dataclass
 class SoapNote:
     subjective: str
@@ -119,6 +138,40 @@ class ApiClient:
             logger.error("backend request failed: %s", exc)
             raise ApiClientError(f"request failed: {exc}") from exc
 
+        if response.status_code == 202:
+            exam_id = self._pending_exam_id(response)
+            if exam_id is not None:
+                logger.warning("backend saved the transcript but the note is pending (exam %s)", exam_id)
+                raise NotePendingError(exam_id)
+            raise ApiClientError("backend returned 202 without an exam id")
+
+        return self._parse_soap_response(response)
+
+    @staticmethod
+    def _pending_exam_id(response):
+        try:
+            exam_id = response.json().get("id")
+        except (ValueError, AttributeError):
+            return None
+        return exam_id if isinstance(exam_id, str) and exam_id else None
+
+    def complete_note(self, exam_id: str) -> SoapNote:
+        # Finish a note-pending exam: the backend re-runs only note generation
+        # from the transcript it already saved (no audio, no re-transcription).
+        # Idempotent on the backend: an exam that's already complete -- e.g. the
+        # vet filled it in by hand -- comes back unchanged, never overwritten.
+        url = f"{self._api_base()}/exams/{exam_id}/note"
+        headers = self._auth_headers({})
+
+        logger.info("POST %s (timeout=%ss)", url, self.generate_timeout_seconds)
+        try:
+            response = httpx.post(url, headers=headers, timeout=self._generate_timeout())
+        except httpx.RequestError as exc:
+            logger.error("complete note request failed: %s", exc)
+            raise ApiClientError(f"request failed: {exc}") from exc
+
+        if response.status_code == 404:
+            raise ExamNotFoundError(f"exam {exam_id} not found")
         return self._parse_soap_response(response)
 
     def fetch_history(self) -> list:
