@@ -88,13 +88,19 @@ class Pipeline:
             soap_note = self.api_client.generate_soap_note(audio_bytes)
         except NotePendingError as exc:
             # The backend transcribed and saved this recording but couldn't write
-            # the note. Finish that exam from its saved transcript -- never
+            # the note. The offline queue finishes that exam from its saved
+            # transcript, in the background (it runs a pass right away) -- never
             # re-upload, which would transcribe again and leave a duplicate exam.
-            # Caught before ApiClientError, which it subclasses.
-            soap_note = self._finish_pending_note(exc.exam_id)
-            if soap_note is None:
-                self._transition(PipelineState.IDLE)
-                return
+            # Not retried inline: when the provider is down that would add a
+            # whole provider timeout to the vet's wait. The audio isn't archived;
+            # the transcript is safe on the backend. Caught before
+            # ApiClientError, which it subclasses.
+            logger.warning("note for exam %s pending; queued for completion", exc.exam_id)
+            if self.offline_queue is not None:
+                self.offline_queue.enqueue_note_completion(exc.exam_id)
+            self.on_error(ui_strings.NOTE_PENDING_MESSAGE)
+            self._transition(PipelineState.IDLE)
+            return
         except ApiClientError as exc:
             saved_path = self._save_failed_audio(audio_bytes)
             logger.error("SOAP generation failed: %s (audio saved to %s)", exc, saved_path)
@@ -122,21 +128,6 @@ class Pipeline:
 
         self._transition(PipelineState.IDLE)
         logger.info("done, back to idle")
-
-    def _finish_pending_note(self, exam_id):
-        """One immediate attempt at finishing a note-pending exam; on failure,
-        queue the exam id (not the audio) for retry and tell the vet.
-
-        Returns the note, or None if it isn't ready yet. The audio is not
-        archived: the transcript is already safe on the backend."""
-        try:
-            return self.api_client.complete_note(exam_id)
-        except ApiClientError as exc:
-            logger.warning("note for exam %s still pending: %s", exam_id, exc)
-            if self.offline_queue is not None:
-                self.offline_queue.enqueue_note_completion(exam_id)
-            self.on_error(ui_strings.NOTE_PENDING_MESSAGE)
-            return None
 
     def _save_failed_audio(self, audio_bytes):
         self.recordings_dir.mkdir(parents=True, exist_ok=True)

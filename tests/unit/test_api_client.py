@@ -8,6 +8,7 @@ from vet_soap_notetaker.api_client import (
     GENERATE_CONNECT_TIMEOUT_SECONDS,
     ApiClient,
     ApiClientError,
+    BackendUnreachableError,
     ExamNotFoundError,
     NotePendingError,
 )
@@ -707,6 +708,7 @@ def test_complete_note_raises_api_client_error_when_note_generation_still_fails(
         client.complete_note("exam-123")
 
     assert not isinstance(excinfo.value, ExamNotFoundError)
+    assert not isinstance(excinfo.value, BackendUnreachableError)
 
 
 @respx.mock
@@ -716,5 +718,9 @@ def test_complete_note_raises_api_client_error_on_transport_failure():
     )
     client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
 
-    with pytest.raises(ApiClientError):
+    # Distinct from an error *response*: the backend never answered, so the
+    # offline queue doesn't count it against the note's retry limit.
+    with pytest.raises(BackendUnreachableError) as excinfo:
         client.complete_note("exam-123")
+
+    assert isinstance(excinfo.value, ApiClientError)

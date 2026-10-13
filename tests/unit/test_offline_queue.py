@@ -5,11 +5,12 @@ from unittest.mock import MagicMock
 
 from vet_soap_notetaker.api_client import (
     ApiClientError,
+    BackendUnreachableError,
     ExamNotFoundError,
     NotePendingError,
     SoapNote,
 )
-from vet_soap_notetaker.offline_queue import OfflineQueue, get_queue_dir
+from vet_soap_notetaker.offline_queue import MAX_NOTE_ATTEMPTS, OfflineQueue, get_queue_dir
 
 
 def test_get_queue_dir_appends_queue_subdir_to_appdata_base_dir(mocker):
@@ -221,3 +222,103 @@ def test_process_once_handles_audio_and_note_entries_in_recording_order(tmp_path
     queue.process_once()
 
     assert calls == [("note", "exam-1"), ("audio", b"audio-2"), ("note", "exam-3")]
+
+
+def test_queuing_a_note_completion_triggers_a_pass_right_away(tmp_path):
+    # A brief provider hiccup should resolve in seconds, not wait out the 60s
+    # poll interval.
+    api_client = MagicMock()
+    api_client.complete_note.return_value = _note("1")
+    ready = threading.Event()
+    queue = OfflineQueue(
+        api_client=api_client,
+        on_note_ready=lambda text: ready.set(),
+        queue_dir=tmp_path / "queue",
+        poll_interval_seconds=60,
+    )
+    queue.start()
+    try:
+        queue.enqueue_note_completion("exam-123")
+        assert ready.wait(timeout=2)
+    finally:
+        queue.stop()
+
+    assert not queue._thread.is_alive()
+
+
+def test_stop_ends_the_thread_promptly_even_with_a_long_poll_interval(tmp_path):
+    queue = OfflineQueue(
+        api_client=MagicMock(),
+        on_note_ready=MagicMock(),
+        queue_dir=tmp_path / "queue",
+        poll_interval_seconds=60,
+    )
+    queue.start()
+    started = time.monotonic()
+
+    queue.stop()
+
+    assert not queue._thread.is_alive()
+    assert time.monotonic() - started < 2
+
+
+def test_a_queued_note_gives_up_after_the_retry_limit_and_reports_it(tmp_path):
+    # The provider keeps answering with an error: stop after the limit rather
+    # than retry forever. The exam stays pending in History for a manual retry.
+    api_client = MagicMock()
+    api_client.complete_note.side_effect = ApiClientError("backend returned 502")
+    on_gave_up = MagicMock()
+    queue = OfflineQueue(
+        api_client=api_client,
+        on_note_ready=MagicMock(),
+        queue_dir=tmp_path / "queue",
+        on_gave_up=on_gave_up,
+    )
+    entry = queue.enqueue_note_completion("exam-123")
+
+    for _ in range(MAX_NOTE_ATTEMPTS - 1):
+        queue.process_once()
+    assert entry.exists()
+    on_gave_up.assert_not_called()
+
+    queue.process_once()
+
+    assert not entry.exists()
+    assert api_client.complete_note.call_count == MAX_NOTE_ATTEMPTS
+    on_gave_up.assert_called_once_with("exam-123")
+
+
+def test_an_unreachable_backend_does_not_use_up_a_queued_notes_retries(tmp_path):
+    # The backend being down (restart, Wi-Fi blip) isn't the note's fault --
+    # keep retrying indefinitely, like queued audio.
+    api_client = MagicMock()
+    api_client.complete_note.side_effect = BackendUnreachableError("connection refused")
+    on_gave_up = MagicMock()
+    queue = OfflineQueue(
+        api_client=api_client,
+        on_note_ready=MagicMock(),
+        queue_dir=tmp_path / "queue",
+        on_gave_up=on_gave_up,
+    )
+    entry = queue.enqueue_note_completion("exam-123")
+
+    for _ in range(MAX_NOTE_ATTEMPTS + 5):
+        queue.process_once()
+
+    assert entry.exists()
+    on_gave_up.assert_not_called()
+
+
+def test_a_note_entry_written_before_attempt_counting_still_loads(tmp_path):
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    (queue_dir / "queued_20261013_120000_000000.json").write_text('{"exam_id": "exam-old"}')
+    api_client = MagicMock()
+    api_client.complete_note.return_value = _note("1")
+    on_note_ready = MagicMock()
+    queue = OfflineQueue(api_client=api_client, on_note_ready=on_note_ready, queue_dir=queue_dir)
+
+    queue.process_once()
+
+    api_client.complete_note.assert_called_once_with("exam-old")
+    on_note_ready.assert_called_once()

@@ -875,3 +875,20 @@ def test_repeated_hotkey_presses_while_processing_show_only_one_busy_notice(mock
     tray_app.on_hotkey_triggered()
 
     mock_flyout_cls.assert_called_once()
+
+
+def test_a_note_the_queue_gave_up_on_is_reported_in_a_message_only_flyout(mocker):
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    config = Config(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+    )
+    tray_app, _, _ = build_app(config=config, tk_root=MagicMock())
+
+    tray_app.offline_queue.on_gave_up("exam-123")
+
+    mock_flyout_cls.assert_called_once()
+    kwargs = mock_flyout_cls.call_args.kwargs
+    assert kwargs["soap_text"] == ui_strings.NOTE_PENDING_GAVE_UP_MESSAGE
+    assert kwargs["message_only"] is True

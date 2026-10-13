@@ -287,10 +287,24 @@ def build_app(config=None, tk_root=None):
             on_open_history=open_history,
         )
 
+    def show_message(text):
+        # A status notice, not a note: message-only, so it has no Copy & Inject
+        # and its text can never be pasted into a patient's chart.
+        return FlyoutWindow(
+            master=tk_root,
+            soap_text=text,
+            on_copy_and_inject=lambda text: None,
+            on_copy_to_clipboard=lambda text: None,
+            message_only=True,
+        )
+
     offline_queue = OfflineQueue(
         api_client=api_client,
         on_note_ready=lambda soap_text: run_on_main_thread(
             tk_root, lambda: show_note_flyout(soap_text)
+        ),
+        on_gave_up=lambda exam_id: run_on_main_thread(
+            tk_root, lambda: show_message(ui_strings.NOTE_PENDING_GAVE_UP_MESSAGE)
         ),
     )
 
@@ -334,13 +348,7 @@ def build_app(config=None, tk_root=None):
         window = busy_notice["window"]
         if window is not None and window.winfo_exists():
             return
-        busy_notice["window"] = FlyoutWindow(
-            master=tk_root,
-            soap_text=ui_strings.STILL_PROCESSING_PREVIOUS_NOTE,
-            on_copy_and_inject=lambda text: None,
-            on_copy_to_clipboard=lambda text: None,
-            message_only=True,
-        )
+        busy_notice["window"] = show_message(ui_strings.STILL_PROCESSING_PREVIOUS_NOTE)
 
     pipeline = Pipeline(
         recorder=recorder,

@@ -227,39 +227,18 @@ def _recording_pipeline(tmp_path, api_client, **overrides):
     return pipeline, deps
 
 
-def test_note_pending_is_finished_from_the_saved_transcript_instead_of_reuploading(tmp_path):
-    # 202: the backend saved the transcript but note generation failed. Finish
-    # that exam's note -- no second transcription, no duplicate exam.
+def test_note_pending_is_queued_by_exam_id_right_away_not_reuploaded(tmp_path):
+    # 202: the backend saved the transcript but note generation failed. Hand the
+    # exam to the offline queue immediately and go back to IDLE -- retrying the
+    # note inline would add a whole provider timeout (minutes) to the vet's wait.
     api_client = MagicMock(
         generate_soap_note=MagicMock(side_effect=NotePendingError("exam-123")),
-        complete_note=MagicMock(
-            return_value=SoapNote(subjective="s", objective="o", assessment="a", plan="p")
-        ),
-    )
-    pipeline, deps = _recording_pipeline(
-        tmp_path, api_client, injector=MagicMock(inject=MagicMock(return_value=True))
-    )
-
-    pipeline.toggle_recording()
-
-    api_client.complete_note.assert_called_once_with("exam-123")
-    deps["injector"].inject.assert_called_once()
-    assert "SUBJECTIVE: s" in deps["injector"].inject.call_args[0][0]
-    deps["offline_queue"].enqueue.assert_not_called()
-    deps["on_error"].assert_not_called()
-    assert pipeline.last_soap_text.startswith("SUBJECTIVE: s")
-    assert pipeline.state == PipelineState.IDLE
-
-
-def test_note_pending_that_cant_be_finished_yet_is_queued_by_exam_id_not_audio(tmp_path):
-    api_client = MagicMock(
-        generate_soap_note=MagicMock(side_effect=NotePendingError("exam-123")),
-        complete_note=MagicMock(side_effect=ApiClientError("note generation still failing")),
     )
     pipeline, deps = _recording_pipeline(tmp_path, api_client)
 
     pipeline.toggle_recording()
 
+    api_client.complete_note.assert_not_called()
     deps["offline_queue"].enqueue_note_completion.assert_called_once_with("exam-123")
     deps["offline_queue"].enqueue.assert_not_called()
     deps["on_error"].assert_called_once_with(ui_strings.NOTE_PENDING_MESSAGE)
@@ -272,7 +251,6 @@ def test_note_pending_that_cant_be_finished_yet_is_queued_by_exam_id_not_audio(t
 def test_note_pending_without_an_offline_queue_still_returns_to_idle(tmp_path):
     api_client = MagicMock(
         generate_soap_note=MagicMock(side_effect=NotePendingError("exam-123")),
-        complete_note=MagicMock(side_effect=ApiClientError("still failing")),
     )
     pipeline, deps = _recording_pipeline(tmp_path, api_client, offline_queue=None)
 

@@ -4,7 +4,12 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from vet_soap_notetaker.api_client import ApiClientError, ExamNotFoundError, NotePendingError
+from vet_soap_notetaker.api_client import (
+    ApiClientError,
+    BackendUnreachableError,
+    ExamNotFoundError,
+    NotePendingError,
+)
 from vet_soap_notetaker.paths import get_appdata_base_dir
 from vet_soap_notetaker.pipeline import format_soap_text
 
@@ -14,6 +19,12 @@ logger = logging.getLogger("vet_soap_notetaker.offline_queue")
 def get_queue_dir() -> Path:
     return get_appdata_base_dir() / "queue"
 
+
+# A pending note is retried at most this many times when the backend answers
+# with an error (the provider keeps failing), then given up on -- the exam stays
+# pending in History for a manual Regenerate. An unreachable backend doesn't
+# count: like queued audio, that keeps retrying until it's back.
+MAX_NOTE_ATTEMPTS = 10
 
 # Outcome of processing one queue entry.
 _DONE = "done"  # note ready, entry removed
@@ -31,7 +42,11 @@ class OfflineQueue:
       ``generate_soap_note``.
     * ``.json`` -- ``{"exam_id": ...}`` for an exam the backend already
       transcribed and saved whose note is pending (HTTP 202); retried with the
-      cheap ``complete_note`` -- never by re-uploading the audio.
+      cheap ``complete_note`` -- never by re-uploading the audio. Carries an
+      ``attempts`` count toward ``MAX_NOTE_ATTEMPTS``.
+
+    Queuing a note completion wakes the polling thread for an immediate pass,
+    so a brief provider hiccup resolves in seconds rather than a minute.
     """
 
     def __init__(
@@ -40,12 +55,17 @@ class OfflineQueue:
         on_note_ready,
         queue_dir=None,
         poll_interval_seconds=60,
+        on_gave_up=None,
     ):
         self.api_client = api_client
         self.on_note_ready = on_note_ready
+        # Called with the exam id when a pending note hits MAX_NOTE_ATTEMPTS.
+        self.on_gave_up = on_gave_up or (lambda exam_id: None)
         self.queue_dir = Path(queue_dir) if queue_dir else get_queue_dir()
         self.poll_interval_seconds = poll_interval_seconds
         self._stop_event = threading.Event()
+        # Set to cut the current poll wait short: a new note entry, or stop().
+        self._wake_event = threading.Event()
         self._thread = None
 
     @staticmethod
@@ -59,15 +79,21 @@ class OfflineQueue:
         logger.info("queued recording for retry: %s", path)
         return path
 
-    def enqueue_note_completion(self, exam_id: str, stem=None) -> Path:
+    def enqueue_note_completion(self, exam_id: str) -> Path:
         self.queue_dir.mkdir(parents=True, exist_ok=True)
-        path = self.queue_dir / f"{stem or self._new_stem()}.json"
+        path = self.queue_dir / f"{self._new_stem()}.json"
+        self._write_note_entry(path, exam_id, attempts=0)
+        logger.info("queued note completion for exam %s: %s", exam_id, path)
+        # Don't wait out the poll interval -- try it now, in the background.
+        self._wake_event.set()
+        return path
+
+    @staticmethod
+    def _write_note_entry(path, exam_id, attempts):
         # Write-then-rename so the polling thread never reads a half-written entry.
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps({"exam_id": exam_id}))
+        tmp.write_text(json.dumps({"exam_id": exam_id, "attempts": attempts}))
         tmp.replace(path)
-        logger.info("queued note completion for exam %s: %s", exam_id, path)
-        return path
 
     def queued_files(self):
         if not self.queue_dir.exists():
@@ -108,8 +134,11 @@ class OfflineQueue:
             # Transcribed and saved this time, but the note failed: the audio is
             # no longer needed. Swap it for a note entry (same stem, so it keeps
             # its place in line) and try finishing it straight away.
+            # Written directly rather than via enqueue_note_completion: this pass
+            # is already running, so it mustn't wake a second one.
             path.unlink()
-            note_path = self.enqueue_note_completion(exc.exam_id, stem=path.stem)
+            note_path = path.with_suffix(".json")
+            self._write_note_entry(note_path, exc.exam_id, attempts=0)
             return self._process_note(note_path)
         except ApiClientError as exc:
             logger.info("backend still unavailable, will retry later: %s", exc)
@@ -123,8 +152,11 @@ class OfflineQueue:
 
     def _process_note(self, path):
         try:
-            exam_id = json.loads(path.read_text())["exam_id"]
-        except (OSError, ValueError, KeyError) as exc:
+            entry = json.loads(path.read_text())
+            exam_id = entry["exam_id"]
+            # Entries written before attempt counting have no count yet.
+            attempts = int(entry.get("attempts", 0))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             logger.warning("dropping unreadable queue entry %s: %s", path, exc)
             path.unlink(missing_ok=True)
             return _DROPPED
@@ -134,8 +166,25 @@ class OfflineQueue:
             logger.warning("exam %s no longer exists; dropping its pending note", exam_id)
             path.unlink()
             return _DROPPED
+        except BackendUnreachableError as exc:
+            logger.info("backend unreachable; note for exam %s will retry later: %s", exam_id, exc)
+            return _STOP
         except ApiClientError as exc:
-            logger.info("note for exam %s still pending, will retry later: %s", exam_id, exc)
+            attempts += 1
+            if attempts >= MAX_NOTE_ATTEMPTS:
+                logger.warning(
+                    "giving up on the note for exam %s after %d attempts: %s",
+                    exam_id, attempts, exc,
+                )
+                path.unlink()
+                self.on_gave_up(exam_id)
+                # Nothing wrong with the connection, so move on to the next entry.
+                return _DROPPED
+            self._write_note_entry(path, exam_id, attempts)
+            logger.info(
+                "note for exam %s still pending (attempt %d of %d), will retry later: %s",
+                exam_id, attempts, MAX_NOTE_ATTEMPTS, exc,
+            )
             return _STOP
         path.unlink()
         logger.info("pending note for exam %s completed", exam_id)
@@ -148,10 +197,15 @@ class OfflineQueue:
         self._thread.start()
 
     def _run(self):
-        while not self._stop_event.wait(self.poll_interval_seconds):
+        while True:
+            self._wake_event.wait(self.poll_interval_seconds)
+            self._wake_event.clear()
+            if self._stop_event.is_set():
+                return
             self.process_once()
 
     def stop(self):
         self._stop_event.set()
+        self._wake_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5)

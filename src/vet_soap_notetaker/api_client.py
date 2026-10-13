@@ -36,6 +36,11 @@ class ExamNotFoundError(ApiClientError):
     """The exam no longer exists on the backend (e.g. the vet deleted it)."""
 
 
+class BackendUnreachableError(ApiClientError):
+    """The request never got an answer (connection refused, DNS, timeout) --
+    as opposed to the backend responding with an error."""
+
+
 @dataclass
 class SoapNote:
     subjective: str
@@ -168,7 +173,7 @@ class ApiClient:
             response = httpx.post(url, headers=headers, timeout=self._generate_timeout())
         except httpx.RequestError as exc:
             logger.error("complete note request failed: %s", exc)
-            raise ApiClientError(f"request failed: {exc}") from exc
+            raise BackendUnreachableError(f"request failed: {exc}") from exc
 
         if response.status_code == 404:
             raise ExamNotFoundError(f"exam {exam_id} not found")

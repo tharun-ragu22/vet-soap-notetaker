@@ -57,6 +57,14 @@ NOTE_PENDING_MESSAGE = (
     "also in History."
 )
 
+# Shown when the offline queue stops retrying a pending note (the provider kept
+# failing). The exam and its transcript stay in History for a manual retry.
+NOTE_PENDING_GAVE_UP_MESSAGE = (
+    "A SOAP note still couldn't be generated after several tries. The "
+    "transcript is saved: open History, select the note, and use "
+    "Regenerate from Transcript."
+)
+
 # Tray menu items
 MENU_OPEN_LAST_SOAP_NOTE = "Open Last SOAP Note"
 MENU_VIEW_HISTORY = "View History"
