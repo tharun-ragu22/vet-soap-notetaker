@@ -211,3 +211,20 @@ def test_fit_bottom_right_keeps_bottom_visible_when_window_is_taller_than_screen
     )
 
     assert y == 20
+
+
+def test_message_only_flyout_has_no_copy_or_inject_buttons(tk_root):
+    # Status messages ("still generating…") must never be pasteable into a
+    # patient's chart, so a message-only flyout omits the note actions.
+    flyout = FlyoutWindow(
+        master=tk_root,
+        soap_text="Still generating the previous note.",
+        on_copy_and_inject=lambda text: None,
+        on_copy_to_clipboard=lambda text: None,
+        message_only=True,
+    )
+
+    assert flyout.copy_and_inject_button is None
+    assert flyout.copy_to_clipboard_button is None
+    assert flyout.open_history_button is None
+    assert flyout.text_widget.get("1.0", "end-1c") == "Still generating the previous note."

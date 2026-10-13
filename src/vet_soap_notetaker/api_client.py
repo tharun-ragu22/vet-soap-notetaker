@@ -6,6 +6,13 @@ import httpx
 logger = logging.getLogger("vet_soap_notetaker.api_client")
 
 
+# The calls that wait on the AI provider (transcription + note generation) get a
+# long read timeout, but connecting stays short: a stale/unreachable backend IP
+# must fail in seconds, not leave the vet waiting minutes to find out.
+DEFAULT_GENERATE_TIMEOUT_SECONDS = 480
+GENERATE_CONNECT_TIMEOUT_SECONDS = 10
+
+
 class ApiClientError(Exception):
     pass
 
@@ -55,10 +62,24 @@ class Exam:
 
 
 class ApiClient:
-    def __init__(self, endpoint: str, timeout_seconds: float, api_key: str = ""):
+    def __init__(
+        self,
+        endpoint: str,
+        timeout_seconds: float,
+        api_key: str = "",
+        generate_timeout_seconds: float = DEFAULT_GENERATE_TIMEOUT_SECONDS,
+    ):
         self.endpoint = endpoint
+        # Quick calls (history, saves, injection polls) use timeout_seconds;
+        # provider-bound calls use generate_timeout_seconds.
         self.timeout_seconds = timeout_seconds
         self.api_key = api_key
+        self.generate_timeout_seconds = generate_timeout_seconds
+
+    def _generate_timeout(self) -> httpx.Timeout:
+        return httpx.Timeout(
+            self.generate_timeout_seconds, connect=GENERATE_CONNECT_TIMEOUT_SECONDS
+        )
 
     def _auth_headers(self, extra: dict) -> dict:
         headers = dict(extra)
@@ -86,13 +107,13 @@ class ApiClient:
     def generate_soap_note(self, audio_bytes: bytes) -> SoapNote:
         headers = self._auth_headers({"Content-Type": "audio/wav"})
 
-        logger.info("POST %s (timeout=%ss)", self.endpoint, self.timeout_seconds)
+        logger.info("POST %s (timeout=%ss)", self.endpoint, self.generate_timeout_seconds)
         try:
             response = httpx.post(
                 self.endpoint,
                 content=audio_bytes,
                 headers=headers,
-                timeout=self.timeout_seconds,
+                timeout=self._generate_timeout(),
             )
         except httpx.RequestError as exc:
             logger.error("backend request failed: %s", exc)
@@ -207,13 +228,13 @@ class ApiClient:
         url = self.endpoint.rstrip("/") + "/regenerate"
         headers = self._auth_headers({"Content-Type": "application/json"})
 
-        logger.info("POST %s (timeout=%ss)", url, self.timeout_seconds)
+        logger.info("POST %s (timeout=%ss)", url, self.generate_timeout_seconds)
         try:
             response = httpx.post(
                 url,
                 json={"transcript": transcript},
                 headers=headers,
-                timeout=self.timeout_seconds,
+                timeout=self._generate_timeout(),
             )
         except httpx.RequestError as exc:
             logger.error("backend regenerate request failed: %s", exc)

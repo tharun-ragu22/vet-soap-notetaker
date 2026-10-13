@@ -42,6 +42,13 @@ CALIBRATION_RETRY = (
     "monitors. Let's start over: click inside the Subjective box."
 )
 
+# Shown when the hotkey is pressed while the previous recording is still being
+# turned into a note -- a new recording can't start until it's done.
+STILL_PROCESSING_PREVIOUS_NOTE = (
+    "Still generating the previous SOAP note. Wait for the tray icon to turn "
+    "green, then press the hotkey again to start the next recording."
+)
+
 # Tray menu items
 MENU_OPEN_LAST_SOAP_NOTE = "Open Last SOAP Note"
 MENU_VIEW_HISTORY = "View History"

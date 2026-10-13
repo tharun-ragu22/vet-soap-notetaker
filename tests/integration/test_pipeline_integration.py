@@ -184,3 +184,26 @@ def test_toggle_recording_does_not_crash_when_on_error_not_provided(tmp_path):
     pipeline.toggle_recording()
 
     assert pipeline.state == PipelineState.IDLE
+
+
+def test_toggle_recording_while_processing_reports_busy_instead_of_doing_nothing():
+    # A long exam can take minutes to process; a hotkey press meanwhile can't
+    # start a new recording, but the vet must be told why nothing happened.
+    on_busy = MagicMock()
+    pipeline, deps = make_pipeline(on_busy=on_busy)
+    pipeline.state = PipelineState.PROCESSING
+
+    pipeline.toggle_recording()
+
+    on_busy.assert_called_once_with()
+    deps["recorder"].start.assert_not_called()
+    assert pipeline.state == PipelineState.PROCESSING
+
+
+def test_toggle_recording_does_not_report_busy_outside_processing():
+    on_busy = MagicMock()
+    pipeline, _ = make_pipeline(on_busy=on_busy)
+
+    pipeline.toggle_recording()  # IDLE -> RECORDING
+
+    on_busy.assert_not_called()

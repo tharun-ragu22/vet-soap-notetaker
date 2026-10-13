@@ -4,7 +4,11 @@ import httpx
 import pytest
 import respx
 
-from vet_soap_notetaker.api_client import ApiClient, ApiClientError
+from vet_soap_notetaker.api_client import (
+    GENERATE_CONNECT_TIMEOUT_SECONDS,
+    ApiClient,
+    ApiClientError,
+)
 
 
 @respx.mock
@@ -537,3 +541,73 @@ def test_delete_exam_raises_api_client_error_on_transport_failure():
 
     with pytest.raises(ApiClientError):
         client.delete_exam("exam-1")
+
+
+_NOTE_JSON = {"subjective": "s", "objective": "o", "assessment": "a", "plan": "p"}
+
+
+def _sent_timeout(route):
+    return route.calls.last.request.extensions["timeout"]
+
+
+@respx.mock
+def test_generate_soap_note_waits_long_for_the_provider_but_connects_fast():
+    # Transcription + note generation can take minutes, so the read timeout is
+    # long -- but an unreachable backend (stale IP) must still fail fast.
+    route = respx.post("https://vet_soap_notetaker.example.com/api/soap").mock(
+        return_value=httpx.Response(200, json=_NOTE_JSON)
+    )
+    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
+
+    client.generate_soap_note(b"RIFF....")
+
+    timeout = _sent_timeout(route)
+    assert timeout["read"] == 480
+    assert timeout["connect"] == GENERATE_CONNECT_TIMEOUT_SECONDS
+
+
+@respx.mock
+def test_generate_soap_note_uses_a_custom_generate_timeout():
+    route = respx.post("https://vet_soap_notetaker.example.com/api/soap").mock(
+        return_value=httpx.Response(200, json=_NOTE_JSON)
+    )
+    client = ApiClient(
+        endpoint="https://vet_soap_notetaker.example.com/api/soap",
+        timeout_seconds=30,
+        generate_timeout_seconds=600,
+    )
+
+    client.generate_soap_note(b"RIFF....")
+
+    assert _sent_timeout(route)["read"] == 600
+
+
+@respx.mock
+def test_regenerate_soap_note_uses_the_long_generate_timeout():
+    route = respx.post("https://vet_soap_notetaker.example.com/api/soap/regenerate").mock(
+        return_value=httpx.Response(200, json=_NOTE_JSON)
+    )
+    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
+
+    client.regenerate_soap_note("owner reports vomiting")
+
+    timeout = _sent_timeout(route)
+    assert timeout["read"] == 480
+    assert timeout["connect"] == GENERATE_CONNECT_TIMEOUT_SECONDS
+
+
+@respx.mock
+def test_quick_calls_keep_the_short_timeout():
+    history = respx.get("https://vet_soap_notetaker.example.com/api/history").mock(
+        return_value=httpx.Response(200, json={"exams": []})
+    )
+    pending = respx.get("https://vet_soap_notetaker.example.com/api/injections/pending").mock(
+        return_value=httpx.Response(200, json={"requests": []})
+    )
+    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
+
+    client.fetch_history()
+    client.fetch_pending_injections()
+
+    assert _sent_timeout(history)["read"] == 30
+    assert _sent_timeout(pending)["read"] == 30

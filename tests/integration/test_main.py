@@ -9,6 +9,7 @@ from vet_soap_notetaker.avimark_injector import AvimarkInjector
 from vet_soap_notetaker.config import Config
 from vet_soap_notetaker.icon_art import STATUS_SAMPLE
 from vet_soap_notetaker.main import build_app, follow_active_avimark, keep_window_foreground
+from vet_soap_notetaker import ui_strings
 from vet_soap_notetaker.pipeline import PipelineState
 
 
@@ -803,3 +804,74 @@ def test_run_bails_out_when_another_instance_already_holds_the_lock(mocker):
 
     guard.acquire.assert_called_once()
     mock_build_app.assert_not_called()
+
+
+def test_build_app_wires_the_generate_timeout_from_config():
+    config = Config(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+        api_generate_timeout_seconds=600,
+    )
+
+    tray_app, _, _ = build_app(config=config, tk_root=MagicMock())
+
+    assert tray_app.pipeline.api_client.generate_timeout_seconds == 600
+    assert tray_app.pipeline.api_client.timeout_seconds == 15
+
+
+def test_saving_settings_applies_the_generate_timeout_live(mocker, tmp_path):
+    mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
+    mocker.patch("vet_soap_notetaker.main.autostart")
+    mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", tmp_path / "config.json")
+    config = Config(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+    )
+    tray_app, _, _ = build_app(config=config, tk_root=MagicMock())
+    tray_app.open_settings()
+    apply_settings = mock_settings_cls.call_args.kwargs["on_save"]
+
+    apply_settings(replace(config, api_generate_timeout_seconds=700))
+
+    assert tray_app.pipeline.api_client.generate_timeout_seconds == 700
+
+
+def test_hotkey_while_processing_shows_a_message_only_busy_notice(mocker):
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    config = Config(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+    )
+    tk_root = MagicMock()
+    tray_app, _, _ = build_app(config=config, tk_root=tk_root)
+    tray_app.pipeline.state = PipelineState.PROCESSING
+
+    tray_app.on_hotkey_triggered()
+
+    mock_flyout_cls.assert_called_once()
+    kwargs = mock_flyout_cls.call_args.kwargs
+    assert kwargs["soap_text"] == ui_strings.STILL_PROCESSING_PREVIOUS_NOTE
+    assert kwargs["message_only"] is True
+    assert tray_app.pipeline.state == PipelineState.PROCESSING
+
+
+def test_repeated_hotkey_presses_while_processing_show_only_one_busy_notice(mocker):
+    # A frustrated vet may press the hotkey several times; don't stack windows.
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    mock_flyout_cls.return_value.winfo_exists.return_value = True
+    config = Config(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+    )
+    tray_app, _, _ = build_app(config=config, tk_root=MagicMock())
+    tray_app.pipeline.state = PipelineState.PROCESSING
+
+    tray_app.on_hotkey_triggered()
+    tray_app.on_hotkey_triggered()
+    tray_app.on_hotkey_triggered()
+
+    mock_flyout_cls.assert_called_once()

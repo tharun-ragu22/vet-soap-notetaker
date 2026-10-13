@@ -239,7 +239,12 @@ def build_app(config=None, tk_root=None):
     apply_window_icon(tk_root)
 
     recorder = AudioRecorder()
-    api_client = ApiClient(config.api_endpoint, config.api_timeout_seconds, config.api_key)
+    api_client = ApiClient(
+        config.api_endpoint,
+        config.api_timeout_seconds,
+        config.api_key,
+        generate_timeout_seconds=config.api_generate_timeout_seconds,
+    )
     injector = AvimarkInjector(title_marker=config.target_window_matcher)
     # The live AVImark box calibration (None until the vet calibrates). Held in a
     # mutable cell so Settings / the calibration flow can swap it in without
@@ -320,6 +325,23 @@ def build_app(config=None, tk_root=None):
         ),
     )
 
+    # Hotkey pressed while the previous note is still generating: tell the vet
+    # rather than silently ignore it. Message-only (no copy/inject), and at most
+    # one open at a time so repeated presses don't stack windows.
+    busy_notice = {"window": None}
+
+    def show_busy_notice():
+        window = busy_notice["window"]
+        if window is not None and window.winfo_exists():
+            return
+        busy_notice["window"] = FlyoutWindow(
+            master=tk_root,
+            soap_text=ui_strings.STILL_PROCESSING_PREVIOUS_NOTE,
+            on_copy_and_inject=lambda text: None,
+            on_copy_to_clipboard=lambda text: None,
+            message_only=True,
+        )
+
     pipeline = Pipeline(
         recorder=recorder,
         api_client=api_client,
@@ -331,6 +353,7 @@ def build_app(config=None, tk_root=None):
             tk_root, lambda: show_flyout(tk_root, injector, message)
         ),
         offline_queue=offline_queue,
+        on_busy=lambda: run_on_main_thread(tk_root, show_busy_notice),
     )
 
     tray_app = TrayApp(
@@ -378,6 +401,7 @@ def build_app(config=None, tk_root=None):
         new_config.save(CONFIG_PATH)
         api_client.endpoint = new_config.api_endpoint
         api_client.timeout_seconds = new_config.api_timeout_seconds
+        api_client.generate_timeout_seconds = new_config.api_generate_timeout_seconds
         api_client.api_key = new_config.api_key
         injector.title_marker = new_config.target_window_matcher
         hotkey_listener.update_hotkey(new_config.hotkey)

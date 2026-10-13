@@ -16,6 +16,7 @@ class FlyoutWindow(tk.Toplevel):
         on_copy_and_inject,
         on_copy_to_clipboard,
         on_open_history=None,
+        message_only=False,
     ):
         super().__init__(master)
         self.title(ui_strings.FLYOUT_WINDOW_TITLE)
@@ -45,19 +46,24 @@ class FlyoutWindow(tk.Toplevel):
 
         button_row = tk.Frame(controls)
         button_row.pack(side="bottom")
-        self.copy_and_inject_button = tk.Button(
-            button_row,
-            text=ui_strings.BUTTON_COPY_AND_INJECT,
-            command=self._on_copy_and_inject,
-        )
-        self.copy_and_inject_button.pack(side="left")
+        # A message-only flyout (a status notice, not a note) gets no copy/inject
+        # actions, so its text can never be pasted into a patient's chart.
+        self.copy_and_inject_button = None
+        self.copy_to_clipboard_button = None
+        if not message_only:
+            self.copy_and_inject_button = tk.Button(
+                button_row,
+                text=ui_strings.BUTTON_COPY_AND_INJECT,
+                command=self._on_copy_and_inject,
+            )
+            self.copy_and_inject_button.pack(side="left")
 
-        self.copy_to_clipboard_button = tk.Button(
-            button_row,
-            text=ui_strings.BUTTON_COPY_SOAP_NOTE,
-            command=self._on_copy_to_clipboard,
-        )
-        self.copy_to_clipboard_button.pack(side="left")
+            self.copy_to_clipboard_button = tk.Button(
+                button_row,
+                text=ui_strings.BUTTON_COPY_SOAP_NOTE,
+                command=self._on_copy_to_clipboard,
+            )
+            self.copy_to_clipboard_button.pack(side="left")
 
         # Only offered when there's a note to browse -- error-message flyouts
         # pass no callback and omit the button entirely. Sits on the same row as

@@ -36,6 +36,7 @@ class Pipeline:
         recordings_dir=None,
         offline_queue=None,
         on_state_change=None,
+        on_busy=None,
     ):
         self.recorder = recorder
         self.api_client = api_client
@@ -49,6 +50,10 @@ class Pipeline:
         )
         self.offline_queue = offline_queue
         self.on_state_change = on_state_change or (lambda state: None)
+        # Called when the hotkey is pressed mid-PROCESSING, which can't start a
+        # new recording -- so the vet is told why instead of getting a silent
+        # no-op. Purely a notice: the state machine is unchanged.
+        self.on_busy = on_busy or (lambda: None)
         self.state = PipelineState.IDLE
         self.last_soap_text = None
 
@@ -64,6 +69,9 @@ class Pipeline:
         elif self.state == PipelineState.RECORDING:
             logger.info("recording stopped, processing")
             self._stop_and_process()
+        elif self.state == PipelineState.PROCESSING:
+            logger.info("hotkey pressed while the previous note is still processing")
+            self.on_busy()
 
     def _stop_and_process(self):
         self._transition(PipelineState.PROCESSING)
