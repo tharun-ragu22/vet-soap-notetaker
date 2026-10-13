@@ -35,6 +35,13 @@ class BackendConfig:
     ollama_base_url: str = "http://localhost:11434"
     ollama_note_model: str = "gemma4:e4b"
     backend_api_key: str = ""
+    # Product analytics (PostHog). No key = analytics off. The user id is who
+    # backend events are attributed to when a client doesn't send its own
+    # (X-POSTHOG-DISTINCT-ID); the environment keeps test runs apart from a demo.
+    posthog_key: str = ""
+    posthog_host: str = "https://us.i.posthog.com"
+    analytics_environment: str = "dev"
+    analytics_user_id: str = ""
 
     @classmethod
     def from_env(cls, dotenv_path: Path | str | None = None) -> "BackendConfig":
@@ -55,4 +62,8 @@ class BackendConfig:
             ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
             ollama_note_model=os.environ.get("OLLAMA_NOTE_MODEL", "gemma4:e4b"),
             backend_api_key=os.environ.get("VETSCRIBE_BACKEND_API_KEY", ""),
+            posthog_key=os.environ.get("VETSCRIBE_POSTHOG_KEY", ""),
+            posthog_host=os.environ.get("VETSCRIBE_POSTHOG_HOST", "https://us.i.posthog.com"),
+            analytics_environment=os.environ.get("VETSCRIBE_ANALYTICS_ENV", "dev"),
+            analytics_user_id=os.environ.get("VETSCRIBE_ANALYTICS_USER_ID", ""),
         )

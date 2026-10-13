@@ -85,3 +85,35 @@ def test_from_env_defaults_backend_api_key_to_empty_string(monkeypatch):
     config = BackendConfig.from_env()
 
     assert config.backend_api_key == ""
+
+
+def test_from_env_reads_the_analytics_settings(monkeypatch):
+    monkeypatch.setenv("VETSCRIBE_POSTHOG_KEY", "phc_test")
+    monkeypatch.setenv("VETSCRIBE_POSTHOG_HOST", "https://eu.i.posthog.com")
+    monkeypatch.setenv("VETSCRIBE_ANALYTICS_ENV", "demo")
+    monkeypatch.setenv("VETSCRIBE_ANALYTICS_USER_ID", "demo-vet-1")
+
+    config = BackendConfig.from_env()
+
+    assert config.posthog_key == "phc_test"
+    assert config.posthog_host == "https://eu.i.posthog.com"
+    assert config.analytics_environment == "demo"
+    assert config.analytics_user_id == "demo-vet-1"
+
+
+def test_from_env_leaves_analytics_off_by_default(monkeypatch, tmp_path):
+    for name in (
+        "VETSCRIBE_POSTHOG_KEY",
+        "VETSCRIBE_POSTHOG_HOST",
+        "VETSCRIBE_ANALYTICS_ENV",
+        "VETSCRIBE_ANALYTICS_USER_ID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    config = BackendConfig.from_env(dotenv_path=tmp_path / "nonexistent.env")
+
+    # No key = analytics off: tests, CI and clinics that opt out send nothing.
+    assert config.posthog_key == ""
+    assert config.posthog_host == "https://us.i.posthog.com"
+    assert config.analytics_environment == "dev"
+    assert config.analytics_user_id == ""

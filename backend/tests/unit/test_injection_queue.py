@@ -56,3 +56,14 @@ def test_to_dict_shape(queue):
         "status": "pending",
         "outcome": None,
     }
+
+
+def test_request_count_counts_every_request_for_an_exam_even_after_ack(queue):
+    assert queue.request_count("exam-1") == 0
+    first = queue.request("exam-1")
+    queue.ack(first.id, outcome="delivered")
+    queue.request("exam-1")
+    queue.request("exam-2")
+
+    assert queue.request_count("exam-1") == 2
+    assert queue.request_count("exam-2") == 1

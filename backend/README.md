@@ -105,6 +105,35 @@ this now, while the vet is standing at the PC." A request that survived a backen
 land in whatever chart happened to be open later, so dropping them on restart is the safe
 behavior — unlike exam history, which is durable.
 
+## Analytics (PostHog)
+
+Set `VETSCRIBE_POSTHOG_KEY` (the project's public `phc_...` key) to send usage events to
+PostHog; leave it blank and nothing is sent (the default, and what tests/CI use).
+`VETSCRIBE_POSTHOG_HOST` defaults to US Cloud, `VETSCRIBE_ANALYTICS_ENV` (default `dev`) tags
+every event so a test run can be told apart from a demo, and `VETSCRIBE_ANALYTICS_USER_ID` is
+who events are attributed to when the client doesn't send its own id (falls back to
+`backend-<hostname>`).
+
+Events are **metadata only** -- ids, durations, counts, which boxes changed and by how much --
+never audio, transcripts, note text or patient names. Errors are sent as the exception *type*
+and upstream HTTP status only, since an httpx error's message includes the provider URL (and the
+Gemini API key in it). `tests/integration/test_app_analytics.py` drives every endpoint with a
+sentinel patient and fails if it reaches any event.
+
+| Event | Sent from | Key properties |
+|---|---|---|
+| `soap_generated` | `POST /api/soap` | `outcome` (complete/note_pending/failed), `transcribe_ms`, `note_gen_ms`, `total_ms`, `audio_duration_ms`, `audio_bytes`, providers, `exam_id` |
+| `pending_note_completed` | `POST /api/exams/{id}/note` | `outcome` (complete/failed/already_complete), `note_gen_ms` |
+| `note_regenerated` | `POST /api/soap/regenerate` | `exam_id` (optional `exam_id` in the body), `transcript_edited`, `note_gen_ms`, `outcome` |
+| `note_saved` | `PUT /api/exams/{id}` | `fields_changed`, `<field>_similarity` (0-1), `includes_regenerated_content` |
+| `exam_deleted` | `DELETE /api/exams/{id}` | `exam_id` |
+| `injection_requested` | `POST /api/exams/{id}/inject` | `attempt_number`, `edited_before_inject`, `request_id` |
+
+Clients identify themselves with optional headers: `X-POSTHOG-DISTINCT-ID` (their PostHog
+id, so backend events join the same person), `X-POSTHOG-SESSION-ID` (sent on as `$session_id`),
+`X-VSN-Client` (`mobile`/`desktop`, sent as `source_app`) and `X-Audio-Duration-Ms`. The
+regenerate/edit/inject bookkeeping is in memory, so it resets when the backend restarts.
+
 ## Testing
 
 ```bash

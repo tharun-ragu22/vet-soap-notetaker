@@ -57,6 +57,12 @@ class InjectionQueue:
             self._requests[req.id] = req
             return req
 
+    def request_count(self, exam_id: str) -> int:
+        # Every request ever made for this exam (acked ones included), so the
+        # caller can tell a first inject from a repeat of the same note.
+        with self._lock:
+            return sum(1 for r in self._requests.values() if r.exam_id == exam_id)
+
     def pending(self) -> list[InjectionRequest]:
         # Oldest first: the desktop should service requests in the order the vet
         # made them (insertion order is chronological).
