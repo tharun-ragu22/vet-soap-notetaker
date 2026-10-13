@@ -1,6 +1,7 @@
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from vet_soap_notetaker_backend.config import BackendConfig
 from vet_soap_notetaker_backend.injection_queue import InjectionQueue
@@ -51,6 +52,18 @@ def create_app(
             return JSONResponse({"error": f"upstream request failed: {exc}"}, status_code=502)
         return JSONResponse({"error": str(exc)}, status_code=502)
 
+    # Provider calls block (sync httpx, retry backoff sleeps, Files API polling)
+    # and a long recording can take minutes. Run them on Starlette's thread pool
+    # so the event loop keeps serving every other request meanwhile -- called
+    # directly, one transcription stalls the desktop's injection poll, History
+    # and saves until it returns. Exceptions re-raise here, so the error
+    # mapping below is unchanged.
+    async def _transcribe(audio_bytes: bytes) -> str:
+        return await run_in_threadpool(pipeline.transcribe, audio_bytes)
+
+    async def _generate(transcript: str):
+        return await run_in_threadpool(pipeline.generate_from_transcript, transcript)
+
     _PROVIDER_ERRORS = (
         httpx.HTTPStatusError,
         httpx.RequestError,
@@ -71,7 +84,7 @@ def create_app(
         # Transcribe first. A transcription failure is fatal (502) — there's
         # nothing worth persisting, and the client retries the whole upload.
         try:
-            transcript = pipeline.transcribe(audio_bytes)
+            transcript = await _transcribe(audio_bytes)
         except _PROVIDER_ERRORS as exc:
             return _provider_error_response(exc)
 
@@ -80,7 +93,7 @@ def create_app(
         # saved, note pending) and return 202 so the client can retry note-gen
         # alone via POST /api/exams/{id}/note -- no re-transcription.
         try:
-            result = pipeline.generate_from_transcript(transcript)
+            result = await _generate(transcript)
         except _PROVIDER_ERRORS:
             partial = store.add(_EMPTY_NOTE, transcript, note_pending=True)
             return JSONResponse(partial.to_dict(), status_code=202)
@@ -104,7 +117,7 @@ def create_app(
             return JSONResponse({"error": "exam not found"}, status_code=404)
 
         try:
-            result = pipeline.generate_from_transcript(exam.transcript)
+            result = await _generate(exam.transcript)
         except _PROVIDER_ERRORS as exc:
             # Leave it pending so the client can retry.
             return _provider_error_response(exc)
@@ -136,7 +149,7 @@ def create_app(
             return JSONResponse({"error": "missing transcript"}, status_code=400)
 
         try:
-            result = pipeline.generate_from_transcript(transcript)
+            result = await _generate(transcript)
         except _PROVIDER_ERRORS as exc:
             return _provider_error_response(exc)
 

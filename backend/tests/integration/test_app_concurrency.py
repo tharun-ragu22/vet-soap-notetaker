@@ -1,0 +1,98 @@
+import asyncio
+import threading
+
+import httpx
+import pytest
+
+from vet_soap_notetaker_backend.app import create_app
+from vet_soap_notetaker_backend.schemas import SoapNote, SoapResult
+from vet_soap_notetaker_backend.store import ExamStore
+
+NOTE = SoapNote(subjective="s", objective="o", assessment="a", plan="p")
+
+
+class BlockingPipeline:
+    """Blocks inside one chosen stage until released, like a slow provider call.
+
+    Blocks on a threading.Event rather than sleeping, so the tests don't depend
+    on timing: they release the stage themselves once they've checked that other
+    requests were served in the meantime. The wait has a timeout as a safety
+    valve, so a regression fails the test instead of hanging the suite.
+    """
+
+    def __init__(self, block_in):
+        self.block_in = block_in
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.finished = False
+
+    def _maybe_block(self, stage):
+        if stage == self.block_in:
+            self.entered.set()
+            self.release.wait(timeout=5)
+            self.finished = True
+
+    def transcribe(self, audio_bytes):
+        self._maybe_block("transcribe")
+        return "owner reports vomiting"
+
+    def generate_from_transcript(self, transcript):
+        self._maybe_block("generate")
+        return SoapResult(note=NOTE, transcript=transcript)
+
+
+def _create_soap(client, store):
+    return client.post("/api/soap", content=b"RIFF....audio....")
+
+
+def _complete_pending_note(client, store):
+    partial = store.add(
+        SoapNote(subjective="", objective="", assessment="", plan=""),
+        "owner reports vomiting",
+        note_pending=True,
+    )
+    return client.post(f"/api/exams/{partial.id}/note")
+
+
+def _regenerate(client, store):
+    return client.post("/api/soap/regenerate", json={"transcript": "owner reports vomiting"})
+
+
+@pytest.mark.parametrize(
+    ("block_in", "slow_request"),
+    [
+        ("transcribe", _create_soap),
+        ("generate", _create_soap),
+        ("generate", _complete_pending_note),
+        ("generate", _regenerate),
+    ],
+    ids=["soap-transcribe", "soap-note-gen", "complete-pending-note", "regenerate"],
+)
+async def test_other_requests_are_served_while_a_provider_call_is_in_flight(
+    make_config, block_in, slow_request
+):
+    # Provider calls block (sync httpx, retry sleeps, Files API polling). If a
+    # handler runs one on the event loop, every other request -- the desktop's
+    # injection poll, History, saves -- stalls behind it until it returns.
+    pipeline = BlockingPipeline(block_in)
+    store = ExamStore()
+    app = create_app(config=make_config(), pipeline=pipeline, store=store)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        slow = asyncio.create_task(slow_request(client, store))
+        try:
+            assert await asyncio.to_thread(pipeline.entered.wait, 5)
+
+            history = await client.get("/api/history")
+            pending = await client.get("/api/injections/pending")
+
+            assert history.status_code == 200
+            assert pending.status_code == 200
+            # Served while the slow call was still blocked, not after it finished.
+            assert pipeline.finished is False
+        finally:
+            pipeline.release.set()
+            response = await slow
+
+    assert response.status_code == 200
