@@ -591,3 +591,67 @@ def test_complete_note_requires_bearer_token_when_backend_api_key_configured(mak
     client = TestClient(app)
 
     assert client.post(f"/api/exams/{pending.id}/note").status_code == 401
+
+
+def test_complete_note_on_a_completed_exam_returns_it_unchanged_without_generating(make_config):
+    # The desktop retries "finish this note" from its offline queue, possibly
+    # long after the vet filled the exam in by hand. That retry must return the
+    # vet's note, not overwrite it -- and not pay for a provider call.
+    store = ExamStore()
+    pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
+    store.update(
+        pending.id, subjective="vet s", objective="vet o", assessment="vet a",
+        plan="vet plan", transcript="t",
+    )
+    pipeline = FakePipeline(note=_note())
+    app = create_app(config=make_config(), pipeline=pipeline, store=store)
+    client = TestClient(app)
+
+    response = client.post(f"/api/exams/{pending.id}/note")
+
+    assert response.status_code == 200
+    assert response.json()["plan"] == "vet plan"
+    assert pipeline.received_transcript is None
+    assert store.get(pending.id).plan == "vet plan"
+
+
+def test_complete_note_keeps_an_edit_saved_while_the_note_was_generating(make_config):
+    store = ExamStore()
+    pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
+
+    class EditDuringGeneration(FakePipeline):
+        def generate_from_transcript(self, transcript):
+            # The vet saves a hand-written note while the provider is working.
+            store.update(
+                pending.id, subjective="vet s", objective="vet o", assessment="vet a",
+                plan="vet plan", transcript="t",
+            )
+            return super().generate_from_transcript(transcript)
+
+    app = create_app(
+        config=make_config(), pipeline=EditDuringGeneration(note=_note()), store=store
+    )
+    client = TestClient(app)
+
+    response = client.post(f"/api/exams/{pending.id}/note")
+
+    assert response.status_code == 200
+    assert response.json()["plan"] == "vet plan"
+    assert store.get(pending.id).plan == "vet plan"
+
+
+def test_complete_note_returns_404_when_the_exam_is_deleted_while_generating(make_config):
+    store = ExamStore()
+    pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
+
+    class DeleteDuringGeneration(FakePipeline):
+        def generate_from_transcript(self, transcript):
+            store.delete(pending.id)
+            return super().generate_from_transcript(transcript)
+
+    app = create_app(
+        config=make_config(), pipeline=DeleteDuringGeneration(note=_note()), store=store
+    )
+    client = TestClient(app)
+
+    assert client.post(f"/api/exams/{pending.id}/note").status_code == 404

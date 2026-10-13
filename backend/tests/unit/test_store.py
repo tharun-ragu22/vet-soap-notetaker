@@ -153,3 +153,48 @@ def test_note_pending_round_trips_through_the_json_file_store(tmp_path):
     reopened = JsonFileExamStore(path)
 
     assert reopened.get(exam.id).note_pending is True
+
+
+def test_complete_pending_fills_in_a_pending_exam_and_clears_the_flag():
+    store = _fixed_store()
+    pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
+
+    exam = store.complete_pending(pending.id, _note(a="generated"))
+
+    assert exam.assessment == "generated"
+    assert exam.note_pending is False
+    assert exam.transcript == "t"
+    assert exam.created_at == pending.created_at
+    assert store.get(pending.id).assessment == "generated"
+
+
+def test_complete_pending_leaves_an_already_completed_exam_untouched():
+    # A vet who filled the note in by hand must never have it overwritten by a
+    # late "finish this note" retry.
+    store = _fixed_store()
+    pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
+    store.update(
+        pending.id, subjective="vet s", objective="vet o", assessment="vet a",
+        plan="vet p", transcript="t",
+    )
+
+    exam = store.complete_pending(pending.id, _note(a="generated"))
+
+    assert exam.assessment == "vet a"
+    assert store.get(pending.id).assessment == "vet a"
+
+
+def test_complete_pending_returns_none_for_an_unknown_id():
+    assert _fixed_store().complete_pending("missing", _note()) is None
+
+
+def test_complete_pending_persists_through_the_json_file_store(tmp_path):
+    path = tmp_path / "exams.json"
+    store = JsonFileExamStore(path)
+    pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
+
+    store.complete_pending(pending.id, _note(a="generated"))
+
+    reloaded = JsonFileExamStore(path).get(pending.id)
+    assert reloaded.assessment == "generated"
+    assert reloaded.note_pending is False

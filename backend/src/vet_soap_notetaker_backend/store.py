@@ -119,6 +119,33 @@ class ExamStore:
             self._persist()
             return updated
 
+    def complete_pending(self, exam_id: str, note: SoapNote) -> Exam | None:
+        """Fill in a note-pending exam's note -- but only if it's still pending.
+
+        Check-and-write happen under one lock hold, so a note generated for a
+        pending exam can never overwrite one the vet saved in the meantime (a
+        hand edit goes through ``update``, which clears ``note_pending``).
+        Returns the exam as it now stands -- completed here, or already complete
+        and left untouched -- or None if it no longer exists.
+        """
+        with self._lock:
+            existing = self._exams.get(exam_id)
+            if existing is None or not existing.note_pending:
+                return existing
+            completed = Exam(
+                id=existing.id,
+                created_at=existing.created_at,
+                subjective=note.subjective,
+                objective=note.objective,
+                assessment=note.assessment,
+                plan=note.plan,
+                transcript=existing.transcript,
+                patient_name=note.patient_name or existing.patient_name,
+            )
+            self._exams[exam_id] = completed
+            self._persist()
+            return completed
+
     def delete(self, exam_id: str) -> bool:
         with self._lock:
             if exam_id not in self._exams:

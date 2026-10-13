@@ -115,6 +115,11 @@ def create_app(
         exam = store.get(exam_id)
         if exam is None:
             return JSONResponse({"error": "exam not found"}, status_code=404)
+        # Idempotent: clients retry this from offline queues, possibly long
+        # after the vet filled the note in by hand. An exam that's no longer
+        # pending is returned as-is -- never regenerated over the vet's edits.
+        if not exam.note_pending:
+            return JSONResponse(exam.to_dict())
 
         try:
             result = await _generate(exam.transcript)
@@ -122,15 +127,11 @@ def create_app(
             # Leave it pending so the client can retry.
             return _provider_error_response(exc)
 
-        updated = store.update(
-            exam_id,
-            subjective=result.note.subjective,
-            objective=result.note.objective,
-            assessment=result.note.assessment,
-            plan=result.note.plan,
-            transcript=exam.transcript,
-            patient_name=result.note.patient_name,
-        )
+        # Only writes if still pending: an edit saved while the note was
+        # generating wins, and comes back in the response.
+        updated = store.complete_pending(exam_id, result.note)
+        if updated is None:
+            return JSONResponse({"error": "exam not found"}, status_code=404)
         return JSONResponse(updated.to_dict())
 
     @app.post("/api/soap/regenerate")
