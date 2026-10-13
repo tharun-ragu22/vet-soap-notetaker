@@ -1,3 +1,4 @@
+import logging
 import socket
 import time
 from contextlib import asynccontextmanager
@@ -22,6 +23,8 @@ from vet_soap_notetaker_backend.schemas import SoapNote
 from vet_soap_notetaker_backend.store import ExamStore
 from vet_soap_notetaker_backend.llm.transcription import get_transcriber
 from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import TranscriptionError
+
+logger = logging.getLogger("vet_soap_notetaker_backend.app")
 
 _NOTE_FIELDS = ("subjective", "objective", "assessment", "plan", "transcript")
 # Placeholder note for an exam whose transcription succeeded but whose note
@@ -101,12 +104,22 @@ def create_app(
 
     def _provider_error_response(exc: Exception) -> JSONResponse:
         # Map every provider-level failure to a clean 502 rather than a raw 500
-        # traceback. New provider failure modes belong in this tuple.
+        # traceback. New provider failure modes belong in _PROVIDER_ERRORS.
+        # The body is a fixed summary, never str(exc): httpx error text carries
+        # the full provider URL (an API key, for a provider that puts one in the
+        # query string), and parsing errors can quote model output -- and the
+        # clients show this body on screen and write it to their logs. The full
+        # error stays in this backend's own log.
+        logger.warning("provider call failed: %s: %s", type(exc).__name__, exc)
         if isinstance(exc, httpx.HTTPStatusError):
-            return JSONResponse({"error": f"upstream provider error: {exc}"}, status_code=502)
-        if isinstance(exc, httpx.RequestError):
-            return JSONResponse({"error": f"upstream request failed: {exc}"}, status_code=502)
-        return JSONResponse({"error": str(exc)}, status_code=502)
+            message = f"upstream provider returned {exc.response.status_code}"
+        elif isinstance(exc, httpx.RequestError):
+            message = f"upstream provider unreachable ({type(exc).__name__})"
+        elif isinstance(exc, TranscriptionError):
+            message = f"transcription failed ({type(exc).__name__})"
+        else:
+            message = f"note generation failed ({type(exc).__name__})"
+        return JSONResponse({"error": message}, status_code=502)
 
     # Provider calls block (sync httpx, retry backoff sleeps, Files API polling)
     # and a long recording can take minutes. Run them on Starlette's thread pool

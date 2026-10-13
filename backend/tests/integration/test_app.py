@@ -1,7 +1,9 @@
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from vet_soap_notetaker_backend.app import create_app
+from vet_soap_notetaker_backend.llm.note_generation.parsing import NoteParsingError
 from vet_soap_notetaker_backend.schemas import SoapNote, SoapResult
 from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import TranscriptionError
 
@@ -655,3 +657,49 @@ def test_complete_note_returns_404_when_the_exam_is_deleted_while_generating(mak
     client = TestClient(app)
 
     assert client.post(f"/api/exams/{pending.id}/note").status_code == 404
+
+
+# --- Provider error bodies never echo the raw exception ---------------------
+# httpx error text includes the full request URL, and a provider that puts its
+# API key in the URL would leak it into the 502 body -- which the desktop and
+# mobile apps show on screen and write to their logs.
+
+_SECRET_URL = "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent?key=SECRET_KEY"
+
+
+def _status_error(status):
+    request = httpx.Request("POST", _SECRET_URL)
+    response = httpx.Response(status, request=request)
+    return httpx.HTTPStatusError(
+        f"Server error for url '{_SECRET_URL}'", request=request, response=response
+    )
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (_status_error(503), "upstream provider returned 503"),
+        (
+            httpx.ConnectError(f"connect failed for {_SECRET_URL}", request=httpx.Request("POST", _SECRET_URL)),
+            "upstream provider unreachable (ConnectError)",
+        ),
+        (NoteParsingError("model did not return valid JSON: SECRET_KEY"), "note generation failed (NoteParsingError)"),
+        (TranscriptionError("Gemini returned no content SECRET_KEY"), "transcription failed (TranscriptionError)"),
+    ],
+)
+def test_provider_error_body_is_a_safe_summary_without_the_raw_error(make_config, error, expected):
+    pipeline = FakePipeline(note=_note(), transcript="t", transcribe_error=error, note_error=error)
+    pending = ExamStore()
+    exam = pending.add(_note(), "t", note_pending=True)
+    client = TestClient(create_app(config=make_config(), pipeline=pipeline, store=pending))
+
+    responses = [
+        client.post("/api/soap", content=b"RIFF"),
+        client.post("/api/soap/regenerate", json={"transcript": "t"}),
+        client.post(f"/api/exams/{exam.id}/note"),
+    ]
+
+    for response in responses:
+        assert response.status_code == 502
+        assert response.json() == {"error": expected}
+        assert "SECRET_KEY" not in response.text

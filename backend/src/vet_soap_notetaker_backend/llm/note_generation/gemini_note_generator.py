@@ -34,7 +34,8 @@ class GeminiNoteGenerator(NoteGenerator):
     def generate(self, transcript: str) -> SoapNote:
         response = post_with_retries(
             url=ENDPOINT_TEMPLATE.format(model=self.model),
-            params={"key": self.api_key},
+            # A header, not ?key=: httpx error text includes the full URL.
+            headers={"x-goog-api-key": self.api_key},
             json={
                 "system_instruction": {"parts": [{"text": SOAP_SYSTEM_PROMPT}]},
                 "contents": [{"parts": [{"text": transcript}]}],

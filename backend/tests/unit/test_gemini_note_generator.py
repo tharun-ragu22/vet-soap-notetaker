@@ -36,7 +36,10 @@ def test_generate_sends_system_instruction_and_parses_response():
 
     assert note.plan == "p"
     request = route.calls.last.request
-    assert request.url.params["key"] == "key123"
+    # The key goes in a header, never the URL: httpx error text includes the
+    # full URL, and that text used to reach the vet's screen and logs.
+    assert request.headers["x-goog-api-key"] == "key123"
+    assert "key" not in request.url.params
     sent_body = json.loads(request.content)
     assert "SOAP" in sent_body["system_instruction"]["parts"][0]["text"]
     assert sent_body["contents"][0]["parts"][0]["text"] == "transcript text"

@@ -95,7 +95,7 @@ class GeminiTranscriber(Transcriber):
         audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
         response = post_with_retries(
             url=ENDPOINT_TEMPLATE.format(model=self.model),
-            params={"key": self.api_key},
+            headers=self._auth_headers(),
             json=self._request_body(
                 {"inline_data": {"mime_type": AUDIO_MIME, "data": audio_b64}}
             ),
@@ -111,7 +111,7 @@ class GeminiTranscriber(Transcriber):
             file_resource = self._wait_until_active(file_resource)
             response = post_with_retries(
                 url=ENDPOINT_TEMPLATE.format(model=self.model),
-                params={"key": self.api_key},
+                headers=self._auth_headers(),
                 json=self._request_body(
                     {
                         "file_data": {
@@ -131,8 +131,8 @@ class GeminiTranscriber(Transcriber):
         # 1. Start a resumable upload -- the upload URL comes back in a header.
         start = post_with_retries(
             url=FILES_UPLOAD_ENDPOINT,
-            params={"key": self.api_key},
             headers={
+                **self._auth_headers(),
                 "X-Goog-Upload-Protocol": "resumable",
                 "X-Goog-Upload-Command": "start",
                 "X-Goog-Upload-Header-Content-Length": str(len(audio_bytes)),
@@ -150,6 +150,7 @@ class GeminiTranscriber(Transcriber):
         finalize = post_with_retries(
             url=upload_url,
             headers={
+                **self._auth_headers(),
                 "X-Goog-Upload-Offset": "0",
                 "X-Goog-Upload-Command": "upload, finalize",
             },
@@ -182,7 +183,7 @@ class GeminiTranscriber(Transcriber):
             attempts += 1
             response = httpx.get(
                 FILE_RESOURCE_ENDPOINT.format(name=name),
-                params={"key": self.api_key},
+                headers=self._auth_headers(),
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()
@@ -196,11 +197,17 @@ class GeminiTranscriber(Transcriber):
         try:
             httpx.delete(
                 FILE_RESOURCE_ENDPOINT.format(name=name),
-                params={"key": self.api_key},
+                headers=self._auth_headers(),
                 timeout=self.timeout_seconds,
             )
         except Exception:  # noqa: BLE001 - cleanup is advisory only
             logger.warning("failed to delete uploaded file %s", name, exc_info=True)
+
+    def _auth_headers(self) -> dict:
+        # The key goes in a header, never the ?key= query string: httpx error
+        # text includes the full request URL, so a key in it would end up in
+        # every error message.
+        return {"x-goog-api-key": self.api_key}
 
     def _request_body(self, audio_part: dict) -> dict:
         return {"contents": [{"parts": [{"text": TRANSCRIPTION_PROMPT}, audio_part]}]}

@@ -85,7 +85,10 @@ def test_transcribe_sends_base64_audio_and_returns_text():
 
     assert text == "patient is a 5 year old lab"
     request = route.calls.last.request
-    assert request.url.params["key"] == "key123"
+    # The key goes in a header, never the URL: httpx error text includes the
+    # full URL, and that text used to reach the vet's screen and logs.
+    assert request.headers["x-goog-api-key"] == "key123"
+    assert "key" not in request.url.params
 
 
 @respx.mock
@@ -301,3 +304,29 @@ def test_files_api_delete_failure_does_not_break_transcription():
     respx.post(GENERATE_URL).mock(return_value=httpx.Response(200, json=_candidates("still-ok")))
 
     assert _large_transcriber().transcribe(b"big-audio") == "still-ok"
+
+
+@respx.mock
+def test_files_api_sends_the_key_as_a_header_on_every_request_and_never_in_a_url(no_poll_sleep):
+    respx.post(UPLOAD_START_URL).mock(
+        return_value=httpx.Response(200, headers={"X-Goog-Upload-URL": UPLOAD_SESSION_URL})
+    )
+    respx.post(UPLOAD_SESSION_URL).mock(
+        return_value=httpx.Response(
+            200, json={"file": {"name": FILE_NAME, "uri": FILE_URI, "state": "PROCESSING"}}
+        )
+    )
+    respx.get(FILE_RESOURCE_URL).mock(
+        return_value=httpx.Response(200, json={"name": FILE_NAME, "uri": FILE_URI, "state": "ACTIVE"})
+    )
+    respx.delete(FILE_RESOURCE_URL).mock(return_value=httpx.Response(200))
+    respx.post(GENERATE_URL).mock(return_value=httpx.Response(200, json=_candidates("done")))
+
+    _large_transcriber().transcribe(b"big-audio")
+
+    requests = [call.request for call in respx.calls]
+    # start, finalize, poll, generate, delete
+    assert len(requests) == 5
+    for request in requests:
+        assert request.headers["x-goog-api-key"] == "key123", request.url
+        assert "key123" not in str(request.url)
