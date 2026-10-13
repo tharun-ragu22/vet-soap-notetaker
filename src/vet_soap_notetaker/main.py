@@ -277,8 +277,8 @@ def build_app(config=None, tk_root=None):
             ),
         )
 
-    # A note flyout offers an "Open History" button; an error flyout doesn't
-    # (there's no note to browse), so it goes through show_flyout directly.
+    # A note flyout also offers an "Open History" button. Errors and status
+    # notices don't use show_flyout at all -- they go through show_message.
     def show_note_flyout(soap_text):
         show_flyout(
             tk_root,
@@ -357,9 +357,9 @@ def build_app(config=None, tk_root=None):
         on_flyout_needed=lambda soap_text: run_on_main_thread(
             tk_root, lambda: show_note_flyout(soap_text)
         ),
-        on_error=lambda message: run_on_main_thread(
-            tk_root, lambda: show_flyout(tk_root, injector, message)
-        ),
+        # Errors and status messages are not notes: message-only, so they can
+        # never be pasted into a chart (and need no AVImark window tracking).
+        on_error=lambda message: run_on_main_thread(tk_root, lambda: show_message(message)),
         offline_queue=offline_queue,
         on_busy=lambda: run_on_main_thread(tk_root, show_busy_notice),
     )

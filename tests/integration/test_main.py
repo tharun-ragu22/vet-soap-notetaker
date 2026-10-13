@@ -246,6 +246,8 @@ def test_build_app_flyout_callback_creates_flyout_window_on_injection_failure(mo
     _, kwargs = mock_flyout_cls.call_args
     assert kwargs["master"] is tk_root
     assert kwargs["soap_text"] == "SUBJECTIVE: text"
+    # A real note keeps its Copy & Inject / Copy actions.
+    assert not kwargs.get("message_only", False)
 
 
 def test_build_app_error_callback_shows_flyout_with_error_message(mocker):
@@ -266,6 +268,9 @@ def test_build_app_error_callback_shows_flyout_with_error_message(mocker):
     _, kwargs = mock_flyout_cls.call_args
     assert kwargs["master"] is tk_root
     assert kwargs["soap_text"] == "SOAP Generation Failed: backend unreachable."
+    # An error message is not a note: no Copy & Inject, so it can never be
+    # pasted into a patient's chart.
+    assert kwargs["message_only"] is True
 
 
 def test_note_flyout_offers_open_history_that_opens_the_history_window(mocker):
@@ -302,7 +307,29 @@ def test_error_flyout_has_no_open_history_button(mocker):
     tray_app.pipeline.on_error("SOAP Generation Failed: backend unreachable.")
 
     _, kwargs = mock_flyout_cls.call_args
-    assert kwargs["on_open_history"] is None
+    assert kwargs.get("on_open_history") is None
+    assert kwargs["message_only"] is True
+
+
+def test_error_message_does_not_start_tracking_avimark_windows(mocker):
+    # Window tracking only exists so a later Copy & Inject lands in the right
+    # chart; an error message has nothing to inject.
+    mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    config = Config(
+        api_endpoint="https://example.test/soap",
+        api_timeout_seconds=15,
+        hotkey="<ctrl>+<shift>+r",
+    )
+    tk_root = MagicMock()
+    injector = MagicMock()
+    mocker.patch("vet_soap_notetaker.main.AvimarkInjector", return_value=injector)
+    tray_app, _, _ = build_app(config=config, tk_root=tk_root)
+    tk_root.after.reset_mock()
+
+    tray_app.pipeline.on_error(ui_strings.NOTE_PENDING_MESSAGE)
+
+    injector.remember_active_window.assert_not_called()
+    tk_root.after.assert_not_called()
 
 
 def test_open_last_note_shows_flyout_with_last_soap_text(mocker):
