@@ -67,8 +67,12 @@ def test_a_recorded_note_reports_recording_length_wait_and_how_it_landed(tmp_pat
     assert tracker.only("injection_completed")["properties"] == {
         "source": "hotkey",
         "exam_id": "exam-7",
+        "request_id": None,
         "result": "single_block",
+        # The hotkey path is always a single-block paste.
+        "calibrated": False,
         "fallback_flyout_shown": False,
+        "injected": True,
     }
     # The backend gets the recording length for its own timing analytics.
     assert api_client.generate_soap_note.call_args.kwargs == {"audio_duration_ms": 30000}

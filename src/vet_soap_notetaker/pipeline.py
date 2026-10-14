@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from vet_soap_notetaker import ui_strings
-from vet_soap_notetaker.analytics import NullAnalytics
+from vet_soap_notetaker.analytics import NullAnalytics, injection_properties
 from vet_soap_notetaker.api_client import (
     ApiClientError,
     BackendUnreachableError,
@@ -157,12 +157,13 @@ class Pipeline:
         logger.info("AVImark injection %s", "succeeded" if injected else "failed, showing flyout")
         self.analytics.capture(
             "injection_completed",
-            {
-                "source": "hotkey",
-                "exam_id": soap_note.exam_id,
-                "result": self.injector.last_result,
-                "fallback_flyout_shown": not injected,
-            },
+            injection_properties(
+                "hotkey",
+                self.injector.last_result,
+                injected,
+                fallback_flyout_shown=not injected,
+                exam_id=soap_note.exam_id,
+            ),
         )
         if not injected:
             self.on_flyout_needed(soap_text)

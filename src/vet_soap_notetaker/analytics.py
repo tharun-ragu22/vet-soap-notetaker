@@ -60,6 +60,29 @@ def _posthog_client(key: str, host: str):
     )
 
 
+def injection_properties(
+    source,
+    result,
+    injected,
+    calibrated=False,
+    fallback_flyout_shown=False,
+    exam_id=None,
+    request_id=None,
+) -> dict:
+    """Properties for an ``injection_completed`` event -- the same keys for every
+    source (hotkey / flyout / history / remote), so dashboards never have to
+    special-case one. ``result`` is ``AvimarkInjector.last_result``."""
+    return {
+        "source": source,
+        "exam_id": exam_id,
+        "request_id": request_id,
+        "result": result,
+        "calibrated": calibrated,
+        "fallback_flyout_shown": fallback_flyout_shown,
+        "injected": injected,
+    }
+
+
 class NullAnalytics:
     """Analytics switched off -- the default for components built without one."""
 

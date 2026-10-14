@@ -1028,6 +1028,7 @@ def test_a_remote_inject_reports_the_request_and_how_it_landed(mocker):
         "result": "single_block",
         "calibrated": False,
         "fallback_flyout_shown": False,
+        "injected": True,
     }
 
 
@@ -1261,3 +1262,39 @@ def test_no_desktop_event_ever_carries_patient_data(mocker, tmp_path):
 
     assert len(tracker.events) >= 15
     assert sentinel not in repr(tracker.events)
+
+
+def test_every_injection_completed_has_the_same_properties_whatever_its_source(mocker):
+    # One shape for every source, so dashboards can group and filter on any
+    # property without special-casing where the inject came from.
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
+    tray_app, tracker = _tracked_app(mocker)
+    _inject_returns(mocker, tray_app, "focus_and_inject", True, "single_block")
+    pipeline = tray_app.pipeline
+    pipeline.recorder = MagicMock(save_wav=lambda path: path.write_bytes(b"wav"))
+    pipeline.api_client = MagicMock(
+        generate_soap_note=MagicMock(return_value=SoapNote("s", "o", "a", "p", exam_id="e1"))
+    )
+    pipeline.injector.inject = MagicMock(return_value=True)
+
+    pipeline.toggle_recording()
+    pipeline.toggle_recording()
+    tray_app.injection_poller.on_injection(_injection_request())
+    tray_app.show_history()
+    mock_history_window.call_args.kwargs["on_copy_and_inject"](
+        Exam(id="e1", created_at="t", subjective="s", objective="o", assessment="a", plan="p")
+    )
+    tray_app.offline_queue.on_note_ready("SUBJECTIVE: s")
+    mock_flyout_cls.call_args.kwargs["on_copy_and_inject"]("SUBJECTIVE: s")
+
+    events = tracker.named("injection_completed")
+    assert sorted(e["properties"]["source"] for e in events) == [
+        "flyout", "history", "hotkey", "remote",
+    ]
+    expected_keys = {
+        "source", "exam_id", "request_id", "result", "calibrated",
+        "fallback_flyout_shown", "injected",
+    }
+    for event in events:
+        assert set(event["properties"]) == expected_keys, event

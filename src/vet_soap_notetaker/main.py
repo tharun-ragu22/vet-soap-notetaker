@@ -8,7 +8,7 @@ from pathlib import Path
 import pyperclip
 
 from vet_soap_notetaker import autostart, dpi
-from vet_soap_notetaker.analytics import DesktopAnalytics, NullAnalytics
+from vet_soap_notetaker.analytics import DesktopAnalytics, NullAnalytics, injection_properties
 from vet_soap_notetaker.api_client import ApiClient, SoapNote
 from vet_soap_notetaker.audio_recorder import AudioRecorder
 from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, BoxCalibration
@@ -60,7 +60,10 @@ def _section_fields(note):
     return [(section, getattr(note, section)) for section in SOAP_SECTIONS]
 
 
-def inject_note(injector, calibration, note, on_fallback=None, analytics=None, context=None):
+def inject_note(
+    injector, calibration, note, on_fallback=None, analytics=None, source=None,
+    exam_id=None, request_id=None,
+):
     """Inject a note into AVImark: per-box when calibrated, else single-block.
 
     Shared by the mobile Inject path, the History window's Inject, and the
@@ -70,7 +73,7 @@ def inject_note(injector, calibration, note, on_fallback=None, analytics=None, c
     can't be resolved; if no AVImark chart is safely targetable the inject
     refuses and ``on_fallback`` (the Safety Flyout) is offered the note instead.
     Returns whether the note landed in AVImark. Reports how it landed as an
-    ``injection_completed`` event, with ``context`` (source, exam id, ...).
+    ``injection_completed`` event tagged with ``source`` and the exam/request ids.
     """
     soap_text = format_soap_text(note)
     if calibration is not None:
@@ -87,12 +90,15 @@ def inject_note(injector, calibration, note, on_fallback=None, analytics=None, c
         on_fallback(soap_text)
     (analytics or NullAnalytics()).capture(
         "injection_completed",
-        {
-            **(context or {}),
-            "result": injector.last_result,
-            "calibrated": calibration is not None,
-            "fallback_flyout_shown": not injected and on_fallback is not None,
-        },
+        injection_properties(
+            source,
+            injector.last_result,
+            injected,
+            calibrated=calibration is not None,
+            fallback_flyout_shown=not injected and on_fallback is not None,
+            exam_id=exam_id,
+            request_id=request_id,
+        ),
     )
     return injected
 
@@ -202,15 +208,10 @@ def show_flyout(tk_root, injector, soap_text, on_open_history=None, analytics=No
         # ``text`` is the note as currently shown, so an edit made here isn't lost.
         injected = injector.focus_and_inject(text)
         analytics.capture("flyout_action", {"action": "copy_inject"})
+        # The flyout always pastes as one block, and doesn't know the exam.
         analytics.capture(
             "injection_completed",
-            {
-                "source": "flyout",
-                "result": injector.last_result,
-                "calibrated": False,
-                "fallback_flyout_shown": False,
-                "injected": injected,
-            },
+            injection_properties("flyout", injector.last_result, injected),
         )
         flyout.destroy()
 
@@ -320,7 +321,8 @@ def build_app(config=None, tk_root=None, analytics=None):
                 note,
                 on_fallback=lambda text: show_note_flyout(text, reason="inject_refused"),
                 analytics=analytics,
-                context={"source": "history", "exam_id": getattr(note, "id", None)},
+                source="history",
+                exam_id=getattr(note, "id", None),
             ),
             on_copy=copy_from_history,
         )
@@ -386,11 +388,9 @@ def build_app(config=None, tk_root=None, analytics=None):
             note,
             on_fallback=lambda text: show_note_flyout(text, reason="inject_refused"),
             analytics=analytics,
-            context={
-                "source": "remote",
-                "exam_id": request.get("exam_id"),
-                "request_id": request.get("id"),
-            },
+            source="remote",
+            exam_id=request.get("exam_id"),
+            request_id=request.get("id"),
         )
 
     injection_poller = InjectionPoller(
