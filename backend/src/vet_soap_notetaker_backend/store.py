@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import threading
 from dataclasses import asdict, dataclass
@@ -66,20 +68,24 @@ class ExamStore:
         note_pending: bool = False,
     ) -> Exam:
         with self._lock:
-            exam = Exam(
-                id=self._id_factory(),
-                created_at=self._clock(),
-                subjective=note.subjective,
-                objective=note.objective,
-                assessment=note.assessment,
-                plan=note.plan,
-                transcript=transcript,
-                patient_name=patient_name,
-                note_pending=note_pending,
-            )
-            self._exams[exam.id] = exam
+            exam = self._add_locked(note, transcript, patient_name, note_pending)
             self._persist()
             return exam
+
+    def _add_locked(self, note, transcript, patient_name=None, note_pending=False) -> Exam:
+        exam = Exam(
+            id=self._id_factory(),
+            created_at=self._clock(),
+            subjective=note.subjective,
+            objective=note.objective,
+            assessment=note.assessment,
+            plan=note.plan,
+            transcript=transcript,
+            patient_name=patient_name,
+            note_pending=note_pending,
+        )
+        self._exams[exam.id] = exam
+        return exam
 
     def get(self, exam_id: str) -> Exam | None:
         with self._lock:
@@ -119,12 +125,15 @@ class ExamStore:
             self._persist()
             return updated
 
-    def complete_pending(self, exam_id: str, note: SoapNote) -> Exam | None:
+    def complete_pending(self, exam_id: str, notes: list[SoapNote]) -> Exam | None:
         """Fill in a note-pending exam's note -- but only if it's still pending.
 
-        Check-and-write happen under one lock hold, so a note generated for a
-        pending exam can never overwrite one the vet saved in the meantime (a
-        hand edit goes through ``update``, which clears ``note_pending``).
+        ``notes`` holds one note per animal in the recording: the first fills in
+        this exam, and each further one is added as its own exam sharing the
+        transcript. Check-and-write happen under one lock hold, so a note generated
+        for a pending exam can never overwrite one the vet saved in the meantime (a
+        hand edit goes through ``update``, which clears ``note_pending``), and a
+        retry never adds the further animals twice.
         Returns the exam as it now stands -- completed here, or already complete
         and left untouched -- or None if it no longer exists.
         """
@@ -132,17 +141,20 @@ class ExamStore:
             existing = self._exams.get(exam_id)
             if existing is None or not existing.note_pending:
                 return existing
+            first, *others = notes
             completed = Exam(
                 id=existing.id,
                 created_at=existing.created_at,
-                subjective=note.subjective,
-                objective=note.objective,
-                assessment=note.assessment,
-                plan=note.plan,
+                subjective=first.subjective,
+                objective=first.objective,
+                assessment=first.assessment,
+                plan=first.plan,
                 transcript=existing.transcript,
-                patient_name=note.patient_name or existing.patient_name,
+                patient_name=first.patient_name or existing.patient_name,
             )
             self._exams[exam_id] = completed
+            for note in others:
+                self._add_locked(note, existing.transcript, patient_name=note.patient_name)
             self._persist()
             return completed
 

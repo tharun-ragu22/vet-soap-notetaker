@@ -159,7 +159,7 @@ def test_complete_pending_fills_in_a_pending_exam_and_clears_the_flag():
     store = _fixed_store()
     pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
 
-    exam = store.complete_pending(pending.id, _note(a="generated"))
+    exam = store.complete_pending(pending.id, [_note(a="generated")])
 
     assert exam.assessment == "generated"
     assert exam.note_pending is False
@@ -178,14 +178,14 @@ def test_complete_pending_leaves_an_already_completed_exam_untouched():
         plan="vet p", transcript="t",
     )
 
-    exam = store.complete_pending(pending.id, _note(a="generated"))
+    exam = store.complete_pending(pending.id, [_note(a="generated")])
 
     assert exam.assessment == "vet a"
     assert store.get(pending.id).assessment == "vet a"
 
 
 def test_complete_pending_returns_none_for_an_unknown_id():
-    assert _fixed_store().complete_pending("missing", _note()) is None
+    assert _fixed_store().complete_pending("missing", [_note()]) is None
 
 
 def test_complete_pending_persists_through_the_json_file_store(tmp_path):
@@ -193,8 +193,36 @@ def test_complete_pending_persists_through_the_json_file_store(tmp_path):
     store = JsonFileExamStore(path)
     pending = store.add(SoapNote("", "", "", ""), transcript="t", note_pending=True)
 
-    store.complete_pending(pending.id, _note(a="generated"))
+    store.complete_pending(pending.id, [_note(a="generated")])
 
     reloaded = JsonFileExamStore(path).get(pending.id)
     assert reloaded.assessment == "generated"
     assert reloaded.note_pending is False
+
+
+def test_complete_pending_adds_each_further_patient_as_its_own_exam():
+    store = _fixed_store()
+    pending = store.add(SoapNote("", "", "", ""), transcript="two dogs", note_pending=True)
+    bella = SoapNote("s1", "o1", "a1", "p1", patient_name="Bella")
+    max_ = SoapNote("s2", "o2", "a2", "p2", patient_name="Max")
+
+    exam = store.complete_pending(pending.id, [bella, max_])
+
+    assert exam.id == pending.id
+    assert exam.patient_name == "Bella"
+    exams = list(reversed(store.list()))
+    assert [(e.patient_name, e.transcript, e.note_pending) for e in exams] == [
+        ("Bella", "two dogs", False),
+        ("Max", "two dogs", False),
+    ]
+
+
+def test_complete_pending_adds_no_further_patients_to_an_already_completed_exam():
+    store = _fixed_store()
+    pending = store.add(SoapNote("", "", "", ""), transcript="two dogs", note_pending=True)
+    notes = [SoapNote("s1", "o1", "a1", "p1"), SoapNote("s2", "o2", "a2", "p2")]
+
+    store.complete_pending(pending.id, notes)
+    store.complete_pending(pending.id, notes)
+
+    assert len(store.list()) == 2

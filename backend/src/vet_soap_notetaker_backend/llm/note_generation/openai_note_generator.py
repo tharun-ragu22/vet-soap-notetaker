@@ -2,7 +2,7 @@ import httpx
 
 from vet_soap_notetaker_backend.config import BackendConfig
 from vet_soap_notetaker_backend.llm.note_generation import NoteGenerator
-from vet_soap_notetaker_backend.llm.note_generation.parsing import parse_soap_json
+from vet_soap_notetaker_backend.llm.note_generation.parsing import extract_reply_text, parse_soap_notes
 from vet_soap_notetaker_backend.llm.prompts import SOAP_SYSTEM_PROMPT
 from vet_soap_notetaker_backend.schemas import SoapNote
 
@@ -20,7 +20,7 @@ class OpenAiNoteGenerator(NoteGenerator):
     def from_config(cls, config: BackendConfig) -> "OpenAiNoteGenerator":
         return cls(api_key=config.openai_api_key, model=config.openai_note_model)
 
-    def generate(self, transcript: str) -> SoapNote:
+    def generate(self, transcript: str) -> list[SoapNote]:
         response = httpx.post(
             self.ENDPOINT,
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -35,5 +35,5 @@ class OpenAiNoteGenerator(NoteGenerator):
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        return parse_soap_json(content)
+        content = extract_reply_text(response, ("choices", 0, "message", "content"))
+        return parse_soap_notes(content)

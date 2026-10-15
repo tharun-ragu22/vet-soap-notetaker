@@ -2,7 +2,7 @@ import httpx
 
 from vet_soap_notetaker_backend.config import BackendConfig
 from vet_soap_notetaker_backend.llm.note_generation import NoteGenerator
-from vet_soap_notetaker_backend.llm.note_generation.parsing import parse_soap_json
+from vet_soap_notetaker_backend.llm.note_generation.parsing import extract_reply_text, parse_soap_notes
 from vet_soap_notetaker_backend.llm.prompts import SOAP_SYSTEM_PROMPT
 from vet_soap_notetaker_backend.schemas import SoapNote
 
@@ -19,7 +19,7 @@ class OllamaNoteGenerator(NoteGenerator):
     def from_config(cls, config: BackendConfig) -> "OllamaNoteGenerator":
         return cls(base_url=config.ollama_base_url, model=config.ollama_note_model)
 
-    def generate(self, transcript: str) -> SoapNote:
+    def generate(self, transcript: str) -> list[SoapNote]:
         response = httpx.post(
             f"{self.base_url}/v1/chat/completions",
             json={
@@ -33,5 +33,5 @@ class OllamaNoteGenerator(NoteGenerator):
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        return parse_soap_json(content)
+        content = extract_reply_text(response, ("choices", 0, "message", "content"))
+        return parse_soap_notes(content)

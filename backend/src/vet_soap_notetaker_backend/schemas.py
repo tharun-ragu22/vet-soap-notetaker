@@ -17,8 +17,15 @@ class SoapNote:
 
 @dataclass
 class SoapResult:
-    note: SoapNote
+    # One note per animal in the recording (at least one), in the order discussed.
+    notes: list[SoapNote]
     transcript: str
 
     def to_dict(self) -> dict:
-        return {**self.note.to_dict(), "transcript": self.transcript}
+        # The first animal's note stays flat at the top level for clients that
+        # read a single note; "patients" carries every animal's.
+        return {
+            **self.notes[0].to_dict(),
+            "transcript": self.transcript,
+            "patients": [note.to_dict() for note in self.notes],
+        }

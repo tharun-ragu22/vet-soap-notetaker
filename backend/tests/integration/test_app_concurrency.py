@@ -38,7 +38,7 @@ class BlockingPipeline:
 
     def generate_from_transcript(self, transcript):
         self._maybe_block("generate")
-        return SoapResult(note=NOTE, transcript=transcript)
+        return SoapResult(notes=[NOTE], transcript=transcript)
 
 
 def _create_soap(client, store):

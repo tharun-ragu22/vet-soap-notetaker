@@ -71,7 +71,10 @@ front of it for anything beyond local testing.
 
 Every generated note is persisted so it can sync across the desktop tray app and the mobile
 app (`mobile/`). `POST /api/soap` now stores the note and returns it with an `id` and
-`created_at` (existing clients that read only the SOAP fields are unaffected). Additional
+`created_at` (existing clients that read only the SOAP fields are unaffected). One recording
+can cover several animals: each gets its own exam (sharing the transcript), and the response is
+the first animal's exam. `POST /api/soap/regenerate` returns the first animal's note at the top
+level plus every animal's under `patients`. Additional
 endpoints, all behind the same bearer auth:
 
 | Method & path | Purpose |

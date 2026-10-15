@@ -2,9 +2,13 @@ import httpx
 
 from vet_soap_notetaker_backend.config import BackendConfig
 from vet_soap_notetaker_backend.llm.note_generation import NoteGenerator
-from vet_soap_notetaker_backend.llm.note_generation.parsing import parse_soap_json
+from vet_soap_notetaker_backend.llm.note_generation.parsing import extract_reply_text, parse_soap_notes
 from vet_soap_notetaker_backend.llm.prompts import SOAP_SYSTEM_PROMPT
 from vet_soap_notetaker_backend.schemas import SoapNote
+
+# Room for a full note per animal: a multi-animal reply cut off mid-JSON is a
+# parsing failure.
+MAX_OUTPUT_TOKENS = 4096
 
 
 class AnthropicNoteGenerator(NoteGenerator):
@@ -21,7 +25,7 @@ class AnthropicNoteGenerator(NoteGenerator):
     def from_config(cls, config: BackendConfig) -> "AnthropicNoteGenerator":
         return cls(api_key=config.anthropic_api_key, model=config.anthropic_note_model)
 
-    def generate(self, transcript: str) -> SoapNote:
+    def generate(self, transcript: str) -> list[SoapNote]:
         response = httpx.post(
             self.ENDPOINT,
             headers={
@@ -30,12 +34,12 @@ class AnthropicNoteGenerator(NoteGenerator):
             },
             json={
                 "model": self.model,
-                "max_tokens": 1024,
+                "max_tokens": MAX_OUTPUT_TOKENS,
                 "system": SOAP_SYSTEM_PROMPT,
                 "messages": [{"role": "user", "content": transcript}],
             },
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
-        content = response.json()["content"][0]["text"]
-        return parse_soap_json(content)
+        content = extract_reply_text(response, ("content", 0, "text"))
+        return parse_soap_notes(content)

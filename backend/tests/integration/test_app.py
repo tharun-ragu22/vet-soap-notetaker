@@ -9,8 +9,11 @@ from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import Tran
 
 
 class FakePipeline:
-    def __init__(self, note=None, transcript="", transcribe_error=None, note_error=None):
-        self.note = note
+    def __init__(
+        self, note=None, transcript="", transcribe_error=None, note_error=None, notes=None
+    ):
+        # One note per animal; most tests only need the one.
+        self.notes = notes if notes is not None else [note]
         self.transcript = transcript
         # Errors are per-stage: a transcription failure is fatal (502), while a
         # note-generation failure after a good transcript is recoverable (202 partial).
@@ -30,7 +33,7 @@ class FakePipeline:
         if self.note_error is not None:
             raise self.note_error
         # Echo the caller's transcript back, mirroring the real pipeline.
-        return SoapResult(note=self.note, transcript=transcript)
+        return SoapResult(notes=self.notes, transcript=transcript)
 
 
 def test_create_soap_note_returns_200_with_note_and_transcript_json(make_config):
@@ -171,6 +174,7 @@ def test_regenerate_returns_200_with_note_from_transcript(make_config):
         "plan": "p",
         "patient_name": None,
         "transcript": "the corrected transcript",
+        "patients": [note.to_dict()],
     }
     assert pipeline.received_transcript == "the corrected transcript"
 
@@ -703,3 +707,97 @@ def test_provider_error_body_is_a_safe_summary_without_the_raw_error(make_config
         assert response.status_code == 502
         assert response.json() == {"error": expected}
         assert "SECRET_KEY" not in response.text
+
+
+# --- several animals in one recording -----------------------------------------
+
+BELLA = SoapNote(subjective="s1", objective="o1", assessment="a1", plan="p1", patient_name="Bella")
+MAX = SoapNote(subjective="s2", objective="o2", assessment="a2", plan="p2", patient_name="Max")
+
+
+def test_create_soap_note_persists_every_patient_and_returns_the_first(make_config):
+    store = ExamStore()
+    pipeline = FakePipeline(notes=[BELLA, MAX], transcript="two dogs today")
+    client = TestClient(create_app(config=make_config(), pipeline=pipeline, store=store))
+
+    response = client.post("/api/soap", content=b"RIFF....")
+
+    assert response.status_code == 200
+    assert response.json()["patient_name"] == "Bella"
+    exams = list(reversed(store.list()))
+    assert [(e.patient_name, e.plan) for e in exams] == [("Bella", "p1"), ("Max", "p2")]
+    assert [e.transcript for e in exams] == ["two dogs today", "two dogs today"]
+    assert exams[0].id == response.json()["id"]
+
+
+def test_complete_note_fills_the_pending_exam_with_the_first_patient_and_adds_the_rest(
+    make_config,
+):
+    store = ExamStore()
+    pending = store.add(
+        SoapNote("", "", "", ""), transcript="two dogs today", note_pending=True
+    )
+    pipeline = FakePipeline(notes=[BELLA, MAX])
+    client = TestClient(create_app(config=make_config(), pipeline=pipeline, store=store))
+
+    response = client.post(f"/api/exams/{pending.id}/note")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == pending.id
+    assert response.json()["patient_name"] == "Bella"
+    exams = list(reversed(store.list()))
+    assert [(e.patient_name, e.note_pending) for e in exams] == [
+        ("Bella", False),
+        ("Max", False),
+    ]
+    assert exams[1].transcript == "two dogs today"
+
+
+def test_complete_note_adds_no_patients_when_the_exam_was_already_complete(make_config):
+    # Idempotent: a retry after completion must not duplicate the extra animals.
+    store = ExamStore()
+    pending = store.add(
+        SoapNote("", "", "", ""), transcript="two dogs today", note_pending=True
+    )
+    pipeline = FakePipeline(notes=[BELLA, MAX])
+    client = TestClient(create_app(config=make_config(), pipeline=pipeline, store=store))
+
+    client.post(f"/api/exams/{pending.id}/note")
+    client.post(f"/api/exams/{pending.id}/note")
+
+    assert len(store.list()) == 2
+
+
+def test_complete_note_adds_no_patients_when_the_vet_saved_an_edit_meanwhile(make_config):
+    # The vet filled the note in by hand while generation ran: their edit wins
+    # and the generated notes (for every animal) are dropped.
+    store = ExamStore()
+    pending = store.add(
+        SoapNote("", "", "", ""), transcript="two dogs today", note_pending=True
+    )
+
+    class EditDuringGeneration(FakePipeline):
+        def generate_from_transcript(self, transcript):
+            store.update(
+                pending.id, subjective="vet", objective="vet", assessment="vet",
+                plan="vet", transcript=transcript,
+            )
+            return super().generate_from_transcript(transcript)
+
+    pipeline = EditDuringGeneration(notes=[BELLA, MAX])
+    client = TestClient(create_app(config=make_config(), pipeline=pipeline, store=store))
+
+    response = client.post(f"/api/exams/{pending.id}/note")
+
+    assert response.json()["plan"] == "vet"
+    assert len(store.list()) == 1
+
+
+def test_regenerate_returns_every_patient(make_config):
+    pipeline = FakePipeline(notes=[BELLA, MAX])
+    client = TestClient(create_app(config=make_config(), pipeline=pipeline))
+
+    body = client.post("/api/soap/regenerate", json={"transcript": "two dogs"}).json()
+
+    assert [p["patient_name"] for p in body["patients"]] == ["Bella", "Max"]
+    assert body["plan"] == "p1"

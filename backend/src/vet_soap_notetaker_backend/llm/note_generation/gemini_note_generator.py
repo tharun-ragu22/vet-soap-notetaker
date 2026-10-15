@@ -5,7 +5,7 @@ from vet_soap_notetaker_backend.llm.http_retry import (
     post_with_retries,
 )
 from vet_soap_notetaker_backend.llm.note_generation import NoteGenerator
-from vet_soap_notetaker_backend.llm.note_generation.parsing import parse_soap_json
+from vet_soap_notetaker_backend.llm.note_generation.parsing import extract_reply_text, parse_soap_notes
 from vet_soap_notetaker_backend.llm.prompts import SOAP_SYSTEM_PROMPT
 from vet_soap_notetaker_backend.schemas import SoapNote
 
@@ -31,7 +31,7 @@ class GeminiNoteGenerator(NoteGenerator):
     def from_config(cls, config: BackendConfig) -> "GeminiNoteGenerator":
         return cls(api_key=config.gemini_api_key, model=config.gemini_note_model)
 
-    def generate(self, transcript: str) -> SoapNote:
+    def generate(self, transcript: str) -> list[SoapNote]:
         response = post_with_retries(
             url=ENDPOINT_TEMPLATE.format(model=self.model),
             # A header, not ?key=: httpx error text includes the full URL.
@@ -44,5 +44,5 @@ class GeminiNoteGenerator(NoteGenerator):
             timeout=self.timeout_seconds,
             max_retries=self.max_retries,
         )
-        content = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return parse_soap_json(content)
+        content = extract_reply_text(response, ("candidates", 0, "content", "parts", 0, "text"))
+        return parse_soap_notes(content)

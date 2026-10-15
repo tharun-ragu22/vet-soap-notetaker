@@ -21,7 +21,8 @@ class NoteGenerator(ABC):
     def from_config(cls, config: BackendConfig) -> "NoteGenerator": ...
 
     @abstractmethod
-    def generate(self, transcript: str) -> SoapNote: ...
+    def generate(self, transcript: str) -> list[SoapNote]:
+        """One SOAP note per animal in the transcript, in the order discussed."""
 
 
 class UnknownProviderError(Exception):

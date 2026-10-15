@@ -200,10 +200,14 @@ def create_app(
             )
             return JSONResponse(partial.to_dict(), status_code=202)
 
-        # Persist so the note syncs to every device (mobile + desktop history).
-        exam = store.add(
-            result.note, result.transcript, patient_name=result.note.patient_name
-        )
+        # Persist so the notes sync to every device (mobile + desktop history):
+        # one exam per animal, each with the recording's transcript. The response
+        # is the first animal's exam -- the shape single-note clients read.
+        exams = [
+            store.add(note, result.transcript, patient_name=note.patient_name)
+            for note in result.notes
+        ]
+        exam = exams[0]
         _track(
             request,
             "soap_generated",
@@ -250,7 +254,7 @@ def create_app(
 
         # Only writes if still pending: an edit saved while the note was
         # generating wins, and comes back in the response.
-        updated = store.complete_pending(exam_id, result.note)
+        updated = store.complete_pending(exam_id, result.notes)
         if updated is None:
             return JSONResponse({"error": "exam not found"}, status_code=404)
         _track(

@@ -10,8 +10,7 @@ class SoapPipeline:
 
     def process(self, audio_bytes: bytes) -> SoapResult:
         transcript = self.transcribe(audio_bytes)
-        note = self.note_generator.generate(transcript)
-        return SoapResult(note=note, transcript=transcript)
+        return self.generate_from_transcript(transcript)
 
     def transcribe(self, audio_bytes: bytes) -> str:
         # Transcription only. Lets the API persist the transcript even when the
@@ -22,5 +21,5 @@ class SoapPipeline:
     def generate_from_transcript(self, transcript: str) -> SoapResult:
         # Skip transcription and re-run only note generation. Used when the vet
         # has corrected the transcript by hand and wants a fresh note from it.
-        note = self.note_generator.generate(transcript)
-        return SoapResult(note=note, transcript=transcript)
+        notes = self.note_generator.generate(transcript)
+        return SoapResult(notes=notes, transcript=transcript)

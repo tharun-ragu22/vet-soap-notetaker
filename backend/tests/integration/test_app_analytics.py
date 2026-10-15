@@ -186,7 +186,7 @@ def test_pending_note_completed_reports_timing_and_outcome(setup):
 
     client.post(f"/api/exams/{exam_id}/note")
     pipeline.note_error = None
-    pipeline.note = _note()
+    pipeline.notes = [_note()]
     client.post(f"/api/exams/{exam_id}/note")
     client.post(f"/api/exams/{exam_id}/note")
 

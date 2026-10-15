@@ -24,14 +24,19 @@ def test_soap_note_to_dict_includes_patient_name_when_set():
     assert note.to_dict()["patient_name"] == "Bella"
 
 
-def test_soap_result_to_dict_includes_note_fields_and_transcript():
-    note = SoapNote(subjective="s", objective="o", assessment="a", plan="p")
-    result = SoapResult(note=note, transcript="owner reports vomiting")
+def test_soap_result_to_dict_flattens_the_first_note_and_lists_every_patient():
+    # The flat fields keep single-note clients (the desktop's regenerate, the
+    # current mobile app) working; "patients" carries every animal's note.
+    bella = SoapNote(subjective="s1", objective="o1", assessment="a1", plan="p1", patient_name="Bella")
+    max_ = SoapNote(subjective="s2", objective="o2", assessment="a2", plan="p2", patient_name="Max")
+    result = SoapResult(notes=[bella, max_], transcript="owner reports vomiting")
+
     assert result.to_dict() == {
-        "subjective": "s",
-        "objective": "o",
-        "assessment": "a",
-        "plan": "p",
-        "patient_name": None,
+        "subjective": "s1",
+        "objective": "o1",
+        "assessment": "a1",
+        "plan": "p1",
+        "patient_name": "Bella",
         "transcript": "owner reports vomiting",
+        "patients": [bella.to_dict(), max_.to_dict()],
     }

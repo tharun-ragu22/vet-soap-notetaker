@@ -7,7 +7,17 @@ import respx
 from vet_soap_notetaker_backend.llm.note_generation.anthropic_note_generator import AnthropicNoteGenerator
 from vet_soap_notetaker_backend.llm.note_generation.parsing import NoteParsingError
 
-SOAP_PAYLOAD = {"subjective": "s", "objective": "o", "assessment": "a", "plan": "p"}
+SOAP_PAYLOAD = {
+    "patients": [
+        {"patient_name": "Bella", "subjective": "s", "objective": "o", "assessment": "a", "plan": "p"}
+    ]
+}
+TWO_PATIENTS = {
+    "patients": [
+        {"patient_name": "Bella", "subjective": "s1", "objective": "o1", "assessment": "a1", "plan": "p1"},
+        {"patient_name": "Max", "subjective": "s2", "objective": "o2", "assessment": "a2", "plan": "p2"},
+    ]
+}
 
 
 @respx.mock
@@ -19,7 +29,7 @@ def test_generate_sends_system_prompt_and_parses_response():
     )
 
     generator = AnthropicNoteGenerator(api_key="sk-ant", model="claude-sonnet-4-5")
-    note = generator.generate("transcript text")
+    [note] = generator.generate("transcript text")
 
     assert note.plan == "p"
     request = route.calls.last.request
@@ -50,4 +60,58 @@ def test_generate_raises_on_http_error():
     generator = AnthropicNoteGenerator(api_key="bad-key", model="claude-sonnet-4-5")
 
     with pytest.raises(httpx.HTTPStatusError):
+        generator.generate("transcript")
+
+
+@respx.mock
+def test_generate_returns_one_note_per_patient():
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, json={"content": [{"type": "text", "text": json.dumps(TWO_PATIENTS)}]}
+        )
+    )
+
+    generator = AnthropicNoteGenerator(api_key="sk-ant", model="claude-sonnet-4-5")
+    notes = generator.generate("transcript")
+
+    assert [(n.patient_name, n.plan) for n in notes] == [("Bella", "p1"), ("Max", "p2")]
+
+
+@respx.mock
+def test_generate_leaves_room_for_several_patients_notes():
+    # One full note per animal: 1024 output tokens would cut a multi-animal reply
+    # off mid-JSON.
+    route = respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, json={"content": [{"type": "text", "text": json.dumps(SOAP_PAYLOAD)}]}
+        )
+    )
+
+    AnthropicNoteGenerator(api_key="sk-ant", model="claude-sonnet-4-5").generate("transcript")
+
+    assert json.loads(route.calls.last.request.content)["max_tokens"] >= 4096
+
+
+@pytest.mark.parametrize("body", [{}, {"content": []}, {"content": [{"type": "text"}]}])
+@respx.mock
+def test_generate_raises_note_parsing_error_when_the_reply_has_no_content(body):
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=body)
+    )
+
+    generator = AnthropicNoteGenerator(api_key="sk-ant", model="claude-sonnet-4-5")
+
+    with pytest.raises(NoteParsingError):
+        generator.generate("transcript")
+
+
+@respx.mock
+def test_generate_raises_note_parsing_error_when_the_reply_is_not_json():
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, text="<html>gateway</html>")
+    )
+
+    generator = AnthropicNoteGenerator(api_key="sk-ant", model="claude-sonnet-4-5")
+
+    with pytest.raises(NoteParsingError):
         generator.generate("transcript")

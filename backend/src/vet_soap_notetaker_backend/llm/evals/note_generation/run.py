@@ -74,7 +74,9 @@ async def generate_note(transcript: str) -> SoapNote:
     generator = OllamaNoteGenerator(
         base_url=OLLAMA_BASE_URL, model=OLLAMA_NOTE_MODEL, timeout_seconds=OLLAMA_EVAL_TIMEOUT_SECONDS
     )
-    return await asyncio.to_thread(generator.generate, transcript)
+    notes = await asyncio.to_thread(generator.generate, transcript)
+    # Every case here covers a single animal, so the first note is the one to grade.
+    return notes[0]
 
 
 def main() -> None:
