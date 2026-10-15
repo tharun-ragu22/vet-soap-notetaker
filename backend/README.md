@@ -147,8 +147,14 @@ needed to run the suite.
 ## Evals
 
 `src/vet_soap_notetaker_backend/llm/evals/` (grouped with the LLM code it exercises, separate from `tests/`, not
-picked up by `pytest`) holds `pydantic-evals`-based evals for `NoteGenerator.generate()` against a range
-of example transcripts (`llm/evals/cases.py`) — routine visits,
+picked up by `pytest`) holds two `pydantic-evals` suites, one subpackage each:
+
+- `llm/evals/note_generation/` — `NoteGenerator.generate()` on example transcripts
+- `llm/evals/transcription/` — `Transcriber.transcribe()` on synthetic exam audio (latency + accuracy)
+
+### Note generation
+
+Runs `NoteGenerator.generate()` against a range of example transcripts (`llm/evals/note_generation/cases.py`) — routine visits,
 emergencies, multi-pet visits, vague/garbled transcripts, declined-care conversations, and irrelevant
 chit-chat mixed in with a real complaint. Unlike the unit tests, these make real network calls to a live
 Ollama-compatible server, scoring output with deterministic checks (all four SOAP fields present,
@@ -159,13 +165,13 @@ needed:
 ```bash
 cd backend
 OLLAMA_BASE_URL=http://localhost:11434 OLLAMA_NOTE_MODEL=gemma4:e4b \
-  uv run python -m vet_soap_notetaker_backend.llm.evals.note_generator_evals
+  uv run python -m vet_soap_notetaker_backend.llm.evals.note_generation.run
 ```
 
 Point `OLLAMA_BASE_URL` at any reachable Ollama server (e.g. a tunnel to a GPU box) and
 `OLLAMA_NOTE_MODEL` at whatever's pulled there. Both default to `BackendConfig`'s own Ollama defaults
 (`http://localhost:11434` / `gemma4:e4b`) if unset. A case counts as passing only if it didn't error
-and every assertion (`HasAllSoapFields`, `LLMJudge`) is true; `note_generator_evals.main()` exits
+and every assertion (`HasAllSoapFields`, `LLMJudge`) is true; `note_generation/run.py`'s `main()` exits
 non-zero unless at least `REQUIRED_PASS_RATE` (70%) of cases pass, so it works as a CI gate without
 requiring a perfect run from a small local model.
 
@@ -181,3 +187,37 @@ workflow, via `dorny/paths-filter` on `backend/**`, excluding `*.md` files) — 
 tray-app-only or docs-only changes, since it's the slowest job in the pipeline and gains nothing from
 re-running against unchanged eval-relevant code.
 `build-windows-exe` accounts for this by treating `backend-evals` being skipped the same as it succeeding.
+
+### Transcription
+
+Sends four synthetic exam recordings — 5, 10, 20 and 30 minutes, all different conversations — through
+the production transcriber (`get_transcriber(BackendConfig.from_env())`, so the same provider, model,
+retries, timeouts and inline-vs-Files-API switch the clinic backend uses), in both formats the backend
+receives: the phone's `.m4a` (AAC 44.1 kHz stereo) and the desktop's `.wav` (32-bit float 16 kHz mono).
+Cases run one at a time so each duration is the provider's own latency. Evaluators
+(`llm/evals/transcription/evaluators.py`) assert:
+
+- **latency** ≤ 300 s (the phone gives up at 480 s, and note generation still has to run)
+- **word error rate** ≤ 15% against the exact spoken text, after normalizing formatting
+  (`16 mg` = `16 milligrams`, `4/6` = `4 out of 6`, speaker labels and punctuation ignored)
+- **clinical-term recall** ≥ 90% — vitals, lab values, drug names and doses per recording
+  (`llm/evals/transcription/cases.py`); the failure reason names each missed term
+- **no late drop-off** — every 5-minute window of the recording keeps ≥ 80% of its words, which
+  catches a long transcript that degrades or stops partway through
+
+and report the share of lines with a speaker label. Every case must pass.
+
+The audio (~300 MB) isn't in git. Generate it with `backend/scripts/transcription_eval_audio.ipynb` on
+Google Colab (free Kokoro TTS on a T4 GPU) and unzip `eval_audio.zip` into
+`llm/evals/transcription/` (or point `VETSCRIBE_EVAL_AUDIO_DIR` at the extracted folder). Then, with
+the provider key in `backend/.env`:
+
+```bash
+cd backend
+uv run python -m vet_soap_notetaker_backend.llm.evals.transcription.run
+uv run python -m vet_soap_notetaker_backend.llm.evals.transcription.run --formats phone --only otitis_hotspot_5min
+```
+
+It calls the real provider (roughly $0.25 for a full run on gemini-2.5-flash) and writes every transcript
+plus `results.json` to `llm/evals/transcription/results/<timestamp>/` (gitignored). It isn't in CI yet,
+because the audio isn't in the repo.

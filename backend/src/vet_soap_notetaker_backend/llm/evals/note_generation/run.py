@@ -3,10 +3,10 @@ run for real against a live Ollama-compatible endpoint rather than mocked HTTP.
 
 Unlike tests/, this makes real network calls and depends on an external model server being
 up, so it isn't picked up by `pytest` (testpaths=["tests"]); it's instead run as its own
-`backend-evals` CI job (see ../../.github/workflows/ci.yml), or manually:
+`backend-evals` CI job (see .github/workflows/ci.yml), or manually:
 
     OLLAMA_BASE_URL=https://your-tunnel.example.dev OLLAMA_NOTE_MODEL=gemma4:e4b \
-      uv run python -m evals.note_generator_evals
+      uv run python -m vet_soap_notetaker_backend.llm.evals.note_generation.run
 
 Falls back to http://localhost:11434 / gemma4:e4b (BackendConfig's own defaults) if the env
 vars aren't set. The same model doubles as the LLMJudge evaluator, so the whole run needs
@@ -26,8 +26,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_evals import Dataset
 from pydantic_evals.evaluators import LLMJudge
 
-from vet_soap_notetaker_backend.llm.evals.cases import CASES
-from vet_soap_notetaker_backend.llm.evals.evaluators import FieldKeywordCoverage, HasAllSoapFields
+from vet_soap_notetaker_backend.llm.evals.note_generation.cases import CASES
+from vet_soap_notetaker_backend.llm.evals.note_generation.evaluators import FieldKeywordCoverage, HasAllSoapFields
 from vet_soap_notetaker_backend.llm.note_generation.ollama_note_generator import OllamaNoteGenerator
 from vet_soap_notetaker_backend.schemas import SoapNote
 

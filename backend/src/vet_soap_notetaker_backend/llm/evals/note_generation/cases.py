@@ -5,7 +5,7 @@ provider parsing need to hold up against.
 
 Each Case's metadata may include "must_include": a dict of SoapNote field name -> list of
 substrings that should appear (case-insensitively) in that field, checked by
-evals.evaluators.FieldKeywordCoverage.
+evaluators.FieldKeywordCoverage.
 """
 
 from pydantic_evals import Case

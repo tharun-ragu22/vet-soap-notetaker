@@ -18,22 +18,32 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      llm: ${{ steps.filter.outputs.llm }}
+      note_evals: ${{ steps.filter.outputs.note_evals }}
+      transcription_evals: ${{ steps.filter.outputs.transcription_evals }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          # The expensive eval job runs if and only if the LLM code changed, so
-          # the filter keys on exactly that one directory: the llm/ package, which
-          # holds transcription, note generation, prompts, the pipeline, AND the
-          # eval harness (llm/evals/). Every other backend change (store, app,
-          # config, the PyInstaller spec, docs) leaves the model behavior
-          # untouched and must not trigger evals. Gating on *.py sidesteps
-          # markdown without needing a negation pattern.
+          # Each expensive, model-hitting eval job runs if and only if the code it
+          # exercises changed. Both live under the llm/ package: note generation
+          # (llm/note_generation/, prompts, the pipeline) is checked by
+          # llm/evals/note_generation/, transcription (llm/transcription/) by
+          # llm/evals/transcription/; llm/http_retry.py is shared by both. Every
+          # other backend change (store, app, config, the PyInstaller spec, docs)
+          # leaves the model behavior untouched and must not trigger evals.
+          # Gating on *.py sidesteps markdown without needing a negation pattern.
           filters: |
-            llm:
-              - 'backend/src/vet_soap_notetaker_backend/llm/**/*.py'
+            note_evals:
+              - 'backend/src/vet_soap_notetaker_backend/llm/*.py'
+              - 'backend/src/vet_soap_notetaker_backend/llm/note_generation/**/*.py'
+              - 'backend/src/vet_soap_notetaker_backend/llm/evals/*.py'
+              - 'backend/src/vet_soap_notetaker_backend/llm/evals/note_generation/**/*.py'
+            transcription_evals:
+              - 'backend/src/vet_soap_notetaker_backend/llm/http_retry.py'
+              - 'backend/src/vet_soap_notetaker_backend/llm/transcription/**/*.py'
+              - 'backend/src/vet_soap_notetaker_backend/llm/evals/*.py'
+              - 'backend/src/vet_soap_notetaker_backend/llm/evals/transcription/**/*.py'
 
   test:
     strategy:
@@ -147,11 +157,11 @@ jobs:
         run: npm test
 
   backend-evals:
-    # Prerequisite tests must pass first (test-backend), and the LLM code must
-    # actually have changed (changes.outputs.llm) -- otherwise this expensive,
-    # model-hitting job is skipped.
+    # Prerequisite tests must pass first (test-backend), and the note-generation
+    # code must actually have changed (changes.outputs.note_evals) -- otherwise
+    # this expensive, model-hitting job is skipped.
     needs: [test-backend, changes]
-    if: needs.changes.outputs.llm == 'true'
+    if: needs.changes.outputs.note_evals == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -207,7 +217,7 @@ jobs:
         env:
           OLLAMA_BASE_URL: ${{ steps.remote_check.outputs.available == 'true' && secrets.REMOTE_OLLAMA_URL || 'http://localhost:11434' }}
           OLLAMA_NOTE_MODEL: gemma4:e4b
-        run: uv run python -m vet_soap_notetaker_backend.llm.evals.note_generator_evals
+        run: uv run python -m vet_soap_notetaker_backend.llm.evals.note_generation.run
 
   build-windows-exe:
     needs: [test, backend-evals]
