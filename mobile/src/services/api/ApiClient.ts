@@ -9,7 +9,20 @@ import type {
   SoapNote,
 } from './types';
 
-export class ApiClientError extends Error {}
+export class ApiClientError extends Error {
+  /**
+   * The HTTP status when the backend answered (an error reply or a malformed body);
+   * undefined when there was no answer at all (unreachable, or timed out). The
+   * upload queue retries the latter indefinitely, like the desktop's
+   * BackendUnreachableError.
+   */
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 /**
  * Default per-request timeout. It must outlast the backend's worst-case response
@@ -322,13 +335,16 @@ export class ApiClient {
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
-      throw new ApiClientError(`backend returned ${response.status}: ${detail}`);
+      throw new ApiClientError(`backend returned ${response.status}: ${detail}`, response.status);
     }
 
     try {
       return await response.json();
     } catch (error) {
-      throw new ApiClientError(`invalid JSON from ${path}: ${(error as Error).message}`);
+      throw new ApiClientError(
+        `invalid JSON from ${path}: ${(error as Error).message}`,
+        response.status,
+      );
     }
   }
 

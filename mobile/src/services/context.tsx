@@ -23,6 +23,7 @@ import type { RecordingResult } from './audio/types';
 import { useExpoAudioRecorder } from './audio/useExpoAudioRecorder';
 import { asyncQueueStore } from './upload/asyncQueueStore';
 import { expoFileStore } from './upload/expoFileStore';
+import type { QueueEntry } from './upload/types';
 import { UploadQueue } from './upload/uploadQueue';
 
 /** How often the queue retries itself while the app is foregrounded. */
@@ -42,8 +43,14 @@ export interface Services {
    * it's still queued — the background queue keeps retrying either way, so nothing is lost.
    */
   enqueueRecording: (result: RecordingResult) => Promise<Appointment | null>;
-  /** Number of recordings still waiting to upload (drives the pending banner). */
-  pendingUploads: number;
+  /** Recordings still on the phone waiting to become notes (banner + Uploads screen). */
+  uploads: QueueEntry[];
+  /** The recording uploading right now, if any. */
+  activeUploadId: string | null;
+  /** The vet's manual Retry: resolves to the appointment if it landed. */
+  retryUpload: (id: string) => Promise<Appointment | null>;
+  /** The vet's Discard: deletes the recording from the phone. */
+  discardUpload: (id: string) => Promise<void>;
   /** The backend connection currently in effect (editable via the Settings screen). */
   settings: AppSettings;
   /** Persists new settings and rebuilds the ApiClient against them, no restart needed. */
@@ -67,7 +74,8 @@ export function ServicesProvider({
   // Settings are read from on-device storage (falling back to the build-time defaults),
   // so they aren't known until an async load resolves — null means "still loading".
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [pendingUploads, setPendingUploads] = useState(0);
+  const [uploads, setUploads] = useState<QueueEntry[]>([]);
+  const [activeUploadId, setActiveUploadId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,7 +114,10 @@ export function ServicesProvider({
         createAppointment: (bytes, mime) => apiClient.createAppointment(bytes, mime),
         completeAppointment: (id) => apiClient.completeAppointment(id),
       },
-      onChange: (entries) => setPendingUploads(entries.length),
+      onChange: (entries, activeId) => {
+        setUploads(entries);
+        setActiveUploadId(activeId);
+      },
     });
   }, [apiClient]);
 
@@ -140,6 +151,18 @@ export function ServicesProvider({
     [queue],
   );
 
+  const retryUpload = useCallback(
+    async (id: string): Promise<Appointment | null> => (queue ? queue.retry(id) : null),
+    [queue],
+  );
+
+  const discardUpload = useCallback(
+    async (id: string): Promise<void> => {
+      await queue?.remove(id);
+    },
+    [queue],
+  );
+
   const audioService = useMemo(() => new AudioService(recorder), [recorder]);
 
   const services = useMemo<Services | null>(() => {
@@ -148,11 +171,24 @@ export function ServicesProvider({
       apiClient,
       audioService,
       enqueueRecording,
-      pendingUploads,
+      uploads,
+      activeUploadId,
+      retryUpload,
+      discardUpload,
       settings,
       updateSettings,
     };
-  }, [apiClient, audioService, enqueueRecording, pendingUploads, settings, updateSettings]);
+  }, [
+    apiClient,
+    audioService,
+    enqueueRecording,
+    uploads,
+    activeUploadId,
+    retryUpload,
+    discardUpload,
+    settings,
+    updateSettings,
+  ]);
 
   if (!services) {
     return (

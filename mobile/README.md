@@ -50,6 +50,9 @@ the mobile analogue of the desktop `build_app()`) and pass them down.
 | `/` (`index`) | `RecorderScreen` | One-tap capture of a whole appointment (feature A) |
 | `/history` | `HistoryScreen` | Backend-synced appointment feed, one row per recording naming every animal (feature B) |
 | `/appointment/[id]` | `AppointmentScreen` | The shared transcript and a SOAP card per animal: edit, **Regenerate**, **Save**, **Inject into AVImark** per animal, and **Delete** (features B & C) |
+| `/uploads` | `UploadsScreen` | Recordings still on the phone: where each is up to and why, with **Retry** and **Discard** |
+
+History, Uploads and Settings open from the **☰ menu** at the top left of the home screen.
 
 One recording can cover several animals: the backend's AI writes a separate SOAP note for
 each, and they share the one transcript. Everything on the appointment screen is a local
@@ -61,6 +64,26 @@ the notes are still generating, the screen shows the transcript and polls until 
 backend; the phone never talks to the exam-room PC directly. The Windows tray app polls
 the backend, then pastes the note into AVImark — or shows its Safety Flyout if AVImark
 isn't foreground. See the repo `backend/README.md` "Remote AVImark injection" section.
+
+### Uploads and retries
+
+A recording is saved on the phone (`uploads/` in the app's documents) **before** any upload is
+attempted, so nothing is lost if the backend is down or the app is killed. The queue
+(`src/services/upload/uploadQueue.ts`) uploads in recording order:
+
+- **Backend unreachable** (no answer at all — wrong address, PC off, firewall): it keeps
+  retrying every 30 seconds and whenever the app returns to the foreground, for as long as
+  that lasts. These never count as failures.
+- **Backend error replies** (e.g. a 502 when transcription fails): after 5 the automatic
+  retries stop and the recording shows as **failed** — the home banner turns red ("N recordings
+  failed to upload — tap to review").
+- **Notes failed but the transcript was saved** (a 202): the audio is no longer needed; only
+  the note generation is retried, never a re-upload.
+
+**☰ → Uploads** (or tapping the banner) lists every recording that hasn't become notes yet, with
+its status and a plain-words reason, a **Retry** (which opens the notes when it lands) and a
+two-tap **Discard**. Audio leaves the phone only after a successful upload or a confirmed
+Discard — never automatically.
 
 > **Dependency note:** the React family is pinned to `19.2.3` (a `react-dom` override
 > plus an exact `react-test-renderer`) so the `expo-router` deps resolve under a plain
@@ -93,7 +116,7 @@ Expo Go (above) is only good for a tethered demo — it needs your dev server ru
 phone on the same Wi-Fi. For a multi-day pilot where the vet uses the app on their own, build a
 **standalone app with EAS** (Expo's cloud build service — no local Xcode/Android Studio needed).
 
-The backend address is **editable in-app** — open **Settings** on the home screen and enter the
+The backend address is **editable in-app** — open **Settings** from the ☰ menu and enter the
 clinic backend's URL (and optional API key); it's saved on the device and applied live, no
 rebuild needed. The `EXPO_PUBLIC_*` value baked in at build time (below) is only the *default*
 the vet sees on first launch — you can even ship a build with none set and have the vet type it
@@ -163,7 +186,7 @@ tester by email. They install the **TestFlight** app from the App Store and acce
 
 ### On first launch (both platforms)
 
-- Open **Settings** on the home screen and confirm (or enter) the **Backend URL** for the clinic.
+- Open **Settings** from the ☰ menu and confirm (or enter) the **Backend URL** for the clinic.
   If a default was baked in it's already filled; otherwise type it once and tap **Save**. The home
   screen shows a red "No backend set" hint until one is saved.
 - The app asks for **microphone** permission (recording) — allow.
@@ -209,6 +232,9 @@ Three layers of test run under the same `npm test` (and so under CI's `test-mobi
 - **End-to-end** (`src/integration/screens.e2e.test.tsx`) — the real screens rendered and driven
   with actual gestures (tap record, edit + save, tap Inject) through the real `ApiClient` and
   `FakeBackend` — the closest thing to a device run in Node, with mocked audio uploads.
+  Includes the upload failure paths: a backend that can't be reached (keeps retrying, then a
+  manual Retry from the Uploads screen lands) and one that keeps returning 502 (stops after 5,
+  shows why, and Retry uploads it after recovery).
 
 ### Local dev note (this repo's WSL checkout)
 

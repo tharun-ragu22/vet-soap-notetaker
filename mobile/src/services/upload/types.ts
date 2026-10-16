@@ -8,7 +8,26 @@ import type { Appointment, AudioBody } from '../api/types';
  */
 export type QueueEntry = AudioEntry | NoteEntry;
 
-export interface AudioEntry {
+/**
+ * Why the last attempt failed: `unreachable` (no answer at all — never counts
+ * toward giving up), `backend` (the backend replied with an error), or `other`.
+ */
+export type UploadErrorKind = 'unreachable' | 'backend' | 'other';
+
+/** Bookkeeping shared by both stages: attempts and the last failure. */
+interface AttemptFields {
+  /** Failed attempts that count toward parking (backend errors, not unreachable). */
+  attempts: number;
+  lastError?: string;
+  lastErrorKind?: UploadErrorKind;
+  /** The backend's HTTP status for a `backend` failure. */
+  lastStatus?: number;
+  lastAttemptAt?: string;
+  /** Automatic retries stopped after too many backend errors; needs a manual Retry. */
+  failed?: boolean;
+}
+
+export interface AudioEntry extends AttemptFields {
   id: string;
   stage: 'audio';
   /** Name of the durably-stored audio file within the FileStore. */
@@ -16,21 +35,14 @@ export interface AudioEntry {
   mimeType: string;
   createdAt: string;
   durationMillis: number;
-  attempts: number;
-  lastError?: string;
-  /** Parked after too many failures so it can't wedge the queue; needs manual retry. */
-  failed?: boolean;
 }
 
-export interface NoteEntry {
+export interface NoteEntry extends AttemptFields {
   id: string;
   stage: 'note';
   /** The appointment on the backend whose notes still need generating. */
   appointmentId: string;
   createdAt: string;
-  attempts: number;
-  lastError?: string;
-  failed?: boolean;
 }
 
 /** Persists the queue *metadata* (never the audio bytes). A subset of AsyncStorage. */

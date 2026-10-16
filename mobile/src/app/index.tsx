@@ -1,40 +1,24 @@
 import { router, Stack } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { AppMenu } from '../components/AppMenu';
 import { RecorderScreen } from '../components/RecorderScreen';
 import { useServices } from '../services/context';
+import { uploadBanner } from '../services/upload/uploadBanner';
 
-/** Home route: one-tap exam capture, with History + Settings in the top nav bar. */
+/** Home route: one-tap exam capture, with History, Uploads and Settings in the ☰ menu. */
 export default function RecorderRoute() {
-  const { audioService, enqueueRecording, pendingUploads, settings } = useServices();
+  const { audioService, enqueueRecording, uploads, settings } = useServices();
+  const banner = uploadBanner(uploads);
 
   return (
     <View style={styles.container}>
-      {/* History and Settings live in the header so they're always one tap away at
-          the top, rather than buried below the recorder. */}
+      {/* The menu lives in the header so History, Uploads and Settings are always one
+          tap away at the top, rather than buried below the recorder. */}
       <Stack.Screen
         options={{
           title: '',
-          headerLeft: () => (
-            <Pressable
-              accessibilityRole="button"
-              hitSlop={8}
-              style={styles.headerButton}
-              onPress={() => router.push('/history')}
-            >
-              <Text style={styles.headerButtonText}>History</Text>
-            </Pressable>
-          ),
-          headerRight: () => (
-            <Pressable
-              accessibilityRole="button"
-              hitSlop={8}
-              style={styles.headerButton}
-              onPress={() => router.push('/settings')}
-            >
-              <Text style={styles.headerButtonText}>Settings</Text>
-            </Pressable>
-          ),
+          headerLeft: () => <AppMenu uploads={uploads} onNavigate={(path) => router.push(path)} />,
         }}
       />
       <RecorderScreen
@@ -50,14 +34,14 @@ export default function RecorderRoute() {
             No backend set — open Settings to enter the clinic address.
           </Text>
         </View>
-      ) : pendingUploads > 0 ? (
-        <View style={styles.banner} pointerEvents="none">
-          <Text style={styles.pending}>
-            {pendingUploads === 1
-              ? '1 recording waiting to upload…'
-              : `${pendingUploads} recordings waiting to upload…`}
-          </Text>
-        </View>
+      ) : banner ? (
+        <Pressable
+          accessibilityRole="button"
+          style={styles.banner}
+          onPress={() => router.push('/uploads')}
+        >
+          <Text style={banner.failed ? styles.notConfigured : styles.pending}>{banner.text}</Text>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -67,15 +51,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
-  },
-  headerButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  headerButtonText: {
-    color: '#1b3a5b',
-    fontSize: 16,
-    fontWeight: '600',
   },
   banner: {
     position: 'absolute',

@@ -1,5 +1,14 @@
+import { ApiClientError } from '../api/ApiClient';
 import type { Appointment } from '../api/types';
-import type { AudioEntry, FileStore, NoteEntry, QueueEntry, QueueStore, QueueUploader } from './types';
+import type {
+  AudioEntry,
+  FileStore,
+  NoteEntry,
+  QueueEntry,
+  QueueStore,
+  QueueUploader,
+  UploadErrorKind,
+} from './types';
 
 export interface EnqueueInput {
   uri: string;
@@ -15,8 +24,11 @@ export interface UploadQueueOptions {
   maxAttempts?: number;
   idFactory?: () => string;
   now?: () => string;
-  /** Fired whenever the queue contents change — the UI reflects the pending count. */
-  onChange?: (entries: QueueEntry[]) => void;
+  /**
+   * Fired whenever the queue contents change, with the id of the entry uploading
+   * right now (or null) — the banner and the Uploads screen reflect both.
+   */
+  onChange?: (entries: QueueEntry[], activeId: string | null) => void;
   /** Fired with a fully-generated appointment once it lands (not for partial transitions). */
   onAppointmentReady?: (appointment: Appointment) => void;
 }
@@ -31,7 +43,14 @@ const DEFAULT_MAX_ATTEMPTS = 5;
  * OfflineQueue. Recordings are persisted the moment they're captured (persist-
  * first), so nothing is lost if an upload fails or the app is killed. It drains
  * FIFO with no delay between successes; a failed pass stops early (the backend is
- * likely down) and is retried later with backoff by whoever drives `processOnce`.
+ * likely down) and is retried later by whoever drives `processOnce`.
+ *
+ * Nothing is ever deleted automatically: audio goes only after a successful upload
+ * or a manual `remove`. Failing to reach the backend at all never counts toward
+ * `maxAttempts`, so an outage just keeps retrying; only backend error replies (and
+ * local errors) can mark an entry `failed`, which stops the automatic retries until
+ * a manual `retry`. Only one entry is ever in flight; a pass asked for while one is
+ * running runs right after it instead of being dropped.
  *
  * Pure and fully injectable: persistence, file storage, and the backend are all
  * interfaces, so the whole thing runs in Node against fakes.
@@ -39,6 +58,9 @@ const DEFAULT_MAX_ATTEMPTS = 5;
 export class UploadQueue {
   private entries: QueueEntry[] = [];
   private running = false;
+  private rerunRequested = false;
+  private activeId: string | null = null;
+  private current: Promise<unknown> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
 
   private readonly store: QueueStore;
@@ -47,7 +69,7 @@ export class UploadQueue {
   private readonly maxAttempts: number;
   private readonly idFactory: () => string;
   private readonly now: () => string;
-  private readonly onChange?: (entries: QueueEntry[]) => void;
+  private readonly onChange?: (entries: QueueEntry[], activeId: string | null) => void;
   private readonly onAppointmentReady?: (appointment: Appointment) => void;
 
   constructor(options: UploadQueueOptions) {
@@ -71,7 +93,7 @@ export class UploadQueue {
     if (this.entries.length !== loaded.length) {
       await this.persist();
     } else {
-      this.onChange?.(this.pending());
+      this.notify();
     }
   }
 
@@ -100,8 +122,22 @@ export class UploadQueue {
     return entry;
   }
 
-  /** Discard an entry (and its audio file, if any) — e.g. the vet gives up on it. */
+  /** The entry being uploaded right now, if any. */
+  uploading(): string | null {
+    return this.activeId;
+  }
+
+  /** Resolves once no pass is running (including a follow-up pass it started). */
+  async idle(): Promise<void> {
+    while (this.current) await this.current;
+  }
+
+  /**
+   * Discard an entry (and its audio file, if any) — only ever at the vet's request.
+   * Refused while that entry is uploading, so a half-sent upload can't lose its file.
+   */
   async remove(id: string): Promise<void> {
+    if (id === this.activeId) throw new Error('this recording is uploading right now');
     const entry = this.entries.find((e) => e.id === id);
     if (!entry) return;
     if (entry.stage === 'audio') {
@@ -114,50 +150,35 @@ export class UploadQueue {
   /**
    * Drain the queue. Processes entries FIFO; keeps going as long as it makes
    * progress (so an audio→note transition completes in the same pass), and stops
-   * the moment a non-parked attempt fails (the backend is probably down). A
-   * run-lock prevents overlapping passes from double-uploading.
+   * the moment a non-parked attempt fails (the backend is probably down). Only one
+   * pass runs at a time: asked for while one is running, it runs right after it.
    */
   async processOnce(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    try {
-      let progressed = true;
-      while (progressed) {
-        progressed = false;
-        for (const entry of [...this.entries]) {
-          if (entry.failed) continue;
-          const { outcome } = await this.processEntry(entry);
-          if (outcome === 'transient_failure') return;
-          if (outcome === 'completed' || outcome === 'advanced') progressed = true;
-        }
-      }
-    } finally {
-      this.running = false;
-    }
+    await this.exclusive(() => this.drain());
   }
 
   /**
    * Attempt a single entry once, right now, and return the completed appointment if
    * it lands (following an audio→note transition through to completion). Returns null
-   * if it isn't done yet — the entry stays queued for the background to retry. Used
-   * for the snappy happy path: upload on stop and jump straight to the notes.
+   * if it isn't done yet — the entry stays queued, and if another upload is running
+   * it goes right after that one. Used for the snappy happy path: upload on stop and
+   * jump straight to the notes.
    */
   async tryProcess(id: string): Promise<Appointment | null> {
-    if (this.running) return null;
-    this.running = true;
-    try {
-      // At most two steps: audio upload, then (if it became a note entry) note-gen.
-      for (let step = 0; step < 2; step += 1) {
-        const entry = this.entries.find((e) => e.id === id);
-        if (!entry || entry.failed) return null;
-        const { outcome, appointment } = await this.processEntry(entry);
-        if (outcome === 'completed') return appointment ?? null;
-        if (outcome !== 'advanced') return null;
-      }
-      return null;
-    } finally {
-      this.running = false;
-    }
+    return (await this.exclusive(() => this.attempt(id))) ?? null;
+  }
+
+  /**
+   * The vet's manual Retry: clear a failed entry's give-up state and attempt it now
+   * (or right after the upload in flight). Returns the appointment if it landed.
+   */
+  async retry(id: string): Promise<Appointment | null> {
+    const entry = this.entries.find((e) => e.id === id);
+    if (!entry) return null;
+    entry.failed = false;
+    entry.attempts = 0;
+    await this.persist();
+    return this.tryProcess(id);
   }
 
   /** Begin periodic draining. */
@@ -173,13 +194,77 @@ export class UploadQueue {
     }
   }
 
+  /**
+   * Run `work` as the only thing touching the network. When busy, note that another
+   * pass is wanted and return undefined; once the current work ends, that pass
+   * starts in the background, so a caller awaiting its own upload (Stop) isn't held
+   * up by the others.
+   */
+  private async exclusive<T>(work: () => Promise<T>): Promise<T | undefined> {
+    if (this.running) {
+      this.rerunRequested = true;
+      return undefined;
+    }
+    this.running = true;
+    const run = work();
+    this.current = run;
+    try {
+      return await run;
+    } finally {
+      this.running = false;
+      this.current = null;
+      if (this.rerunRequested) {
+        this.rerunRequested = false;
+        void this.processOnce();
+      }
+    }
+  }
+
+  private async drain(): Promise<void> {
+    do {
+      this.rerunRequested = false;
+      let progressed = true;
+      while (progressed) {
+        progressed = false;
+        for (const snapshot of [...this.entries]) {
+          // Re-read: the vet may have discarded or retried it since the snapshot.
+          const entry = this.entries.find((e) => e.id === snapshot.id);
+          if (!entry || entry.failed) continue;
+          const { outcome } = await this.processEntry(entry);
+          if (outcome === 'transient_failure') {
+            progressed = false;
+            break;
+          }
+          if (outcome === 'completed' || outcome === 'advanced') progressed = true;
+        }
+      }
+    } while (this.rerunRequested);
+  }
+
+  private async attempt(id: string): Promise<Appointment | null> {
+    // At most two steps: audio upload, then (if it became a note entry) note-gen.
+    for (let step = 0; step < 2; step += 1) {
+      const entry = this.entries.find((e) => e.id === id);
+      if (!entry || entry.failed) return null;
+      const { outcome, appointment } = await this.processEntry(entry);
+      if (outcome === 'completed') return appointment ?? null;
+      if (outcome !== 'advanced') return null;
+    }
+    return null;
+  }
+
   private async processEntry(entry: QueueEntry): Promise<StepResult> {
+    this.activeId = entry.id;
+    this.notify();
     try {
       return entry.stage === 'audio'
         ? await this.processAudio(entry)
         : await this.processNote(entry);
     } catch (error) {
       return this.recordFailure(entry, error);
+    } finally {
+      this.activeId = null;
+      this.notify();
     }
   }
 
@@ -221,8 +306,22 @@ export class UploadQueue {
   private async recordFailure(entry: QueueEntry, error: unknown): Promise<StepResult> {
     const current = this.entries.find((e) => e.id === entry.id);
     if (!current) return { outcome: 'transient_failure' };
-    current.attempts += 1;
+    const kind = errorKind(error);
     current.lastError = error instanceof Error ? error.message : String(error);
+    current.lastErrorKind = kind;
+    current.lastAttemptAt = this.now();
+    if (kind === 'backend') {
+      current.lastStatus = (error as ApiClientError).status;
+    } else {
+      delete current.lastStatus;
+    }
+    if (kind === 'unreachable') {
+      // No answer at all: the backend is down or out of reach, which says nothing
+      // about this recording. Keep retrying it for as long as that lasts.
+      await this.persist();
+      return { outcome: 'transient_failure' };
+    }
+    current.attempts += 1;
     const parked = current.attempts >= this.maxAttempts;
     if (parked) current.failed = true;
     await this.persist();
@@ -247,6 +346,15 @@ export class UploadQueue {
 
   private async persist(): Promise<void> {
     await this.store.save(this.entries);
-    this.onChange?.(this.pending());
+    this.notify();
   }
+
+  private notify(): void {
+    this.onChange?.(this.pending(), this.activeId);
+  }
+}
+
+function errorKind(error: unknown): UploadErrorKind {
+  if (!(error instanceof ApiClientError)) return 'other';
+  return error.status === undefined ? 'unreachable' : 'backend';
 }

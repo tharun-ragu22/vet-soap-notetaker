@@ -6,6 +6,7 @@ import type { Recorder, RecordingResult } from '../services/audio/types';
 import { AppointmentScreen } from '../components/AppointmentScreen';
 import { HistoryScreen } from '../components/HistoryScreen';
 import { RecorderScreen } from '../components/RecorderScreen';
+import { UploadsScreen } from '../components/UploadsScreen';
 import { UploadQueue } from '../services/upload/uploadQueue';
 import type { FileStore, QueueEntry, QueueStore } from '../services/upload/types';
 import { FakeBackend } from './fakeBackend';
@@ -36,8 +37,9 @@ class MemFileStore implements FileStore {
   }
 }
 
-function makeQueue(apiClient: ApiClient): UploadQueue {
+function makeQueue(apiClient: ApiClient, maxAttempts?: number): UploadQueue {
   return new UploadQueue({
+    maxAttempts,
     store: new MemQueueStore(),
     files: new MemFileStore(),
     uploader: {
@@ -228,5 +230,94 @@ describe('screens end-to-end', () => {
     expect(new Set(requests.map((r) => r.exam.transcript))).toEqual(
       new Set(['vet: Bella has otitis, Max has a cut pad']),
     );
+  });
+
+  describe('recordings that did not upload', () => {
+    const recorder = (): Recorder => ({
+      start: jest.fn(async () => {}),
+      stop: jest.fn(async (): Promise<RecordingResult> => ({ uri: 'file:///r.m4a', durationMillis: 28_000 })),
+    });
+
+    async function recordOnce(queue: UploadQueue) {
+      const onRecorded = jest.fn();
+      const { unmount } = render(
+        <RecorderScreen
+          audioService={new AudioService(recorder())}
+          enqueueRecording={enqueueVia(queue)}
+          onRecorded={onRecorded}
+        />,
+      );
+      fireEvent.press(screen.getByText(/start/i));
+      await waitFor(() => expect(screen.getByText(/stop/i)).toBeTruthy());
+      fireEvent.press(screen.getByText(/stop/i));
+      await waitFor(() => expect(screen.getByText(/uploading in the background/i)).toBeTruthy());
+      unmount();
+      return onRecorded;
+    }
+
+    function renderUploads(queue: UploadQueue, onOpenAppointment = jest.fn()) {
+      render(
+        <UploadsScreen
+          entries={queue.pending()}
+          activeId={null}
+          onRetry={(id) => queue.retry(id)}
+          onDiscard={(id) => queue.remove(id)}
+          onOpenAppointment={onOpenAppointment}
+        />,
+      );
+      return onOpenAppointment;
+    }
+
+    it('keeps retrying while the backend is unreachable, then a manual Retry lands on the notes', async () => {
+      const backend = new FakeBackend();
+      backend.unreachable = true;
+      const apiClient = client(backend);
+      const queue = makeQueue(apiClient, 5);
+
+      const onRecorded = await recordOnce(queue);
+      for (let i = 0; i < 8; i += 1) await queue.processOnce();
+
+      expect(onRecorded).not.toHaveBeenCalled();
+      const [entry] = queue.pending();
+      expect(entry.failed).toBeFalsy();
+
+      backend.unreachable = false;
+      const onOpenAppointment = renderUploads(queue);
+      expect(screen.getByTestId(`upload-row-${entry.id}`)).toHaveTextContent("Can't reach the backend", {
+        exact: false,
+      });
+      fireEvent.press(screen.getByTestId(`retry-${entry.id}`));
+
+      await waitFor(() => expect(onOpenAppointment).toHaveBeenCalled());
+      const [appointment] = await apiClient.fetchAppointments();
+      expect(onOpenAppointment).toHaveBeenCalledWith(appointment.id);
+      expect(queue.pending()).toHaveLength(0);
+    });
+
+    it('stops retrying after 5 backend errors, shows why, and a Retry after recovery uploads it', async () => {
+      const backend = new FakeBackend();
+      backend.failTranscription = true;
+      const apiClient = client(backend);
+      const queue = makeQueue(apiClient, 5);
+
+      await recordOnce(queue); // the immediate attempt is the first try
+      for (let i = 0; i < 6; i += 1) await queue.processOnce();
+
+      const [entry] = queue.pending();
+      expect(entry).toMatchObject({ failed: true, attempts: 5 });
+      expect(await apiClient.fetchAppointments()).toHaveLength(0);
+
+      backend.failTranscription = false;
+      const onOpenAppointment = renderUploads(queue);
+      const row = screen.getByTestId(`upload-row-${entry.id}`);
+      expect(row).toHaveTextContent('Upload failed after 5 tries', { exact: false });
+      expect(row).toHaveTextContent('Backend error (502)', { exact: false });
+
+      fireEvent.press(screen.getByTestId(`retry-${entry.id}`));
+
+      await waitFor(() => expect(onOpenAppointment).toHaveBeenCalled());
+      expect(await apiClient.fetchAppointments()).toHaveLength(1);
+      expect(queue.pending()).toHaveLength(0);
+    });
   });
 });

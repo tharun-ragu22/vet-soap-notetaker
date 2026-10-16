@@ -369,4 +369,74 @@ describe('ApiClient', () => {
       }
     });
   });
+
+  describe('error status (did the backend answer?)', () => {
+    async function rejectionOf(promise: Promise<unknown>): Promise<ApiClientError> {
+      try {
+        await promise;
+      } catch (error) {
+        return error as ApiClientError;
+      }
+      throw new Error('expected a rejection');
+    }
+
+    it('carries the HTTP status when the backend replies with an error', async () => {
+      const { fetchFn } = stubFetch(() => jsonResponse({ error: 'upstream' }, { ok: false, status: 502 }));
+      const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: fetchFn });
+
+      const error = await rejectionOf(client.createAppointment(new Uint8Array([1]), 'audio/m4a'));
+
+      expect(error).toBeInstanceOf(ApiClientError);
+      expect(error.status).toBe(502);
+    });
+
+    it('carries the status when the backend answers with invalid JSON', async () => {
+      const fetchFn: HttpFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new Error('Unexpected token <');
+        },
+        text: async () => '<html>',
+      });
+      const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: fetchFn });
+
+      const error = await rejectionOf(client.fetchAppointments());
+
+      expect(error.status).toBe(200);
+    });
+
+    it('has no status when the request never got an answer', async () => {
+      const fetchFn: HttpFetch = async () => {
+        throw new TypeError('Network request failed');
+      };
+      const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: fetchFn });
+
+      const error = await rejectionOf(client.createAppointment(new Uint8Array([1]), 'audio/m4a'));
+
+      expect(error).toBeInstanceOf(ApiClientError);
+      expect(error.status).toBeUndefined();
+    });
+
+    it('has no status when the request timed out', async () => {
+      jest.useFakeTimers();
+      try {
+        const hanging: HttpFetch = (_url, init) =>
+          new Promise((_resolve, reject) => {
+            const signal = init?.signal as AbortSignal | undefined;
+            signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          });
+        const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: hanging, timeoutMs: 500 });
+        const promise = rejectionOf(client.createAppointment(new Uint8Array([1]), 'audio/m4a'));
+        await jest.advanceTimersByTimeAsync(500);
+
+        const error = await promise;
+
+        expect(error).toBeInstanceOf(ApiClientError);
+        expect(error.status).toBeUndefined();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
 });

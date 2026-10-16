@@ -104,6 +104,10 @@ export class FakeBackend {
   private readonly notesForAudio: NonNullable<FakeBackendOptions['notesForAudio']>;
   /** Mutable so a test can simulate note generation recovering mid-run. */
   failNoteGeneration: boolean;
+  /** No answer at all (backend off or out of reach): every request throws, like fetch. */
+  unreachable = false;
+  /** Transcription fails: an upload gets a 502 and nothing is saved. */
+  failTranscription = false;
 
   /** Plug this into `new ApiClient({ ..., fetch: backend.fetch })`. */
   readonly fetch: HttpFetch;
@@ -234,6 +238,8 @@ export class FakeBackend {
   }
 
   private async handle(url: string, init: HttpRequestInit = {}): Promise<HttpResponse> {
+    // React Native's fetch rejects with this when nothing answers.
+    if (this.unreachable) throw new TypeError('Network request failed');
     const { pathname } = new URL(url);
     const method = (init.method ?? 'GET').toUpperCase();
     const headers = init.headers ?? {};
@@ -247,6 +253,7 @@ export class FakeBackend {
     // POST /api/appointments — upload audio: transcript + one exam per animal
     if (method === 'POST' && pathname === '/api/appointments') {
       if (init.body == null) return response({ error: 'empty request body' }, 400);
+      if (this.failTranscription) return response({ error: 'transcription failed' }, 502);
       const { transcript, patients } = this.notesForAudio(init.body);
       if (this.failNoteGeneration) {
         return response(this.appointmentJson(this.addPendingAppointment(transcript)), 202);

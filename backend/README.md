@@ -67,6 +67,19 @@ Listens on port 8443 by default (override with `PORT`), matching Vet Soap Noteta
 point Vet Soap Notetaker's Settings at `http://localhost:8443/api/soap`, or put a TLS-terminating proxy in
 front of it for anything beyond local testing.
 
+### Logs
+
+The backend logs to the console (the packaged, windowless `.exe` writes the same lines to
+`%APPDATA%\VetScribe\logs\backend.log`). When a recording is slow, look for:
+
+- `recording processed: outcome=complete transcribe_ms=… note_gen_ms=… patient_count=… total_ms=…`
+  — one line per upload, saying where the time went (`outcome` is `complete`, `note_pending` or
+  `failed`, with the error type for the last two).
+- `provider request failed (ReadTimeout) after 120.0s; retry 1 of 3 in 1s` — a provider call
+  being retried (timeouts, 429s and 5xx are retried up to 3 times, each with its own 120s timeout).
+
+Both are metadata only: no transcript, note text, patient names or provider URLs.
+
 ## History & cross-device sync
 
 Every generated note is persisted so it can sync across the desktop tray app and the mobile

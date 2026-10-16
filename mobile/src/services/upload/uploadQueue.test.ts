@@ -1,3 +1,4 @@
+import { ApiClientError } from '../api/ApiClient';
 import type { Appointment } from '../api/types';
 import { UploadQueue, type UploadQueueOptions } from './uploadQueue';
 import type { FileStore, QueueEntry, QueueStore, QueueUploader } from './types';
@@ -289,5 +290,167 @@ describe('UploadQueue', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  describe('unreachable backend vs backend errors', () => {
+    const unreachable = () => new ApiClientError('request failed: Network request failed');
+    const badGateway = () => new ApiClientError('backend returned 502: {}', 502);
+
+    it('never gives up on a recording while the backend simply cannot be reached', async () => {
+      const { queue, uploader } = makeQueue({ maxAttempts: 2, now: () => '2026-10-16T15:50:00Z' });
+      uploader.createAppointment.mockRejectedValue(unreachable());
+
+      await queue.enqueue(REC);
+      for (let i = 0; i < 5; i += 1) await queue.processOnce();
+
+      const [entry] = queue.pending();
+      expect(entry.failed).toBeFalsy();
+      expect(entry.attempts).toBe(0);
+      expect(entry).toMatchObject({ lastErrorKind: 'unreachable', lastAttemptAt: '2026-10-16T15:50:00Z' });
+      expect(entry.lastStatus).toBeUndefined();
+      expect(uploader.createAppointment).toHaveBeenCalledTimes(5);
+    });
+
+    it('still stops the pass at an unreachable backend', async () => {
+      const { queue, uploader } = makeQueue();
+      uploader.createAppointment.mockRejectedValue(unreachable());
+
+      await queue.enqueue(REC);
+      await queue.enqueue(REC);
+      await queue.processOnce();
+
+      expect(uploader.createAppointment).toHaveBeenCalledTimes(1);
+    });
+
+    it('marks a recording failed after maxAttempts backend error replies', async () => {
+      const { queue, uploader } = makeQueue({ maxAttempts: 2 });
+      uploader.createAppointment.mockRejectedValue(badGateway());
+
+      await queue.enqueue(REC);
+      await queue.processOnce();
+      await queue.processOnce();
+
+      expect(queue.pending()[0]).toMatchObject({
+        failed: true,
+        attempts: 2,
+        lastErrorKind: 'backend',
+        lastStatus: 502,
+      });
+    });
+
+    it('counts any other error, as kind "other"', async () => {
+      const { queue, uploader } = makeQueue({ maxAttempts: 1 });
+      uploader.createAppointment.mockRejectedValue(new Error('no such file'));
+
+      await queue.enqueue(REC);
+      await queue.processOnce();
+
+      expect(queue.pending()[0]).toMatchObject({ failed: true, lastErrorKind: 'other' });
+    });
+  });
+
+  describe('retry (manual, from the Uploads screen)', () => {
+    it('clears a failed entry and uploads it now', async () => {
+      const { queue, uploader } = makeQueue({ maxAttempts: 1 });
+      uploader.createAppointment.mockRejectedValueOnce(new ApiClientError('502', 502));
+      const entry = await queue.enqueue(REC);
+      await queue.processOnce();
+      expect(queue.pending()[0].failed).toBe(true);
+
+      uploader.createAppointment.mockResolvedValueOnce(appointment({ id: 'back' }));
+      const result = await queue.retry(entry.id);
+
+      expect(result).toMatchObject({ id: 'back' });
+      expect(queue.pending()).toHaveLength(0);
+    });
+
+    it('resets the attempt count, so a failed retry starts counting again', async () => {
+      const { queue, uploader } = makeQueue({ maxAttempts: 3 });
+      uploader.createAppointment.mockRejectedValue(new ApiClientError('502', 502));
+      const entry = await queue.enqueue(REC);
+      for (let i = 0; i < 3; i += 1) await queue.processOnce();
+
+      const result = await queue.retry(entry.id);
+
+      expect(result).toBeNull();
+      expect(queue.pending()[0]).toMatchObject({ attempts: 1 });
+      expect(queue.pending()[0].failed).toBeFalsy();
+    });
+
+    it('while another upload is running, uploads the entry as soon as that pass ends', async () => {
+      const { queue, uploader } = makeQueue({ maxAttempts: 1 });
+      uploader.createAppointment.mockRejectedValueOnce(new ApiClientError('502', 502));
+      const failedEntry = await queue.enqueue(REC);
+      await queue.processOnce();
+
+      let release!: (a: Appointment) => void;
+      uploader.createAppointment.mockImplementationOnce(
+        () => new Promise<Appointment>((resolve) => { release = resolve; }),
+      );
+      await queue.enqueue(REC);
+      const running = queue.processOnce(); // busy with the second recording
+
+      const result = await queue.retry(failedEntry.id);
+      expect(result).toBeNull();
+
+      uploader.createAppointment.mockResolvedValueOnce(appointment({ id: 'retried' }));
+      release(appointment({ id: 'second' }));
+      await running;
+
+      expect(queue.pending()).toHaveLength(0);
+      expect(uploader.createAppointment).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it('a recording stopped during another upload is uploaded right after it, not on the next tick', async () => {
+    const { queue, uploader, onAppointmentReady } = makeQueue();
+    let release!: (a: Appointment) => void;
+    uploader.createAppointment.mockImplementationOnce(
+      () => new Promise<Appointment>((resolve) => { release = resolve; }),
+    );
+    // Stop on the first recording: the immediate attempt holds the queue.
+    const first = await queue.enqueue(REC);
+    const running = queue.tryProcess(first.id);
+
+    const second = await queue.enqueue(REC);
+    expect(await queue.tryProcess(second.id)).toBeNull(); // busy: stays queued
+
+    uploader.createAppointment.mockResolvedValueOnce(appointment({ id: 'second' }));
+    release(appointment({ id: 'first' }));
+    // Stop's own attempt returns as soon as its recording is done (the record
+    // button mustn't wait on others); the follow-up pass runs in the background.
+    expect(await running).toMatchObject({ id: 'first' });
+    await queue.idle();
+
+    expect(queue.pending()).toHaveLength(0);
+    expect(onAppointmentReady).toHaveBeenCalledWith(expect.objectContaining({ id: 'second' }));
+  });
+
+  it('reports which entry is uploading through onChange', async () => {
+    const { queue, onChange } = makeQueue();
+    const entry = await queue.enqueue(REC);
+    onChange.mockClear();
+
+    await queue.processOnce();
+
+    const activeIds = onChange.mock.calls.map((call) => call[1]);
+    expect(activeIds).toContain(entry.id);
+    expect(activeIds[activeIds.length - 1]).toBeNull();
+  });
+
+  it('refuses to discard an entry while it is uploading', async () => {
+    const { queue, uploader, files } = makeQueue();
+    let release!: (a: Appointment) => void;
+    uploader.createAppointment.mockImplementationOnce(
+      () => new Promise<Appointment>((resolve) => { release = resolve; }),
+    );
+    const entry = await queue.enqueue(REC);
+    const running = queue.processOnce();
+
+    await expect(queue.remove(entry.id)).rejects.toThrow(/uploading/i);
+    expect(files.deleted).toHaveLength(0);
+
+    release(appointment());
+    await running;
   });
 });
