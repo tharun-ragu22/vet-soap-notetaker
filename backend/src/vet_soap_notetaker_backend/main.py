@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from pathlib import Path
@@ -29,6 +30,17 @@ def _frozen_log_path(env=os.environ) -> Path:
     return base / "logs" / "backend.log"
 
 
+def _show_backend_logs() -> None:
+    # uvicorn configures only its own loggers, so the backend's INFO lines
+    # (per-recording timings, provider retries) would otherwise be dropped.
+    package_logger = logging.getLogger("vet_soap_notetaker_backend")
+    package_logger.setLevel(logging.INFO)
+    if not package_logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        package_logger.addHandler(handler)
+
+
 def run():
     # A PyInstaller windowless build (console=False) has no stdout/stderr, so
     # uvicorn's default stream logging would fail. When frozen, redirect both to
@@ -40,6 +52,7 @@ def run():
         stream = open(log_path, "a", buffering=1, encoding="utf-8")
         sys.stdout = stream
         sys.stderr = stream
+    _show_backend_logs()
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8443")))
 
 

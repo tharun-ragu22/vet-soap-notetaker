@@ -15,9 +15,12 @@ the error. ``post_with_retries`` centralises this so every provider gets the sam
 behaviour instead of each re-implementing it.
 """
 
+import logging
 import time
 
 import httpx
+
+logger = logging.getLogger("vet_soap_notetaker_backend.http_retry")
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_RETRIES = 3
@@ -48,6 +51,7 @@ def post_with_retries(
     """
     attempt = 0
     while True:
+        started = time.perf_counter()
         try:
             response = httpx.post(**post_kwargs)
             response.raise_for_status()
@@ -55,5 +59,19 @@ def post_with_retries(
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             if attempt >= max_retries or not _is_retryable(exc):
                 raise
-            time.sleep(backoff_base_seconds * 2**attempt)
+            delay = backoff_base_seconds * 2**attempt
+            # Never the URL or str(exc): both can name the provider endpoint.
+            status = (
+                f" {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else ""
+            )
+            logger.warning(
+                "provider request failed (%s%s) after %.1fs; retry %d of %d in %.0fs",
+                type(exc).__name__,
+                status,
+                time.perf_counter() - started,
+                attempt + 1,
+                max_retries,
+                delay,
+            )
+            time.sleep(delay)
             attempt += 1

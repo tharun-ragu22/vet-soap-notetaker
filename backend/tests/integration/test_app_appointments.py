@@ -380,3 +380,30 @@ def test_each_animal_is_injected_on_its_own(make_client):
 
     assert request["exam"]["patient_name"] == "Max"
     assert request["exam"]["plan"] == "p2"
+
+
+# --- Timing log ------------------------------------------------------------------
+
+
+def test_create_appointment_logs_where_the_time_went_without_patient_data(make_client, caplog):
+    client, _ = make_client()
+
+    with caplog.at_level("INFO", logger="vet_soap_notetaker_backend.app"):
+        client.post("/api/appointments", content=b"RIFF....audio....")
+
+    [line] = [r.getMessage() for r in caplog.records if "transcribe_ms" in r.getMessage()]
+    assert "outcome=complete" in line
+    assert "note_gen_ms=" in line and "total_ms=" in line and "patient_count=2" in line
+    for secret in ("two dogs today", "Bella", "Max", "p1"):
+        assert secret not in line
+
+
+def test_create_appointment_logs_the_failed_stage(make_client, caplog):
+    pipeline = FakePipeline(transcript="two dogs today", note_error=NoteParsingError("bad"))
+    client, _ = make_client(pipeline=pipeline)
+
+    with caplog.at_level("INFO", logger="vet_soap_notetaker_backend.app"):
+        client.post("/api/appointments", content=b"RIFF")
+
+    [line] = [r.getMessage() for r in caplog.records if "transcribe_ms" in r.getMessage()]
+    assert "outcome=note_pending" in line and "NoteParsingError" in line

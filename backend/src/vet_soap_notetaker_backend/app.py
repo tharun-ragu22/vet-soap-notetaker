@@ -166,6 +166,19 @@ def create_app(
         TranscriptionError,
     )
 
+    def _log_recording(outcome: str, started: float, timing: dict, **extra) -> None:
+        # One line per recording so a slow step shows in the console without
+        # PostHog. Metadata only, like the analytics event.
+        fields = {
+            "outcome": outcome,
+            "transcribe_ms": timing.get("transcribe_ms"),
+            **extra,
+            "total_ms": _elapsed_ms(started),
+            "audio_bytes": timing["audio_bytes"],
+            "audio_duration_ms": timing["audio_duration_ms"],
+        }
+        logger.info("recording processed: %s", " ".join(f"{k}={v}" for k, v in fields.items()))
+
     async def _create_appointment(request: Request) -> JSONResponse | tuple[Appointment, int]:
         """Transcribe the uploaded audio and generate a note per animal: the saved
         appointment and its status code (200, or 202 with the note pending), or
@@ -201,6 +214,7 @@ def create_app(
                 **timing,
                 **error_properties(exc),
             )
+            _log_recording("failed", started, timing, error=type(exc).__name__)
             return _provider_error_response(exc)
         timing["transcribe_ms"] = _elapsed_ms(started)
         note_started = time.perf_counter()
@@ -226,6 +240,13 @@ def create_app(
                 **timing,
                 **error_properties(exc),
             )
+            _log_recording(
+                "note_pending",
+                started,
+                timing,
+                note_gen_ms=_elapsed_ms(note_started),
+                error=type(exc).__name__,
+            )
             return appointment, 202
 
         # Persist so the notes sync to every device (mobile + desktop history).
@@ -240,6 +261,13 @@ def create_app(
             note_gen_ms=_elapsed_ms(note_started),
             total_ms=_elapsed_ms(started),
             **timing,
+        )
+        _log_recording(
+            "complete",
+            started,
+            timing,
+            note_gen_ms=_elapsed_ms(note_started),
+            patient_count=len(appointment.exams),
         )
         return appointment, 200
 

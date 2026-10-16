@@ -136,3 +136,18 @@ def test_passes_through_post_kwargs(monkeypatch, sleeps):
     assert fake.last_kwargs["params"] == {"key": "secret"}
     assert fake.last_kwargs["json"] == {"a": 1}
     assert fake.last_kwargs["timeout"] == 120
+
+
+def test_logs_each_retry_with_the_failure_type_but_not_the_url(monkeypatch, sleeps, caplog):
+    # Retries are otherwise invisible: a stalled provider just looks like a slow
+    # request. The URL stays out (it names the model and could carry a key).
+    _install(monkeypatch, [_response(503), httpx.ReadTimeout("timed out"), _response(200)])
+
+    with caplog.at_level("WARNING", logger="vet_soap_notetaker_backend.http_retry"):
+        post_with_retries(url=URL)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 2
+    assert "HTTPStatusError" in messages[0] and "503" in messages[0]
+    assert "ReadTimeout" in messages[1]
+    assert all(URL not in m and "example.test" not in m for m in messages)
