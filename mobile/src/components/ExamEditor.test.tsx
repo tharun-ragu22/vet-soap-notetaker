@@ -7,6 +7,7 @@ import { ExamEditor } from './ExamEditor';
 function makeExam(overrides: Partial<Exam> = {}): Exam {
   return {
     id: 'exam-1',
+    appointmentId: 'appt-1',
     createdAt: '2026-09-22T10:00:00Z',
     patientName: 'Rex',
     subjective: 'S',

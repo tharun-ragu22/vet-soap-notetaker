@@ -1,4 +1,4 @@
-import type { AudioBody, Exam } from '../api/types';
+import type { Appointment, AudioBody } from '../api/types';
 
 /**
  * A queued unit of work. It starts life as an `audio` entry (a recording that
@@ -25,8 +25,8 @@ export interface AudioEntry {
 export interface NoteEntry {
   id: string;
   stage: 'note';
-  /** The partial exam on the backend whose note still needs generating. */
-  examId: string;
+  /** The appointment on the backend whose notes still need generating. */
+  appointmentId: string;
   createdAt: string;
   attempts: number;
   lastError?: string;
@@ -49,6 +49,6 @@ export interface FileStore {
 
 /** The backend operations the queue drives — the subset of ApiClient it needs. */
 export interface QueueUploader {
-  generateNote(audio: AudioBody, mimeType: string): Promise<Exam>;
-  completeNote(examId: string): Promise<Exam>;
+  createAppointment(audio: AudioBody, mimeType: string): Promise<Appointment>;
+  completeAppointment(appointmentId: string): Promise<Appointment>;
 }

@@ -4,18 +4,18 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AudioService } from '../services/audio/AudioService';
 import { expoKeepAwake } from '../services/audio/expoKeepAwake';
 import type { KeepAwake, RecordingResult } from '../services/audio/types';
-import type { Exam } from '../services/api/types';
+import type { Appointment } from '../services/api/types';
 
 export interface RecorderScreenProps {
   /** The capture state machine (idle → recording → processing → idle). */
   audioService: AudioService;
   /**
    * Durably queue the finished recording and attempt it immediately. Resolves to the
-   * exam if it uploaded right away, or null if it's still queued for background retry.
+   * appointment if it uploaded right away, or null if it's still queued for background retry.
    */
-  enqueueRecording: (result: RecordingResult) => Promise<Exam | null>;
-  /** Called once the backend has generated and stored the note. */
-  onRecorded?: (exam: Exam) => void;
+  enqueueRecording: (result: RecordingResult) => Promise<Appointment | null>;
+  /** Called once the backend has generated and stored the notes (one per animal). */
+  onRecorded?: (appointment: Appointment) => void;
   /**
    * Holds the display awake while recording. Injectable for tests; defaults to the
    * real expo-keep-awake wrapper.
@@ -80,9 +80,9 @@ export function RecorderScreen({
       return;
     }
     try {
-      const exam = await enqueueRecording(result);
-      if (exam) {
-        onRecorded?.(exam);
+      const appointment = await enqueueRecording(result);
+      if (appointment) {
+        onRecorded?.(appointment);
       } else {
         // Saved durably but not uploaded yet — the queue will keep retrying.
         setNotice('Saved — uploading in the background.');

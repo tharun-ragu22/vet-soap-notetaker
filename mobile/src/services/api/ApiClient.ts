@@ -1,4 +1,13 @@
-import type { AudioBody, Exam, InjectionRequest, SoapNote } from './types';
+import type {
+  Appointment,
+  AppointmentDraft,
+  AppointmentExam,
+  AudioBody,
+  Exam,
+  InjectionRequest,
+  PatientNote,
+  SoapNote,
+} from './types';
 
 export class ApiClientError extends Error {}
 
@@ -40,6 +49,7 @@ export interface ApiClientOptions {
 
 interface RawExam {
   id: string;
+  appointment_id: string;
   created_at: string;
   patient_name?: string | null;
   subjective: string;
@@ -48,6 +58,24 @@ interface RawExam {
   plan: string;
   transcript: string;
   note_pending?: boolean;
+}
+
+type RawAppointmentExam = Omit<RawExam, 'transcript'>;
+
+interface RawAppointment {
+  id: string;
+  created_at: string;
+  transcript: string;
+  note_pending: boolean;
+  exams: RawAppointmentExam[];
+}
+
+interface RawPatientNote {
+  patient_name?: string | null;
+  subjective: string;
+  objective: string;
+  assessment: string;
+  plan: string;
 }
 
 interface RawInjectionRequest {
@@ -103,6 +131,102 @@ export class ApiClient {
       method: 'POST',
     });
     return this.toExam(raw as RawExam);
+  }
+
+  /**
+   * Upload a recording and get back the appointment: the shared transcript and one
+   * exam per animal. On a 202 (transcribed, note generation failed) it comes back
+   * with `notePending: true` and a single empty exam — finish it later with
+   * {@link completeAppointment}, which needs no re-upload.
+   */
+  async createAppointment(audio: AudioBody, mimeType: string): Promise<Appointment> {
+    const raw = await this.request('/api/appointments', {
+      method: 'POST',
+      headers: { 'Content-Type': mimeType },
+      body: audio,
+    });
+    return this.toAppointment(raw as RawAppointment);
+  }
+
+  /**
+   * Generate a note-pending appointment's notes from its saved transcript (no
+   * re-upload). Idempotent: a complete appointment comes back unchanged.
+   */
+  async completeAppointment(id: string): Promise<Appointment> {
+    const raw = await this.request(`/api/appointments/${encodeURIComponent(id)}/notes`, {
+      method: 'POST',
+    });
+    return this.toAppointment(raw as RawAppointment);
+  }
+
+  /** Fetch all appointments (newest first), synced across mobile and desktop sessions. */
+  async fetchAppointments(): Promise<Appointment[]> {
+    const raw = (await this.request('/api/appointments', { method: 'GET' })) as {
+      appointments?: RawAppointment[];
+    };
+    return (raw.appointments ?? []).map((a) => this.toAppointment(a));
+  }
+
+  /** Fetch a single appointment by id. */
+  async getAppointment(id: string): Promise<Appointment> {
+    const raw = await this.request(`/api/appointments/${encodeURIComponent(id)}`, {
+      method: 'GET',
+    });
+    return this.toAppointment(raw as RawAppointment);
+  }
+
+  /**
+   * Save the whole appointment: the shared transcript and every animal. Exams with an
+   * `id` are updated, ones without are added, and exams left out are deleted.
+   */
+  async updateAppointment(id: string, draft: AppointmentDraft): Promise<Appointment> {
+    const body = {
+      transcript: draft.transcript,
+      exams: draft.exams.map((exam) => ({
+        id: exam.id ?? null,
+        patient_name: exam.patientName ?? null,
+        subjective: exam.subjective,
+        objective: exam.objective,
+        assessment: exam.assessment,
+        plan: exam.plan,
+      })),
+    };
+    const raw = await this.request(`/api/appointments/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return this.toAppointment(raw as RawAppointment);
+  }
+
+  /** Delete an appointment and every animal's exam in it, on every device. */
+  async deleteAppointment(id: string): Promise<void> {
+    await this.request(`/api/appointments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  /**
+   * Re-run note generation from a hand-corrected transcript: one note per animal,
+   * nothing saved — the vet reviews them and saves with {@link updateAppointment}.
+   */
+  async regenerateAppointment(
+    transcript: string,
+    appointmentId?: string,
+  ): Promise<{ transcript: string; patients: PatientNote[] }> {
+    const raw = (await this.request('/api/appointments/regenerate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transcript, appointment_id: appointmentId ?? null }),
+    })) as { transcript?: string; patients?: RawPatientNote[] };
+    return {
+      transcript: raw.transcript ?? transcript,
+      patients: (raw.patients ?? []).map((p) => ({
+        patientName: p.patient_name ?? undefined,
+        subjective: p.subjective,
+        objective: p.objective,
+        assessment: p.assessment,
+        plan: p.plan,
+      })),
+    };
   }
 
   /** Fetch all exams (newest first), synced across mobile and desktop sessions. */
@@ -208,9 +332,34 @@ export class ApiClient {
     }
   }
 
+  private toAppointment(raw: RawAppointment): Appointment {
+    return {
+      id: raw.id,
+      createdAt: raw.created_at,
+      transcript: raw.transcript,
+      notePending: raw.note_pending ?? false,
+      exams: (raw.exams ?? []).map((e) => this.toAppointmentExam(e)),
+    };
+  }
+
+  private toAppointmentExam(raw: RawAppointmentExam): AppointmentExam {
+    return {
+      id: raw.id,
+      appointmentId: raw.appointment_id,
+      createdAt: raw.created_at,
+      patientName: raw.patient_name ?? undefined,
+      subjective: raw.subjective,
+      objective: raw.objective,
+      assessment: raw.assessment,
+      plan: raw.plan,
+      notePending: raw.note_pending ?? false,
+    };
+  }
+
   private toExam(raw: RawExam): Exam {
     return {
       id: raw.id,
+      appointmentId: raw.appointment_id,
       createdAt: raw.created_at,
       patientName: raw.patient_name ?? undefined,
       subjective: raw.subjective,

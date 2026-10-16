@@ -17,7 +17,7 @@ import {
   type SettingsStorage,
 } from '../config/settings';
 import { ApiClient, ApiClientError } from './api/ApiClient';
-import type { Exam } from './api/types';
+import type { Appointment } from './api/types';
 import { AudioService } from './audio/AudioService';
 import type { RecordingResult } from './audio/types';
 import { useExpoAudioRecorder } from './audio/useExpoAudioRecorder';
@@ -38,10 +38,10 @@ export interface Services {
   audioService: AudioService;
   /**
    * Durably queue a finished recording and attempt it immediately. Resolves to the
-   * exam if it uploaded right away (jump straight to the note), or null if it's
-   * still queued — the background queue keeps retrying either way, so nothing is lost.
+   * appointment if it uploaded right away (jump straight to the notes), or null if
+   * it's still queued — the background queue keeps retrying either way, so nothing is lost.
    */
-  enqueueRecording: (result: RecordingResult) => Promise<Exam | null>;
+  enqueueRecording: (result: RecordingResult) => Promise<Appointment | null>;
   /** Number of recordings still waiting to upload (drives the pending banner). */
   pendingUploads: number;
   /** The backend connection currently in effect (editable via the Settings screen). */
@@ -103,8 +103,8 @@ export function ServicesProvider({
       store: asyncQueueStore,
       files: expoFileStore,
       uploader: {
-        generateNote: (bytes, mime) => apiClient.generateNote(bytes, mime),
-        completeNote: (id) => apiClient.completeNote(id),
+        createAppointment: (bytes, mime) => apiClient.createAppointment(bytes, mime),
+        completeAppointment: (id) => apiClient.completeAppointment(id),
       },
       onChange: (entries) => setPendingUploads(entries.length),
     });
@@ -126,7 +126,7 @@ export function ServicesProvider({
   }, [queue]);
 
   const enqueueRecording = useCallback(
-    async (result: RecordingResult): Promise<Exam | null> => {
+    async (result: RecordingResult): Promise<Appointment | null> => {
       if (!queue) throw new ApiClientError('no backend configured');
       // Persist-first: the recording is durable before any upload is attempted.
       const entry = await queue.enqueue({

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 
 import { AudioService } from '../services/audio/AudioService';
 import type { KeepAwake, Recorder, RecordingResult } from '../services/audio/types';
-import type { Exam } from '../services/api/types';
+import type { Appointment } from '../services/api/types';
 import { RecorderScreen } from './RecorderScreen';
 
 function makeKeepAwake(): jest.Mocked<KeepAwake> {
@@ -21,15 +21,12 @@ function makeRecorder(overrides: Partial<Recorder> = {}): jest.Mocked<Recorder> 
   } as jest.Mocked<Recorder>;
 }
 
-const exam: Exam = {
-  id: 'exam-9',
+const appointment: Appointment = {
+  id: 'appt-9',
   createdAt: '2026-09-22T10:00:00Z',
-  patientName: 'Rex',
-  subjective: 'S',
-  objective: 'O',
-  assessment: 'A',
-  plan: 'P',
   transcript: 'vet: hello',
+  notePending: false,
+  exams: [],
 };
 
 describe('RecorderScreen', () => {
@@ -52,10 +49,10 @@ describe('RecorderScreen', () => {
     expect(audioService.isRecording).toBe(true);
   });
 
-  it('on stop, queues the recording and reports the exam when it uploads immediately', async () => {
+  it('on stop, queues the recording and reports the appointment when it uploads immediately', async () => {
     const recorder = makeRecorder();
     const audioService = new AudioService(recorder);
-    const enqueueRecording = jest.fn(async () => exam);
+    const enqueueRecording = jest.fn(async () => appointment);
     const onRecorded = jest.fn();
     render(
       <RecorderScreen
@@ -69,7 +66,7 @@ describe('RecorderScreen', () => {
     await waitFor(() => expect(screen.getByText(/stop/i)).toBeTruthy());
     fireEvent.press(screen.getByText(/stop/i));
 
-    await waitFor(() => expect(onRecorded).toHaveBeenCalledWith(exam));
+    await waitFor(() => expect(onRecorded).toHaveBeenCalledWith(appointment));
     expect(enqueueRecording).toHaveBeenCalledWith({ uri: 'file:///rec.m4a', durationMillis: 4200 });
     // back to idle, ready for the next exam
     await waitFor(() => expect(screen.getByText(/start/i)).toBeTruthy());
@@ -122,7 +119,7 @@ describe('RecorderScreen', () => {
     render(
       <RecorderScreen
         audioService={audioService}
-        enqueueRecording={jest.fn(async () => exam)}
+        enqueueRecording={jest.fn(async () => appointment)}
         keepAwake={keepAwake}
       />,
     );
@@ -146,7 +143,7 @@ describe('RecorderScreen', () => {
     const { unmount } = render(
       <RecorderScreen
         audioService={audioService}
-        enqueueRecording={jest.fn(async () => exam)}
+        enqueueRecording={jest.fn(async () => appointment)}
         keepAwake={keepAwake}
       />,
     );

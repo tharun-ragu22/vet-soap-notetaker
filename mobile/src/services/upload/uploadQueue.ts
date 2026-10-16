@@ -1,4 +1,4 @@
-import type { Exam } from '../api/types';
+import type { Appointment } from '../api/types';
 import type { AudioEntry, FileStore, NoteEntry, QueueEntry, QueueStore, QueueUploader } from './types';
 
 export interface EnqueueInput {
@@ -17,12 +17,12 @@ export interface UploadQueueOptions {
   now?: () => string;
   /** Fired whenever the queue contents change — the UI reflects the pending count. */
   onChange?: (entries: QueueEntry[]) => void;
-  /** Fired with a fully-generated exam once it lands (not for partial transitions). */
-  onExamReady?: (exam: Exam) => void;
+  /** Fired with a fully-generated appointment once it lands (not for partial transitions). */
+  onAppointmentReady?: (appointment: Appointment) => void;
 }
 
 type Outcome = 'completed' | 'advanced' | 'transient_failure' | 'parked';
-type StepResult = { outcome: Outcome; exam?: Exam };
+type StepResult = { outcome: Outcome; appointment?: Appointment };
 
 const DEFAULT_MAX_ATTEMPTS = 5;
 
@@ -48,7 +48,7 @@ export class UploadQueue {
   private readonly idFactory: () => string;
   private readonly now: () => string;
   private readonly onChange?: (entries: QueueEntry[]) => void;
-  private readonly onExamReady?: (exam: Exam) => void;
+  private readonly onAppointmentReady?: (appointment: Appointment) => void;
 
   constructor(options: UploadQueueOptions) {
     this.store = options.store;
@@ -58,13 +58,21 @@ export class UploadQueue {
     this.idFactory = options.idFactory ?? (() => Math.random().toString(36).slice(2));
     this.now = options.now ?? (() => new Date().toISOString());
     this.onChange = options.onChange;
-    this.onExamReady = options.onExamReady;
+    this.onAppointmentReady = options.onAppointmentReady;
   }
 
   /** Restore the queue from persisted metadata (call once on app start). */
   async load(): Promise<void> {
-    this.entries = await this.store.load();
-    this.onChange?.(this.pending());
+    const loaded = await this.store.load();
+    // A note entry saved before appointments existed names an exam, not an
+    // appointment. Its transcript is safe on the backend (the pending appointment
+    // shows in History, to regenerate there), so it's dropped, not retried.
+    this.entries = loaded.filter((e) => e.stage === 'audio' || Boolean(e.appointmentId));
+    if (this.entries.length !== loaded.length) {
+      await this.persist();
+    } else {
+      this.onChange?.(this.pending());
+    }
   }
 
   /** A snapshot of the current queue. */
@@ -129,12 +137,12 @@ export class UploadQueue {
   }
 
   /**
-   * Attempt a single entry once, right now, and return the completed exam if it
-   * lands (following an audio→note transition through to completion). Returns null
+   * Attempt a single entry once, right now, and return the completed appointment if
+   * it lands (following an audio→note transition through to completion). Returns null
    * if it isn't done yet — the entry stays queued for the background to retry. Used
-   * for the snappy happy path: upload on stop and jump straight to the note.
+   * for the snappy happy path: upload on stop and jump straight to the notes.
    */
-  async tryProcess(id: string): Promise<Exam | null> {
+  async tryProcess(id: string): Promise<Appointment | null> {
     if (this.running) return null;
     this.running = true;
     try {
@@ -142,8 +150,8 @@ export class UploadQueue {
       for (let step = 0; step < 2; step += 1) {
         const entry = this.entries.find((e) => e.id === id);
         if (!entry || entry.failed) return null;
-        const { outcome, exam } = await this.processEntry(entry);
-        if (outcome === 'completed') return exam ?? null;
+        const { outcome, appointment } = await this.processEntry(entry);
+        if (outcome === 'completed') return appointment ?? null;
         if (outcome !== 'advanced') return null;
       }
       return null;
@@ -177,16 +185,16 @@ export class UploadQueue {
 
   private async processAudio(entry: AudioEntry): Promise<StepResult> {
     const bytes = await this.files.read(entry.fileName);
-    const exam = await this.uploader.generateNote(bytes, entry.mimeType);
+    const appointment = await this.uploader.createAppointment(bytes, entry.mimeType);
 
-    if (exam.notePending) {
+    if (appointment.notePending) {
       // Transcription succeeded but note-gen didn't: the transcript is safe on
       // the server now, so drop the audio and switch to the cheap note stage.
       await this.safeDeleteFile(entry.fileName);
       const note: NoteEntry = {
         id: entry.id,
         stage: 'note',
-        examId: exam.id,
+        appointmentId: appointment.id,
         createdAt: entry.createdAt,
         attempts: 0,
       };
@@ -198,16 +206,16 @@ export class UploadQueue {
     await this.safeDeleteFile(entry.fileName);
     this.drop(entry.id);
     await this.persist();
-    this.onExamReady?.(exam);
-    return { outcome: 'completed', exam };
+    this.onAppointmentReady?.(appointment);
+    return { outcome: 'completed', appointment };
   }
 
   private async processNote(entry: NoteEntry): Promise<StepResult> {
-    const exam = await this.uploader.completeNote(entry.examId);
+    const appointment = await this.uploader.completeAppointment(entry.appointmentId);
     this.drop(entry.id);
     await this.persist();
-    this.onExamReady?.(exam);
-    return { outcome: 'completed', exam };
+    this.onAppointmentReady?.(appointment);
+    return { outcome: 'completed', appointment };
   }
 
   private async recordFailure(entry: QueueEntry, error: unknown): Promise<StepResult> {

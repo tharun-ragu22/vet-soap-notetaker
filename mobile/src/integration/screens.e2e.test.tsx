@@ -41,8 +41,8 @@ function makeQueue(apiClient: ApiClient): UploadQueue {
     store: new MemQueueStore(),
     files: new MemFileStore(),
     uploader: {
-      generateNote: (bytes, mime) => apiClient.generateNote(bytes, mime),
-      completeNote: (id) => apiClient.completeNote(id),
+      createAppointment: (bytes, mime) => apiClient.createAppointment(bytes, mime),
+      completeAppointment: (id) => apiClient.completeAppointment(id),
     },
   });
 }
@@ -92,9 +92,9 @@ describe('screens end-to-end', () => {
     fireEvent.press(screen.getByText(/stop/i));
 
     await waitFor(() => expect(onRecorded).toHaveBeenCalledTimes(1));
-    const history = await apiClient.fetchHistory();
-    expect(history).toHaveLength(1);
-    expect(onRecorded).toHaveBeenCalledWith(expect.objectContaining({ id: history[0].id }));
+    const appointments = await apiClient.fetchAppointments();
+    expect(appointments).toHaveLength(1);
+    expect(onRecorded).toHaveBeenCalledWith(appointments[0]);
   });
 
   it('queues the recording when note-gen is down, then drains it when the backend recovers', async () => {
