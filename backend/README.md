@@ -181,10 +181,13 @@ picked up by `pytest`) holds two `pydantic-evals` suites, one subpackage each:
 Runs `NoteGenerator.generate()` against a range of example transcripts (`llm/evals/note_generation/cases.py`) — routine visits,
 emergencies, multi-pet visits, vague/garbled transcripts, declined-care conversations, and irrelevant
 chit-chat mixed in with a real complaint. Unlike the unit tests, these make real network calls to a live
-Ollama-compatible server, scoring output with deterministic checks (all four SOAP fields present,
-expected keywords per case) plus an `LLMJudge` rubric for faithfulness/hallucination, correct SOAP
-categorization, and ignoring irrelevant chatter — judged by the same Ollama model, so no paid API key is
-needed:
+Ollama-compatible server. `generate()` returns one note per animal, and each case says which animals it
+expects (multi-animal cases list them under `patients`, each with its own keywords and another animal's
+findings that must stay out of its note). Output is scored with deterministic checks (one note per
+expected animal, all four SOAP fields present in every note, expected keywords in each animal's own
+note, no animal's findings in another's) plus an `LLMJudge` rubric for faithfulness/hallucination,
+correct SOAP categorization, ignoring irrelevant chatter, and keeping each note to its own animal —
+judged by the same Ollama model, so no paid API key is needed:
 
 ```bash
 cd backend
@@ -195,7 +198,7 @@ OLLAMA_BASE_URL=http://localhost:11434 OLLAMA_NOTE_MODEL=gemma4:e4b \
 Point `OLLAMA_BASE_URL` at any reachable Ollama server (e.g. a tunnel to a GPU box) and
 `OLLAMA_NOTE_MODEL` at whatever's pulled there. Both default to `BackendConfig`'s own Ollama defaults
 (`http://localhost:11434` / `gemma4:e4b`) if unset. A case counts as passing only if it didn't error
-and every assertion (`HasAllSoapFields`, `LLMJudge`) is true; `note_generation/run.py`'s `main()` exits
+and every assertion (`PatientCount`, `HasAllSoapFields`, `NoCrossContamination`, `LLMJudge`) is true; `note_generation/run.py`'s `main()` exits
 non-zero unless at least `REQUIRED_PASS_RATE` (70%) of cases pass, so it works as a CI gate without
 requiring a perfect run from a small local model.
 

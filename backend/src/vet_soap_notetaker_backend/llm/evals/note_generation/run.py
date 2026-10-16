@@ -12,8 +12,9 @@ Falls back to http://localhost:11434 / gemma4:e4b (BackendConfig's own defaults)
 vars aren't set. The same model doubles as the LLMJudge evaluator, so the whole run needs
 no paid API keys. Cases run one at a time (Ollama serializes generation per model anyway)
 with a generous OLLAMA_EVAL_TIMEOUT_SECONDS (default 300s) to cover slow CPU-only inference.
-A case counts as passing only if it didn't error and every assertion (HasAllSoapFields,
-LLMJudge) is true; exits non-zero unless at least REQUIRED_PASS_RATE of cases pass,
+generate() returns one note per animal, and the whole list is graded. A case counts as
+passing only if it didn't error and every assertion (PatientCount, HasAllSoapFields,
+NoCrossContamination, LLMJudge) is true; exits non-zero unless at least REQUIRED_PASS_RATE of cases pass,
 tolerating some flakiness from a small local model rather than requiring a perfect run.
 """
 
@@ -27,7 +28,12 @@ from pydantic_evals import Dataset
 from pydantic_evals.evaluators import LLMJudge
 
 from vet_soap_notetaker_backend.llm.evals.note_generation.cases import CASES
-from vet_soap_notetaker_backend.llm.evals.note_generation.evaluators import FieldKeywordCoverage, HasAllSoapFields
+from vet_soap_notetaker_backend.llm.evals.note_generation.evaluators import (
+    FieldKeywordCoverage,
+    HasAllSoapFields,
+    NoCrossContamination,
+    PatientCount,
+)
 from vet_soap_notetaker_backend.llm.note_generation.ollama_note_generator import OllamaNoteGenerator
 from vet_soap_notetaker_backend.schemas import SoapNote
 
@@ -42,41 +48,46 @@ OLLAMA_EVAL_TIMEOUT_SECONDS = float(os.environ.get("OLLAMA_EVAL_TIMEOUT_SECONDS"
 REQUIRED_PASS_RATE = 0.7
 
 JUDGE_RUBRIC = (
-    "The output is a SOAP note (subjective/objective/assessment/plan) generated from the "
-    "veterinary exam-room transcript given as input. Judge whether it: "
+    "The output is a list of SOAP notes (subjective/objective/assessment/plan), one per "
+    "animal examined or discussed clinically, generated from the veterinary exam-room "
+    "transcript given as input. Each note is filed in that animal's own medical record. "
+    "Judge whether each note: "
     "(1) only includes clinically relevant facts actually present in the transcript, with no "
     "invented vitals, diagnoses, medications, or owner statements; "
     "(2) places each fact in the clinically correct SOAP section; "
     "(3) writes 'Not discussed' (or equivalent) for any section the transcript truly has no "
     "information for, rather than fabricating content to fill it; "
     "(4) ignores clinically irrelevant chit-chat (scheduling, weather, small talk) rather than "
-    "including it in the note."
+    "including it in the note; "
+    "(5) holds only its own animal's findings, diagnoses and medications, never another "
+    "animal's (content the transcript says applies to every animal belongs in each of their "
+    "notes)."
 )
 
 
-def build_dataset() -> Dataset[str, SoapNote, dict]:
+def build_dataset() -> Dataset[str, list[SoapNote], dict]:
     judge_model = OpenAIChatModel(
         OLLAMA_NOTE_MODEL,
         provider=OpenAIProvider(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama"),
     )
-    return Dataset[str, SoapNote, dict](
+    return Dataset[str, list[SoapNote], dict](
         name="note_generator",
         cases=CASES,
         evaluators=[
+            PatientCount(),
             HasAllSoapFields(),
             FieldKeywordCoverage(),
+            NoCrossContamination(),
             LLMJudge(rubric=JUDGE_RUBRIC, model=judge_model, include_input=True),
         ],
     )
 
 
-async def generate_note(transcript: str) -> SoapNote:
+async def generate_notes(transcript: str) -> list[SoapNote]:
     generator = OllamaNoteGenerator(
         base_url=OLLAMA_BASE_URL, model=OLLAMA_NOTE_MODEL, timeout_seconds=OLLAMA_EVAL_TIMEOUT_SECONDS
     )
-    notes = await asyncio.to_thread(generator.generate, transcript)
-    # Every case here covers a single animal, so the first note is the one to grade.
-    return notes[0]
+    return await asyncio.to_thread(generator.generate, transcript)
 
 
 def main() -> None:
@@ -84,7 +95,7 @@ def main() -> None:
     # max_concurrency=1: Ollama serializes generation per model server-side, so running
     # cases "concurrently" just queues them behind each other and burns each queued
     # request's client-side timeout while it waits, not while it's actually generating.
-    report = dataset.evaluate_sync(generate_note, max_concurrency=1)
+    report = dataset.evaluate_sync(generate_notes, max_concurrency=1)
     report.print(include_input=False, include_output=True, include_durations=True)
 
     total_cases = len(report.cases) + len(report.failures)

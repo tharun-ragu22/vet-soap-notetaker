@@ -5,7 +5,9 @@ provider parsing need to hold up against.
 
 Each Case's metadata may include "must_include": a dict of SoapNote field name -> list of
 substrings that should appear (case-insensitively) in that field, checked by
-evaluators.FieldKeywordCoverage.
+evaluators.FieldKeywordCoverage. A case covering several animals lists them under "patients"
+instead, each with its own "name", "must_include" and "must_not_include" (another animal's
+findings that must stay out of this one's note); see evaluators.py.
 """
 
 from pydantic_evals import Case
@@ -89,10 +91,115 @@ CASES = [
         ),
         metadata={
             "category": "multi_patient",
-            "must_include": {
-                "assessment": ["flea allergy dermatitis"],
-                "plan": ["flea", "rabies"],
-            },
+            "patients": [
+                {
+                    "name": "Whiskers",
+                    "must_include": {
+                        "assessment": ["flea allergy dermatitis"],
+                        "plan": ["flea"],
+                    },
+                    "must_not_include": ["rabies", "11 pounds"],
+                },
+                {
+                    "name": "Tom",
+                    "must_include": {"objective": ["11"], "plan": ["rabies"]},
+                    "must_not_include": ["dermatitis", "anti-itch"],
+                },
+            ],
+        },
+    ),
+    Case(
+        name="two_named_dogs_shared_plan",
+        inputs=(
+            "Vet: Okay, so we've got Bella and Max today. Owner: Yeah, Bella keeps shaking her "
+            "head and Max has been limping since our hike on Saturday. Also we found a couple of "
+            "fleas on both of them. Vet: Let's start with Bella. Her temp is 101.8. Right ear "
+            "canal is red and there's a dark waxy discharge, smells yeasty. That's otitis "
+            "externa. I'll clean it today and send home Otomax, five drops in the right ear "
+            "twice daily for seven days. Now Max. Temp 101.2. He's got a small cut on the "
+            "left front paw pad, about a centimeter, no foreign body I can see. That's a pad "
+            "laceration. I'll clean and bandage it, and give you Carprofen, 75 milligrams once "
+            "daily for five days for the pain. Keep the bandage dry and change it in two days. "
+            "And for the fleas, both of them get a dose of Simparica today and then monthly."
+        ),
+        metadata={
+            "category": "multi_patient",
+            "patients": [
+                {
+                    "name": "Bella",
+                    "must_include": {
+                        "objective": ["101.8"],
+                        "assessment": ["otitis"],
+                        "plan": ["otomax", "simparica"],
+                    },
+                    "must_not_include": ["carprofen", "laceration", "bandage", "101.2"],
+                },
+                {
+                    "name": "Max",
+                    "must_include": {
+                        "objective": ["101.2"],
+                        "assessment": ["laceration"],
+                        "plan": ["carprofen", "simparica"],
+                    },
+                    "must_not_include": ["otomax", "otitis", "101.8"],
+                },
+            ],
+        },
+    ),
+    Case(
+        name="named_dog_and_unnamed_cat",
+        inputs=(
+            "Vet: Hi there, so Duke is in for his vaccines and you brought the cat as well? "
+            "Owner: Yeah, the cat's nails are getting really long and she's been scratching up "
+            "the couch, and I think she's put on weight. Vet: Okay. Duke first. He weighs 48 "
+            "pounds, heart and lungs sound good, eyes and ears clear. He gets his rabies and "
+            "DHPP boosters today. Now the cat, let's get her on the scale. She's 14 pounds, so "
+            "she's overweight, body condition score 7 out of 9. I'll trim her nails now. I'd "
+            "like to cut her dry food by a quarter and recheck her weight in three months."
+        ),
+        metadata={
+            "category": "multi_patient",
+            "patients": [
+                {
+                    "name": "Duke",
+                    "must_include": {"objective": ["48"], "plan": ["rabies", "dhpp"]},
+                    "must_not_include": ["14 pounds", "nail", "overweight"],
+                },
+                {
+                    # The cat is never named, so she's "Patient N".
+                    "must_include": {
+                        "objective": ["14"],
+                        "plan": ["nail", "three months"],
+                    },
+                    "must_not_include": ["rabies", "dhpp", "48 pounds"],
+                },
+            ],
+        },
+    ),
+    Case(
+        name="other_pet_mentioned_but_not_examined",
+        inputs=(
+            "Vet: So what's going on with Rocky today? Owner: He's been coughing for about a "
+            "week, sort of a honking cough, mostly when he pulls on the leash. Oh, and our cat "
+            "Mittens is doing great by the way, the new kidney diet you put her on is working. "
+            "Vet: Glad to hear it. Okay Rocky, temp is 101.5, lungs sound clear, and I can "
+            "get him to cough when I press on his trachea. This looks like a mild tracheal "
+            "irritation, possibly kennel cough. Let's use a harness instead of a collar and "
+            "start a cough suppressant, hydrocodone, one tablet twice daily for a week."
+        ),
+        metadata={
+            "category": "pet_mentioned_not_examined",
+            "patients": [
+                {
+                    "name": "Rocky",
+                    "must_include": {
+                        "subjective": ["cough"],
+                        "objective": ["101.5"],
+                        "plan": ["harness", "hydrocodone"],
+                    },
+                    "must_not_include": ["kidney diet"],
+                },
+            ],
         },
     ),
     Case(
