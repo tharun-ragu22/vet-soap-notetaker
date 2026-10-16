@@ -58,6 +58,21 @@ def _regenerate(client, store):
     return client.post("/api/soap/regenerate", json={"transcript": "owner reports vomiting"})
 
 
+def _create_appointment(client, store):
+    return client.post("/api/appointments", content=b"RIFF....audio....")
+
+
+def _complete_pending_appointment(client, store):
+    pending = store.add_pending_appointment("owner reports vomiting")
+    return client.post(f"/api/appointments/{pending.id}/notes")
+
+
+def _regenerate_appointment(client, store):
+    return client.post(
+        "/api/appointments/regenerate", json={"transcript": "owner reports vomiting"}
+    )
+
+
 @pytest.mark.parametrize(
     ("block_in", "slow_request"),
     [
@@ -65,8 +80,16 @@ def _regenerate(client, store):
         ("generate", _create_soap),
         ("generate", _complete_pending_note),
         ("generate", _regenerate),
+        ("transcribe", _create_appointment),
+        ("generate", _create_appointment),
+        ("generate", _complete_pending_appointment),
+        ("generate", _regenerate_appointment),
     ],
-    ids=["soap-transcribe", "soap-note-gen", "complete-pending-note", "regenerate"],
+    ids=[
+        "soap-transcribe", "soap-note-gen", "complete-pending-note", "regenerate",
+        "appointment-transcribe", "appointment-note-gen", "complete-pending-appointment",
+        "regenerate-appointment",
+    ],
 )
 async def test_other_requests_are_served_while_a_provider_call_is_in_flight(
     make_config, block_in, slow_request

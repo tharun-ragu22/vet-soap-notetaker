@@ -70,18 +70,37 @@ front of it for anything beyond local testing.
 ## History & cross-device sync
 
 Every generated note is persisted so it can sync across the desktop tray app and the mobile
-app (`mobile/`). `POST /api/soap` now stores the note and returns it with an `id` and
-`created_at` (existing clients that read only the SOAP fields are unaffected). One recording
-can cover several animals: each gets its own exam (sharing the transcript), and the response is
-the first animal's exam. `POST /api/soap/regenerate` returns the first animal's note at the top
-level plus every animal's under `patients`. Additional
-endpoints, all behind the same bearer auth:
+app (`mobile/`). One recording is an **appointment**: it owns the transcript, and holds one
+**exam** (SOAP note) per animal seen, so a two-dog visit gives two exams, each injectable into its
+own AVImark chart. When note generation fails after a good transcription, the appointment is
+saved with one empty, `note_pending` exam and the request returns `202`; finishing it fills that
+exam with the first animal's note and adds the others. All endpoints sit behind the same bearer
+auth.
+
+Appointments (the mobile app):
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/history` | List all exams, newest first: `{"exams": [ ... ]}` |
+| `POST /api/appointments` | Audio body → `{"id", "created_at", "transcript", "note_pending", "exams": [...]}` (`200`, or `202` with the note pending, `502` if transcription fails) |
+| `POST /api/appointments/{id}/notes` | Generate a pending appointment's notes from its saved transcript; idempotent (a complete one is returned unchanged) |
+| `GET /api/appointments` | All appointments, newest first: `{"appointments": [ ... ]}` |
+| `GET /api/appointments/{id}` | One appointment (404 if unknown) |
+| `PUT /api/appointments/{id}` | Save the whole appointment: `{"transcript", "exams": [...]}`. Exams with an `id` are updated, ones without are added, ones left out are deleted; 400 if an `id` isn't in this appointment |
+| `DELETE /api/appointments/{id}` | Delete the appointment and every exam in it |
+| `POST /api/appointments/regenerate` | `{"transcript", "appointment_id"?}` → `{"transcript", "patients": [...]}`, saving nothing |
+
+Exams (the desktop app, which works one animal at a time). Each exam's JSON carries its
+`appointment_id` and the appointment's `transcript`:
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/soap` | Audio body → the first animal's exam (the pending placeholder on a `202`) |
+| `POST /api/exams/{id}/note` | Finish a pending exam (adds any further animals to its appointment); idempotent |
+| `POST /api/soap/regenerate` | `{"transcript", "exam_id"?}` → the first animal's note at the top level plus every animal's under `patients` |
+| `GET /api/history` | Every exam, newest appointment first: `{"exams": [ ... ]}` |
 | `GET /api/exams/{id}` | Fetch one exam (404 if unknown) |
-| `PUT /api/exams/{id}` | Save inline edits (`subjective`/`objective`/`assessment`/`plan`/`transcript`, optional `patient_name`); 400 on missing fields, 404 if unknown |
+| `PUT /api/exams/{id}` | Save one animal's edits (`subjective`/`objective`/`assessment`/`plan`, optional `patient_name`, optional `transcript` which updates it for every animal); 400 on missing fields, 404 if unknown |
+| `DELETE /api/exams/{id}` | Delete one animal; deleting the last one deletes the appointment |
 
 Storage is a JSON file (durable across restarts) at `~/.vetscribe/exams.json` by default;
 override with `VETSCRIBE_EXAMS_PATH`. The backend remains the authoritative source of truth —
@@ -125,11 +144,13 @@ sentinel patient and fails if it reaches any event.
 
 | Event | Sent from | Key properties |
 |---|---|---|
-| `soap_generated` | `POST /api/soap` | `outcome` (complete/note_pending/failed), `transcribe_ms`, `note_gen_ms`, `total_ms`, `audio_duration_ms`, `audio_bytes`, providers, `exam_id` |
-| `pending_note_completed` | `POST /api/exams/{id}/note` | `outcome` (complete/failed/already_complete), `note_gen_ms` |
-| `note_regenerated` | `POST /api/soap/regenerate` | `exam_id` (optional `exam_id` in the body), `transcript_edited`, `note_gen_ms`, `outcome` |
-| `note_saved` | `PUT /api/exams/{id}` | `fields_changed`, `<field>_similarity` (0-1), `includes_regenerated_content` |
-| `exam_deleted` | `DELETE /api/exams/{id}` | `exam_id` |
+| `soap_generated` | `POST /api/soap`, `POST /api/appointments` | `outcome` (complete/note_pending/failed), `transcribe_ms`, `note_gen_ms`, `total_ms`, `audio_duration_ms`, `audio_bytes`, providers, `exam_id` (the first animal's), `appointment_id`, `patient_count` |
+| `pending_note_completed` | `POST /api/exams/{id}/note`, `POST /api/appointments/{id}/notes` | `outcome` (complete/failed/already_complete), `note_gen_ms`, `appointment_id`, `patient_count` |
+| `note_regenerated` | `POST /api/soap/regenerate`, `POST /api/appointments/regenerate` | `exam_id` or `appointment_id` (optional, from the body), `transcript_edited`, `note_gen_ms`, `outcome`, `patient_count` |
+| `note_saved` | `PUT /api/exams/{id}`, and per kept exam on `PUT /api/appointments/{id}` | `exam_id`, `appointment_id`, `fields_changed`, `<field>_similarity` (0-1), `includes_regenerated_content` |
+| `appointment_saved` | `PUT /api/appointments/{id}` | `patient_count`, `exams_added`, `exams_removed`, `transcript_edited`, `includes_regenerated_content` |
+| `exam_deleted` | `DELETE /api/exams/{id}` | `exam_id`, `appointment_id` |
+| `appointment_deleted` | `DELETE /api/appointments/{id}` | `appointment_id`, `patient_count` |
 | `injection_requested` | `POST /api/exams/{id}/inject` | `attempt_number`, `edited_before_inject`, `request_id` |
 
 Clients identify themselves with optional headers: `X-POSTHOG-DISTINCT-ID` (their PostHog

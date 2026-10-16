@@ -724,10 +724,10 @@ def test_create_soap_note_persists_every_patient_and_returns_the_first(make_conf
 
     assert response.status_code == 200
     assert response.json()["patient_name"] == "Bella"
-    exams = list(reversed(store.list()))
-    assert [(e.patient_name, e.plan) for e in exams] == [("Bella", "p1"), ("Max", "p2")]
-    assert [e.transcript for e in exams] == ["two dogs today", "two dogs today"]
-    assert exams[0].id == response.json()["id"]
+    [appointment] = store.list_appointments()
+    assert appointment.transcript == "two dogs today"
+    assert [(e.patient_name, e.plan) for e in appointment.exams] == [("Bella", "p1"), ("Max", "p2")]
+    assert appointment.exams[0].id == response.json()["id"]
 
 
 def test_complete_note_fills_the_pending_exam_with_the_first_patient_and_adds_the_rest(
@@ -745,12 +745,12 @@ def test_complete_note_fills_the_pending_exam_with_the_first_patient_and_adds_th
     assert response.status_code == 200
     assert response.json()["id"] == pending.id
     assert response.json()["patient_name"] == "Bella"
-    exams = list(reversed(store.list()))
-    assert [(e.patient_name, e.note_pending) for e in exams] == [
+    [appointment] = store.list_appointments()
+    assert [(e.patient_name, e.note_pending) for e in appointment.exams] == [
         ("Bella", False),
         ("Max", False),
     ]
-    assert exams[1].transcript == "two dogs today"
+    assert appointment.exams[1].transcript == "two dogs today"
 
 
 def test_complete_note_adds_no_patients_when_the_exam_was_already_complete(make_config):

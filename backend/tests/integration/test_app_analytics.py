@@ -197,6 +197,122 @@ def test_pending_note_completed_reports_timing_and_outcome(setup):
     assert isinstance(tracker.named("pending_note_completed")[1]["properties"]["note_gen_ms"], int)
 
 
+# --- several animals in one appointment -------------------------------------
+
+
+TWO = [_note("bella", "Bella"), _note("max", "Max")]
+
+
+def test_soap_generated_reports_the_appointment_and_how_many_animals(setup):
+    client, tracker, _ = setup(pipeline=FakePipeline(notes=TWO, transcript="t"))
+
+    exam = client.post("/api/soap", content=b"RIFF").json()
+    appointment = client.post("/api/appointments", content=b"RIFF").json()
+
+    first, second = tracker.named("soap_generated")
+    assert first["properties"]["patient_count"] == 2
+    assert first["properties"]["appointment_id"] == exam["appointment_id"]
+    assert second["properties"]["patient_count"] == 2
+    assert second["properties"]["appointment_id"] == appointment["id"]
+    assert second["properties"]["exam_id"] == appointment["exams"][0]["id"]
+
+
+def test_soap_generated_has_no_patient_count_until_the_note_exists(setup):
+    client, tracker, _ = setup(
+        pipeline=FakePipeline(transcript="t", note_error=NoteParsingError("bad json"))
+    )
+
+    appointment = client.post("/api/appointments", content=b"RIFF").json()
+
+    props = tracker.only("soap_generated")["properties"]
+    assert props["outcome"] == "note_pending"
+    assert props["patient_count"] is None
+    assert props["appointment_id"] == appointment["id"]
+
+
+def test_pending_appointment_completed_reports_the_appointment_and_animals(setup):
+    pipeline = FakePipeline(transcript="t", note_error=NoteParsingError("bad json"))
+    client, tracker, _ = setup(pipeline=pipeline)
+    appointment = client.post("/api/appointments", content=b"RIFF").json()
+    pipeline.note_error = None
+    pipeline.notes = TWO
+
+    client.post(f"/api/appointments/{appointment['id']}/notes")
+    client.post(f"/api/appointments/{appointment['id']}/notes")
+
+    events = tracker.named("pending_note_completed")
+    assert [e["properties"]["outcome"] for e in events] == ["complete", "already_complete"]
+    assert all(e["properties"]["appointment_id"] == appointment["id"] for e in events)
+    assert events[0]["properties"]["patient_count"] == 2
+
+
+def test_appointment_regenerated_reports_animals_and_transcript_edits(setup):
+    client, tracker, _ = setup(pipeline=FakePipeline(notes=TWO, transcript="t"))
+    appointment = client.post("/api/appointments", content=b"RIFF").json()
+
+    client.post("/api/appointments/regenerate",
+                json={"transcript": "t", "appointment_id": appointment["id"]})
+    client.post("/api/appointments/regenerate",
+                json={"transcript": "corrected", "appointment_id": appointment["id"]})
+
+    events = tracker.named("note_regenerated")
+    assert [e["properties"]["transcript_edited"] for e in events] == [False, True]
+    assert all(e["properties"]["appointment_id"] == appointment["id"] for e in events)
+    assert all(e["properties"]["patient_count"] == 2 for e in events)
+
+
+def test_appointment_saved_reports_counts_and_each_animals_edits(setup):
+    client, tracker, _ = setup(pipeline=FakePipeline(notes=TWO, transcript="t"))
+    appointment = client.post("/api/appointments", content=b"RIFF").json()
+    bella, max_ = appointment["exams"]
+    client.post("/api/appointments/regenerate",
+                json={"transcript": "t", "appointment_id": appointment["id"]})
+
+    client.put(f"/api/appointments/{appointment['id']}", json={
+        "transcript": "corrected",
+        "exams": [{**bella, "plan": "rewritten"},
+                  {**max_, "id": None, "patient_name": "Luna"}],
+    })
+
+    props = tracker.only("appointment_saved")["properties"]
+    assert props["appointment_id"] == appointment["id"]
+    assert props["patient_count"] == 2
+    assert props["exams_added"] == 1
+    assert props["exams_removed"] == 1
+    assert props["transcript_edited"] is True
+    assert props["includes_regenerated_content"] is True
+    saved = tracker.only("note_saved")["properties"]
+    assert saved["exam_id"] == bella["id"]
+    assert saved["appointment_id"] == appointment["id"]
+    assert saved["fields_changed"] == ["plan", "transcript"]
+
+
+def test_an_animal_edited_in_an_appointment_counts_as_edited_before_inject(setup):
+    client, tracker, _ = setup(pipeline=FakePipeline(notes=TWO, transcript="t"))
+    appointment = client.post("/api/appointments", content=b"RIFF").json()
+    bella, max_ = appointment["exams"]
+
+    client.put(f"/api/appointments/{appointment['id']}", json={
+        "transcript": "t", "exams": [{**bella, "plan": "edited"}, max_],
+    })
+    client.post(f"/api/exams/{bella['id']}/inject")
+    client.post(f"/api/exams/{max_['id']}/inject")
+
+    flags = [e["properties"]["edited_before_inject"] for e in tracker.named("injection_requested")]
+    assert flags == [True, False]
+
+
+def test_appointment_deleted_is_reported(setup):
+    client, tracker, _ = setup(pipeline=FakePipeline(notes=TWO, transcript="t"))
+    appointment = client.post("/api/appointments", content=b"RIFF").json()
+
+    client.delete(f"/api/appointments/{appointment['id']}")
+    client.delete(f"/api/appointments/{appointment['id']}")
+
+    props = tracker.only("appointment_deleted")["properties"]
+    assert props == {**props, "appointment_id": appointment["id"], "patient_count": 2}
+
+
 # --- Q2: did he like the notes ---------------------------------------------
 
 
@@ -330,6 +446,33 @@ def test_no_event_ever_carries_patient_data(setup):
     client.post("/api/soap", content=b"RIFF")
     client.post("/api/soap/regenerate", json={"transcript": SENTINEL})
     client.delete(f"/api/exams/{exam['id']}")
+
+    assert len(tracker.events) >= 7
+    assert SENTINEL not in json.dumps(tracker.events)
+
+
+def test_no_appointment_event_ever_carries_patient_data(setup):
+    named = _note(SENTINEL, patient_name=SENTINEL)
+    pipeline = FakePipeline(notes=[named, named], transcript=f"{SENTINEL} two dogs")
+    client, tracker, _ = setup(pipeline=pipeline)
+
+    appointment = client.post("/api/appointments", content=SENTINEL.encode()).json()
+    client.post(
+        "/api/appointments/regenerate",
+        json={"transcript": f"{SENTINEL} edited", "appointment_id": appointment["id"]},
+    )
+    exams = [
+        {**e, "plan": f"{SENTINEL} plan", "patient_name": SENTINEL} for e in appointment["exams"]
+    ]
+    client.put(
+        f"/api/appointments/{appointment['id']}",
+        json={"transcript": f"{SENTINEL} fixed", "exams": exams[:1] + [{**exams[1], "id": None}]},
+    )
+    pipeline.note_error = NoteParsingError(f"model did not return valid JSON: {SENTINEL}")
+    pending = client.post("/api/appointments", content=b"RIFF").json()
+    client.post(f"/api/appointments/{pending['id']}/notes")
+    client.post("/api/appointments/regenerate", json={"transcript": SENTINEL})
+    client.delete(f"/api/appointments/{appointment['id']}")
 
     assert len(tracker.events) >= 7
     assert SENTINEL not in json.dumps(tracker.events)
