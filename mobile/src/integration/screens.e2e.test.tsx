@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { ApiClient } from '../services/api/ApiClient';
 import { AudioService } from '../services/audio/AudioService';
 import type { Recorder, RecordingResult } from '../services/audio/types';
-import { ExamEditor } from '../components/ExamEditor';
+import { AppointmentScreen } from '../components/AppointmentScreen';
 import { HistoryScreen } from '../components/HistoryScreen';
 import { RecorderScreen } from '../components/RecorderScreen';
 import { UploadQueue } from '../services/upload/uploadQueue';
@@ -124,11 +124,11 @@ describe('screens end-to-end', () => {
     await waitFor(() => expect(screen.getByText(/uploading in the background/i)).toBeTruthy());
     expect(onRecorded).not.toHaveBeenCalled();
 
-    // The transcript is preserved on the backend as a pending exam, and the queue
-    // now holds a cheap note-stage entry (the audio has been discarded).
-    let history = await apiClient.fetchHistory();
-    expect(history).toHaveLength(1);
-    expect(history[0].notePending).toBe(true);
+    // The transcript is preserved on the backend as a pending appointment, and the
+    // queue now holds a cheap note-stage entry (the audio has been discarded).
+    let appointments = await apiClient.fetchAppointments();
+    expect(appointments).toHaveLength(1);
+    expect(appointments[0].notePending).toBe(true);
     expect(queue.pending()).toHaveLength(1);
     expect(queue.pending()[0]).toMatchObject({ stage: 'note' });
 
@@ -137,12 +137,12 @@ describe('screens end-to-end', () => {
     await queue.processOnce();
 
     expect(queue.pending()).toHaveLength(0);
-    history = await apiClient.fetchHistory();
-    expect(history[0].notePending).toBe(false);
-    expect(history[0].assessment).toBe('Healthy.');
+    appointments = await apiClient.fetchAppointments();
+    expect(appointments[0].notePending).toBe(false);
+    expect(appointments[0].exams[0].assessment).toBe('Healthy.');
   });
 
-  it('history feed lists exams synced from the backend', async () => {
+  it('history feed lists appointments synced from the backend', async () => {
     const backend = new FakeBackend();
     backend.seedExam({ patient_name: 'Rex', assessment: 'Otitis externa' });
     backend.seedExam({ patient_name: 'Bella' });
@@ -154,15 +154,15 @@ describe('screens end-to-end', () => {
     expect(screen.getByText('Otitis externa')).toBeTruthy();
   });
 
-  it('editor: editing and saving writes through to the backend', async () => {
+  it('appointment: editing and saving writes through to the backend', async () => {
     const backend = new FakeBackend();
     const seeded = backend.seedExam({ patient_name: 'Rex' });
     const apiClient = client(backend);
-    const exam = await apiClient.getExam(seeded.id);
+    const appointment = await apiClient.getAppointment(seeded.appointment_id);
 
-    render(<ExamEditor exam={exam} apiClient={apiClient} />);
+    render(<AppointmentScreen appointment={appointment} apiClient={apiClient} pendingPollMs={0} />);
 
-    fireEvent.changeText(screen.getByTestId('field-assessment'), 'Gastroenteritis');
+    fireEvent.changeText(screen.getByTestId('field-0-assessment'), 'Gastroenteritis');
     fireEvent.press(screen.getByText(/save changes/i));
 
     await waitFor(() => expect(screen.getByText(/saved/i)).toBeTruthy());
@@ -170,19 +170,63 @@ describe('screens end-to-end', () => {
     expect(persisted.assessment).toBe('Gastroenteritis');
   });
 
-  it('editor: tapping Inject enqueues a remote injection for this exam', async () => {
-    const backend = new FakeBackend();
-    const seeded = backend.seedExam({ patient_name: 'Rex' });
+  it('a two-animal visit: one recording, a note per animal, each injected into its own chart', async () => {
+    // The feature's acceptance scenario: the vet records the whole appointment,
+    // stops, and sees an individual SOAP note per animal sharing one transcript,
+    // each of which they can inject into AVImark.
+    const backend = new FakeBackend({
+      notesForAudio: () => ({
+        transcript: 'vet: Bella has otitis, Max has a cut pad',
+        patients: [
+          { patient_name: 'Bella', subjective: 'S1', objective: 'O1', assessment: 'Otitis externa', plan: 'Otomax' },
+          { patient_name: 'Max', subjective: 'S2', objective: 'O2', assessment: 'Pad laceration', plan: 'Carprofen' },
+        ],
+      }),
+    });
     const apiClient = client(backend);
-    const exam = await apiClient.getExam(seeded.id);
+    const recorder: Recorder = {
+      start: jest.fn(async () => {}),
+      stop: jest.fn(async (): Promise<RecordingResult> => ({ uri: 'file:///r.m4a', durationMillis: 3000 })),
+    };
+    const onRecorded = jest.fn();
+    const { unmount } = render(
+      <RecorderScreen
+        audioService={new AudioService(recorder)}
+        enqueueRecording={enqueueVia(makeQueue(apiClient))}
+        onRecorded={onRecorded}
+      />,
+    );
+    fireEvent.press(screen.getByText(/start/i));
+    await waitFor(() => expect(screen.getByText(/stop/i)).toBeTruthy());
+    fireEvent.press(screen.getByText(/stop/i));
+    await waitFor(() => expect(onRecorded).toHaveBeenCalledTimes(1));
+    unmount();
 
-    render(<ExamEditor exam={exam} apiClient={apiClient} />);
+    // The route opens the appointment the recorder reported.
+    render(<AppointmentScreen appointment={onRecorded.mock.calls[0][0]} apiClient={apiClient} pendingPollMs={0} />);
 
-    fireEvent.press(screen.getByText(/inject into avimark/i));
+    expect(screen.getByTestId('name-0').props.value).toBe('Bella');
+    expect(screen.getByTestId('field-0-assessment').props.value).toBe('Otitis externa');
+    expect(screen.getByTestId('name-1').props.value).toBe('Max');
+    expect(screen.getByTestId('field-1-assessment').props.value).toBe('Pad laceration');
+    expect(screen.getAllByTestId('field-transcript')).toHaveLength(1);
 
+    fireEvent.press(screen.getByTestId('inject-0'));
     await waitFor(() => expect(screen.getByText(/sent to the desktop/i)).toBeTruthy());
-    const pending = backend.injectionRequests();
-    expect(pending).toHaveLength(1);
-    expect(pending[0]).toMatchObject({ exam_id: seeded.id, status: 'pending' });
+    fireEvent.press(screen.getByTestId('inject-1'));
+    await waitFor(() => expect(backend.injectionRequests()).toHaveLength(2));
+
+    // What the desktop's poll pastes: each animal's own note, the same transcript.
+    const res = await backend.fetch('http://clinic:8000/api/injections/pending');
+    const { requests } = (await res.json()) as {
+      requests: { exam: { patient_name: string; plan: string; transcript: string } }[];
+    };
+    expect(requests.map((r) => [r.exam.patient_name, r.exam.plan])).toEqual([
+      ['Bella', 'Otomax'],
+      ['Max', 'Carprofen'],
+    ]);
+    expect(new Set(requests.map((r) => r.exam.transcript))).toEqual(
+      new Set(['vet: Bella has otitis, Max has a cut pad']),
+    );
   });
 });

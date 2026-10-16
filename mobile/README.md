@@ -47,11 +47,17 @@ the mobile analogue of the desktop `build_app()`) and pass them down.
 
 | Route | Screen | Purpose |
 |---|---|---|
-| `/` (`index`) | `RecorderScreen` | One-tap exam capture (feature A) |
-| `/history` | `HistoryScreen` | Backend-synced exam feed (feature B) |
-| `/exam/[id]` | `ExamEditor` | Inline SOAP editor, **Inject into AVImark**, and **Delete** (features B & C) |
+| `/` (`index`) | `RecorderScreen` | One-tap capture of a whole appointment (feature A) |
+| `/history` | `HistoryScreen` | Backend-synced appointment feed, one row per recording naming every animal (feature B) |
+| `/appointment/[id]` | `AppointmentScreen` | The shared transcript and a SOAP card per animal: edit, **Regenerate**, **Save**, **Inject into AVImark** per animal, and **Delete** (features B & C) |
 
-**Inject into AVImark** (feature C) posts an injection request for the exam to the
+One recording can cover several animals: the backend's AI writes a separate SOAP note for
+each, and they share the one transcript. Everything on the appointment screen is a local
+draft until **Save**, which writes the whole appointment back; **Regenerate** rewrites the
+notes from the (corrected) transcript as an unsaved preview, matching animals by name. While
+the notes are still generating, the screen shows the transcript and polls until they land.
+
+**Inject into AVImark** (feature C) posts an injection request for that animal's exam to the
 backend; the phone never talks to the exam-room PC directly. The Windows tray app polls
 the backend, then pastes the note into AVImark — or shows its Safety Flyout if AVImark
 isn't foreground. See the repo `backend/README.md` "Remote AVImark injection" section.

@@ -40,8 +40,7 @@ export default function RecorderRoute() {
       <RecorderScreen
         audioService={audioService}
         enqueueRecording={enqueueRecording}
-        // Opens the first animal's note; every animal is listed in History.
-        onRecorded={(appointment) => router.push(`/exam/${appointment.exams[0].id}`)}
+        onRecorded={(appointment) => router.push(`/appointment/${appointment.id}`)}
       />
       {/* Floated at the top as an overlay so it never shifts the recorder, which
           stays centered in the full screen whether or not this banner shows. */}

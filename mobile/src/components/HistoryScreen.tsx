@@ -2,16 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { ApiClient } from '../services/api/ApiClient';
-import type { Exam } from '../services/api/types';
+import type { Appointment } from '../services/api/types';
 
 export interface HistoryScreenProps {
   /** Only the read surface is needed here; the backend is the source of truth. */
-  apiClient: Pick<ApiClient, 'fetchHistory'>;
-  /** Called with the exam id when a row is tapped (route pushes the editor). */
-  onOpenExam?: (id: string) => void;
+  apiClient: Pick<ApiClient, 'fetchAppointments'>;
+  /** Called with the appointment id when a row is tapped (route pushes its screen). */
+  onOpenAppointment?: (id: string) => void;
   /**
    * Bumped by the route each time the screen regains focus. A change triggers a
-   * quiet background refetch, so an exam deleted on the editor screen disappears
+   * quiet background refetch, so an appointment deleted on its screen disappears
    * the moment the user returns here. The list stays mounted under the pushed
    * editor, so a plain mount effect would never re-run on the way back and the
    * stale (deleted) row would linger until the screen was left entirely. Left
@@ -28,14 +28,30 @@ function formatDate(iso: string): string {
   return date.toLocaleString();
 }
 
+/** The animals in an appointment, unnamed ones labelled by position ("Bella, Patient 2"). */
+function animalNames(appointment: Appointment): string {
+  return appointment.exams.map((exam, i) => exam.patientName || `Patient ${i + 1}`).join(', ');
+}
+
+function hasNames(appointment: Appointment): boolean {
+  return appointment.exams.length > 1 || Boolean(appointment.exams[0]?.patientName);
+}
+
+function snippetOf(appointment: Appointment): string {
+  if (appointment.notePending) return 'Notes pending — still generating';
+  const first = appointment.exams[0];
+  return first?.assessment || first?.subjective || 'No note yet';
+}
+
 /**
- * Feature B: the exam history feed, synced across mobile and desktop via the backend.
+ * Feature B: the appointment history feed, synced across mobile and desktop via the
+ * backend. One row per recording, naming every animal seen in it.
  * Loads on mount and exposes explicit loading / empty / error (with retry) states so a
  * transient backend hiccup never leaves a blank screen with no way forward.
  */
-export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistoryScreenProps) {
+export function HistoryScreen({ apiClient, onOpenAppointment, reloadSignal }: HistoryScreenProps) {
   const [status, setStatus] = useState<Status>('loading');
-  const [exams, setExams] = useState<Exam[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
 
   useEffect(() => {
     // No list yet to fall back to, so a failed initial load must still show
@@ -45,10 +61,10 @@ export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistorySc
     // deferred .then()/.catch() -- an inline promise chain is the shape it
     // recognizes as deferred and leaves alone.
     let active = true;
-    apiClient.fetchHistory().then(
+    apiClient.fetchAppointments().then(
       (result) => {
         if (!active) return;
-        setExams(result);
+        setAppointments(result);
         setStatus('ready');
       },
       () => {
@@ -61,7 +77,7 @@ export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistorySc
   }, [apiClient]);
 
   // Refetch quietly whenever the route reports the screen was re-focused (e.g. the
-  // user came back after deleting an exam). Skip the first run: the mount effect
+  // user came back after deleting an appointment). Skip the first run: the mount effect
   // above already did the initial load, so firing here too would double-fetch.
   const firstFocus = useRef(true);
   useEffect(() => {
@@ -71,10 +87,10 @@ export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistorySc
       return;
     }
     let active = true;
-    apiClient.fetchHistory().then(
+    apiClient.fetchAppointments().then(
       (result) => {
         if (!active) return;
-        setExams(result);
+        setAppointments(result);
         setStatus('ready');
       },
       () => {
@@ -89,9 +105,9 @@ export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistorySc
 
   const retry = useCallback(() => {
     setStatus('loading');
-    apiClient.fetchHistory().then(
+    apiClient.fetchAppointments().then(
       (result) => {
-        setExams(result);
+        setAppointments(result);
         setStatus('ready');
       },
       () => setStatus('error'),
@@ -110,7 +126,7 @@ export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistorySc
   if (status === 'error') {
     return (
       <View style={styles.center}>
-        <Text style={styles.error}>Couldn&apos;t load exams.</Text>
+        <Text style={styles.error}>Couldn&apos;t load appointments.</Text>
         <Pressable accessibilityRole="button" style={styles.retry} onPress={retry}>
           <Text style={styles.retryText}>Retry</Text>
         </Pressable>
@@ -118,35 +134,40 @@ export function HistoryScreen({ apiClient, onOpenExam, reloadSignal }: HistorySc
     );
   }
 
-  if (exams.length === 0) {
+  if (appointments.length === 0) {
     return (
       <View style={styles.center}>
-        <Text style={styles.muted}>No exams yet.</Text>
+        <Text style={styles.muted}>No appointments yet.</Text>
       </View>
     );
   }
 
   return (
     <FlatList
-      data={exams}
-      keyExtractor={(exam) => exam.id}
+      data={appointments}
+      keyExtractor={(appointment) => appointment.id}
       contentContainerStyle={styles.list}
       renderItem={({ item }) => (
         <Pressable
-          testID={`exam-row-${item.id}`}
+          testID={`appointment-row-${item.id}`}
           accessibilityRole="button"
           style={styles.row}
-          onPress={() => onOpenExam?.(item.id)}
+          onPress={() => onOpenAppointment?.(item.id)}
         >
-          {/* Exams rarely carry a patient name yet, so fall back to the creation
-              date as the heading rather than a useless "Unknown patient". */}
-          <Text style={styles.patient}>{item.patientName ?? formatDate(item.createdAt)}</Text>
+          {/* A lone animal with no name falls back to the creation date as the
+              heading rather than a useless "Patient 1". */}
+          <Text style={styles.patient}>
+            {hasNames(item) ? animalNames(item) : formatDate(item.createdAt)}
+          </Text>
           {/* Only show the date as a subtitle when it isn't already the heading. */}
-          {item.patientName ? (
-            <Text style={styles.date}>{formatDate(item.createdAt)}</Text>
+          {hasNames(item) ? (
+            <Text style={styles.date}>
+              {formatDate(item.createdAt)}
+              {item.exams.length > 1 ? ` · ${item.exams.length} animals` : ''}
+            </Text>
           ) : null}
           <Text style={styles.snippet} numberOfLines={2}>
-            {item.assessment || item.subjective || 'No note yet'}
+            {snippetOf(item)}
           </Text>
         </Pressable>
       )}

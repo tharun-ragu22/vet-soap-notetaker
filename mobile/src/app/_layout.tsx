@@ -6,7 +6,7 @@ import { ServicesProvider } from '../services/context';
 /**
  * Root navigator. Wraps the whole app in the ServicesProvider (so every screen can
  * reach the wired ApiClient/AudioService) and a Stack for push navigation between the
- * recorder, the history feed, and the exam editor. Routes are auto-discovered from the
+ * recorder, the history feed, and an appointment's notes. Routes are auto-discovered from the
  * files in this directory.
  */
 export default function RootLayout() {
