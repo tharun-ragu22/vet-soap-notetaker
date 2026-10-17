@@ -6,9 +6,11 @@ class FakeTranscriber:
     def __init__(self, text):
         self.text = text
         self.received_audio = None
+        self.received_mime = None
 
-    def transcribe(self, audio_bytes):
+    def transcribe(self, audio_bytes, mime_type="audio/wav"):
         self.received_audio = audio_bytes
+        self.received_mime = mime_type
         return self.text
 
 
@@ -68,3 +70,34 @@ def test_generate_from_transcript_skips_transcription_and_echoes_transcript():
     assert note_generator.received_transcript == "hand-corrected transcript"
     assert result.notes == expected_notes
     assert result.transcript == "hand-corrected transcript"
+
+
+def _pipeline(transcriber):
+    return SoapPipeline(
+        transcriber=transcriber,
+        note_generator=FakeNoteGenerator(notes=[SoapNote(subjective="s", objective="o", assessment="a", plan="p")]),
+    )
+
+
+def test_transcribe_hands_the_audio_format_to_the_transcriber():
+    transcriber = FakeTranscriber(text="t")
+
+    _pipeline(transcriber).transcribe(b"m4a", mime_type="audio/mp4")
+
+    assert transcriber.received_mime == "audio/mp4"
+
+
+def test_process_hands_the_audio_format_to_the_transcriber():
+    transcriber = FakeTranscriber(text="t")
+
+    _pipeline(transcriber).process(b"m4a", mime_type="audio/mp4")
+
+    assert transcriber.received_mime == "audio/mp4"
+
+
+def test_audio_is_treated_as_wav_when_no_format_is_given():
+    transcriber = FakeTranscriber(text="t")
+
+    _pipeline(transcriber).transcribe(b"RIFF")
+
+    assert transcriber.received_mime == "audio/wav"

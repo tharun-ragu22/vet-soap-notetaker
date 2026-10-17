@@ -2,6 +2,7 @@ import httpx
 import pytest
 import respx
 
+from vet_soap_notetaker_backend.llm.transcription import NoSpeechError
 from vet_soap_notetaker_backend.llm.transcription.openai_transcriber import OpenAiTranscriber
 
 
@@ -29,3 +30,50 @@ def test_transcribe_raises_on_http_error():
 
     with pytest.raises(httpx.HTTPStatusError):
         transcriber.transcribe(b"RIFF....")
+
+
+def _uploaded_file_header(request) -> str:
+    # The multipart part header for the audio file, e.g.
+    # 'Content-Disposition: form-data; name="file"; filename="recording.m4a"\r\nContent-Type: audio/mp4'
+    body = request.content.decode("latin-1")
+    start = body.index('name="file"')
+    return body[start : body.index("\r\n\r\n", start)]
+
+
+@respx.mock
+def test_transcribe_uploads_m4a_audio_as_m4a():
+    route = respx.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hi"})
+    )
+
+    OpenAiTranscriber(api_key="sk-test", model="whisper-1").transcribe(
+        b"m4a-bytes", mime_type="audio/mp4"
+    )
+
+    header = _uploaded_file_header(route.calls.last.request)
+    assert 'filename="recording.m4a"' in header
+    assert "Content-Type: audio/mp4" in header
+
+
+@respx.mock
+def test_transcribe_uploads_wav_audio_as_wav_by_default():
+    route = respx.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hi"})
+    )
+
+    OpenAiTranscriber(api_key="sk-test", model="whisper-1").transcribe(b"RIFF....")
+
+    header = _uploaded_file_header(route.calls.last.request)
+    assert 'filename="recording.wav"' in header
+    assert "Content-Type: audio/wav" in header
+
+
+@pytest.mark.parametrize("text", ["", "   \n"])
+@respx.mock
+def test_transcribe_raises_no_speech_error_on_an_empty_transcript(text):
+    respx.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": text})
+    )
+
+    with pytest.raises(NoSpeechError):
+        OpenAiTranscriber(api_key="sk-test", model="whisper-1").transcribe(b"RIFF....")

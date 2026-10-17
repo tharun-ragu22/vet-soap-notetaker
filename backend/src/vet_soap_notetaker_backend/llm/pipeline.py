@@ -1,6 +1,7 @@
 from vet_soap_notetaker_backend.llm.note_generation import NoteGenerator
 from vet_soap_notetaker_backend.schemas import SoapResult
 from vet_soap_notetaker_backend.llm.transcription import Transcriber
+from vet_soap_notetaker_backend.llm.transcription.audio_format import DEFAULT_MIME
 
 
 class SoapPipeline:
@@ -8,15 +9,15 @@ class SoapPipeline:
         self.transcriber = transcriber
         self.note_generator = note_generator
 
-    def process(self, audio_bytes: bytes) -> SoapResult:
-        transcript = self.transcribe(audio_bytes)
+    def process(self, audio_bytes: bytes, mime_type: str = DEFAULT_MIME) -> SoapResult:
+        transcript = self.transcribe(audio_bytes, mime_type)
         return self.generate_from_transcript(transcript)
 
-    def transcribe(self, audio_bytes: bytes) -> str:
+    def transcribe(self, audio_bytes: bytes, mime_type: str = DEFAULT_MIME) -> str:
         # Transcription only. Lets the API persist the transcript even when the
         # subsequent note generation fails, so note-gen can be retried without
         # paying for transcription again.
-        return self.transcriber.transcribe(audio_bytes)
+        return self.transcriber.transcribe(audio_bytes, mime_type)
 
     def generate_from_transcript(self, transcript: str) -> SoapResult:
         # Skip transcription and re-run only note generation. Used when the vet

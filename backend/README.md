@@ -72,9 +72,11 @@ front of it for anything beyond local testing.
 The backend logs to the console (the packaged, windowless `.exe` writes the same lines to
 `%APPDATA%\VetScribe\logs\backend.log`). When a recording is slow, look for:
 
-- `recording processed: outcome=complete transcribe_ms=… note_gen_ms=… patient_count=… total_ms=…`
-  — one line per upload, saying where the time went (`outcome` is `complete`, `note_pending` or
-  `failed`, with the error type for the last two).
+- `recording processed: outcome=complete transcribe_ms=… note_gen_ms=… patient_count=… transcript_words=… total_ms=… audio_bytes=… audio_duration_ms=… audio_mime=…`
+  — one line per upload, saying where the time went (`outcome` is `complete`, `note_pending`,
+  `no_speech` or `failed`, with the error type for `note_pending` and `failed`). `transcript_words`
+  is a count only: far more words than the recording could hold (hundreds from a few seconds) means
+  the transcript was invented. `audio_mime` is the format the transcriber was told the audio is in.
 - `provider request failed (ReadTimeout) after 120.0s; retry 1 of 3 in 1s` — a provider call
   being retried (timeouts, 429s and 5xx are retried up to 3 times, each with its own 120s timeout).
 
@@ -94,7 +96,7 @@ Appointments (the mobile app):
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/appointments` | Audio body → `{"id", "created_at", "transcript", "note_pending", "exams": [...]}` (`200`, or `202` with the note pending, `502` if transcription fails) |
+| `POST /api/appointments` | Audio body → `{"id", "created_at", "transcript", "note_pending", "exams": [...]}` (`200`, or `202` with the note pending, `422` if no speech was heard, `502` if transcription fails) |
 | `POST /api/appointments/{id}/notes` | Generate a pending appointment's notes from its saved transcript; idempotent (a complete one is returned unchanged) |
 | `GET /api/appointments` | All appointments, newest first: `{"appointments": [ ... ]}` |
 | `GET /api/appointments/{id}` | One appointment (404 if unknown) |
@@ -102,12 +104,22 @@ Appointments (the mobile app):
 | `DELETE /api/appointments/{id}` | Delete the appointment and every exam in it |
 | `POST /api/appointments/regenerate` | `{"transcript", "appointment_id"?}` → `{"transcript", "patients": [...]}`, saving nothing |
 
+**Audio format.** Both audio endpoints read the upload's `Content-Type` to tell the transcriber
+what the audio is: `audio/m4a` (the phone's AAC recordings) is sent to the provider as `audio/mp4`,
+and `audio/wav` or a missing/unknown type as `audio/wav` (the desktop).
+
+**No speech.** When a recording has no intelligible speech the upload gets `422`
+`{"error": "no speech detected"}` and nothing is saved. A silent WAV is caught before any provider
+call (its peak level is below room noise); for anything else the transcriber is told to reply
+`NO_SPEECH` rather than guess, because given silence a model can otherwise invent a whole exam
+conversation. Retrying the same audio can't help, so clients don't retry a `422` automatically.
+
 Exams (the desktop app, which works one animal at a time). Each exam's JSON carries its
 `appointment_id` and the appointment's `transcript`:
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/soap` | Audio body → the first animal's exam (the pending placeholder on a `202`) |
+| `POST /api/soap` | Audio body → the first animal's exam (the pending placeholder on a `202`; `422` if no speech was heard) |
 | `POST /api/exams/{id}/note` | Finish a pending exam (adds any further animals to its appointment); idempotent |
 | `POST /api/soap/regenerate` | `{"transcript", "exam_id"?}` → the first animal's note at the top level plus every animal's under `patients` |
 | `GET /api/history` | Every exam, newest appointment first: `{"exams": [ ... ]}` |

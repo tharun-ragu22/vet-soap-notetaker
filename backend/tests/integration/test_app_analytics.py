@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.fakes import RecordingAnalytics
+from vet_soap_notetaker_backend.llm.transcription import NoSpeechError
 from tests.integration.test_app import FakePipeline
 from vet_soap_notetaker_backend.app import create_app
 from vet_soap_notetaker_backend.injection_queue import InjectionQueue
@@ -139,6 +140,14 @@ def test_soap_generated_reports_timings_audio_and_providers(setup):
         assert isinstance(props[key], int) and props[key] >= 0
 
 
+def test_soap_generated_reports_the_audio_format(setup):
+    client, tracker, _ = setup()
+
+    client.post("/api/appointments", content=b"audio", headers={"Content-Type": "audio/m4a"})
+
+    assert tracker.only("soap_generated")["properties"]["audio_mime"] == "audio/mp4"
+
+
 def test_soap_generated_ignores_an_unparseable_audio_duration(setup):
     client, tracker, _ = setup()
 
@@ -177,6 +186,18 @@ def test_soap_generated_reports_a_failed_transcription(setup):
     assert props["error_type"] == "ConnectError"
     assert props["exam_id"] is None
     assert props["note_gen_ms"] is None
+
+
+def test_soap_generated_reports_a_recording_with_no_speech(setup):
+    client, tracker, _ = setup(pipeline=FakePipeline(transcribe_error=NoSpeechError()))
+
+    response = client.post("/api/appointments", content=b"RIFF")
+
+    assert response.status_code == 422
+    props = tracker.only("soap_generated")["properties"]
+    assert props["outcome"] == "no_speech"
+    assert props["failed_stage"] == "transcription"
+    assert props["appointment_id"] is None
 
 
 def test_pending_note_completed_reports_timing_and_outcome(setup):

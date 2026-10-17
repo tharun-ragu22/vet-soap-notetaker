@@ -1,8 +1,10 @@
 import importlib
 import pkgutil
+import re
 from abc import ABC, abstractmethod
 
 from vet_soap_notetaker_backend.config import BackendConfig
+from vet_soap_notetaker_backend.llm.transcription.audio_format import DEFAULT_MIME
 
 _registry: dict[str, type["Transcriber"]] = {}
 
@@ -20,11 +22,30 @@ class Transcriber(ABC):
     def from_config(cls, config: BackendConfig) -> "Transcriber": ...
 
     @abstractmethod
-    def transcribe(self, audio_bytes: bytes) -> str: ...
+    def transcribe(self, audio_bytes: bytes, mime_type: str = DEFAULT_MIME) -> str: ...
 
 
 class UnknownProviderError(Exception):
     pass
+
+
+class NoSpeechError(Exception):
+    """The recording has no intelligible speech, so there is nothing to make a note
+    from. Deliberately not a TranscriptionError: it isn't a provider failure (no
+    502), and retrying the same audio can't help."""
+
+
+_NO_SPEECH_REPLY = re.compile(r"\W*no_speech\W*", re.IGNORECASE)
+_SPEAKER_LABEL = re.compile(r"^\s*[A-Za-z][\w ]{0,30}:", re.MULTILINE)
+
+
+def require_speech(transcript: str) -> str:
+    """Return the transcript, or raise NoSpeechError if it holds no actual words:
+    empty, the NO_SPEECH reply, or nothing but speaker labels and [inaudible]."""
+    words = _SPEAKER_LABEL.sub("", transcript).replace("[inaudible]", "")
+    if not words.strip() or _NO_SPEECH_REPLY.fullmatch(words):
+        raise NoSpeechError()
+    return transcript
 
 
 def _discover_providers() -> None:

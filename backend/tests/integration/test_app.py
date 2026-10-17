@@ -20,10 +20,12 @@ class FakePipeline:
         self.transcribe_error = transcribe_error
         self.note_error = note_error
         self.received_audio = None
+        self.received_mime = None
         self.received_transcript = None
 
-    def transcribe(self, audio_bytes):
+    def transcribe(self, audio_bytes, mime_type="audio/wav"):
         self.received_audio = audio_bytes
+        self.received_mime = mime_type
         if self.transcribe_error is not None:
             raise self.transcribe_error
         return self.transcript

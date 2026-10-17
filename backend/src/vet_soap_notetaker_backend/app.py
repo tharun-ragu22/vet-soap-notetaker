@@ -21,7 +21,9 @@ from vet_soap_notetaker_backend.llm.note_generation.parsing import NoteParsingEr
 from vet_soap_notetaker_backend.llm.pipeline import SoapPipeline
 from vet_soap_notetaker_backend.schemas import SoapResult
 from vet_soap_notetaker_backend.store import Appointment, Exam, ExamEdit, ExamStore
-from vet_soap_notetaker_backend.llm.transcription import get_transcriber
+from vet_soap_notetaker_backend.llm.transcription import NoSpeechError, get_transcriber
+from vet_soap_notetaker_backend.llm.transcription.audio_format import DEFAULT_MIME, transcription_mime
+from vet_soap_notetaker_backend.llm.transcription.silence import is_silent_wav
 from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import TranscriptionError
 
 logger = logging.getLogger("vet_soap_notetaker_backend.app")
@@ -153,8 +155,13 @@ def create_app(
     # directly, one transcription stalls the desktop's injection poll, History
     # and saves until it returns. Exceptions re-raise here, so the error
     # mapping below is unchanged.
-    async def _transcribe(audio_bytes: bytes) -> str:
-        return await run_in_threadpool(pipeline.transcribe, audio_bytes)
+    async def _transcribe(audio_bytes: bytes, mime_type: str) -> str:
+        # A silent WAV never reaches the provider: it costs money and, given
+        # silence, a model can invent a whole conversation. Reading a long WAV
+        # takes a second or two, so it runs off the event loop too.
+        if mime_type == DEFAULT_MIME and await run_in_threadpool(is_silent_wav, audio_bytes):
+            raise NoSpeechError()
+        return await run_in_threadpool(pipeline.transcribe, audio_bytes, mime_type)
 
     async def _generate(transcript: str):
         return await run_in_threadpool(pipeline.generate_from_transcript, transcript)
@@ -176,6 +183,7 @@ def create_app(
             "total_ms": _elapsed_ms(started),
             "audio_bytes": timing["audio_bytes"],
             "audio_duration_ms": timing["audio_duration_ms"],
+            "audio_mime": timing["audio_mime"],
         }
         logger.info("recording processed: %s", " ".join(f"{k}={v}" for k, v in fields.items()))
 
@@ -190,6 +198,8 @@ def create_app(
         timing = {
             "audio_bytes": len(audio_bytes),
             "audio_duration_ms": _audio_duration_ms(request),
+            # The phone uploads m4a, the desktop WAV; the transcriber has to be told which.
+            "audio_mime": transcription_mime(request.headers.get("content-type")),
             "transcription_provider": config.transcription_provider,
             "note_provider": config.note_provider,
         }
@@ -198,7 +208,25 @@ def create_app(
         # Transcribe first. A transcription failure is fatal (502) — there's
         # nothing worth persisting, and the client retries the whole upload.
         try:
-            transcript = await _transcribe(audio_bytes)
+            transcript = await _transcribe(audio_bytes, timing["audio_mime"])
+        except NoSpeechError:
+            # Nothing was said, so there's nothing to save. A 422 rather than a
+            # 502: the provider worked, and the same audio would fail again.
+            _track(
+                request,
+                "soap_generated",
+                outcome="no_speech",
+                failed_stage="transcription",
+                exam_id=None,
+                appointment_id=None,
+                patient_count=None,
+                transcribe_ms=_elapsed_ms(started),
+                note_gen_ms=None,
+                total_ms=_elapsed_ms(started),
+                **timing,
+            )
+            _log_recording("no_speech", started, timing, transcript_words=0)
+            return JSONResponse({"error": "no speech detected"}, status_code=422)
         except _PROVIDER_ERRORS as exc:
             _track(
                 request,
@@ -217,6 +245,9 @@ def create_app(
             _log_recording("failed", started, timing, error=type(exc).__name__)
             return _provider_error_response(exc)
         timing["transcribe_ms"] = _elapsed_ms(started)
+        # Logged as a count only: far more words than the recording could hold
+        # is how an invented transcript shows up.
+        transcript_words = len(transcript.split())
         note_started = time.perf_counter()
 
         # With a good transcript in hand, generating the notes is the only thing
@@ -246,6 +277,7 @@ def create_app(
                 timing,
                 note_gen_ms=_elapsed_ms(note_started),
                 error=type(exc).__name__,
+                transcript_words=transcript_words,
             )
             return appointment, 202
 
@@ -268,6 +300,7 @@ def create_app(
             timing,
             note_gen_ms=_elapsed_ms(note_started),
             patient_count=len(appointment.exams),
+            transcript_words=transcript_words,
         )
         return appointment, 200
 

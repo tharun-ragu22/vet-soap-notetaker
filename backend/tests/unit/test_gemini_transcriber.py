@@ -5,6 +5,7 @@ import pytest
 import respx
 
 from vet_soap_notetaker_backend.llm import http_retry
+from vet_soap_notetaker_backend.llm.transcription import NoSpeechError
 from vet_soap_notetaker_backend.llm.transcription import gemini_transcriber as gt_module
 from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import (
     GeminiTranscriber,
@@ -330,3 +331,76 @@ def test_files_api_sends_the_key_as_a_header_on_every_request_and_never_in_a_url
     for request in requests:
         assert request.headers["x-goog-api-key"] == "key123", request.url
         assert "key123" not in str(request.url)
+
+
+@respx.mock
+def test_transcribe_labels_the_audio_with_the_given_format():
+    gen = respx.post(GENERATE_URL).mock(return_value=httpx.Response(200, json=_candidates("ok")))
+
+    GeminiTranscriber(api_key="key123", model="gemini-2.0-flash").transcribe(
+        b"m4a-bytes", mime_type="audio/mp4"
+    )
+
+    assert _audio_part(gen.calls.last.request)["inline_data"]["mime_type"] == "audio/mp4"
+
+
+@respx.mock
+def test_transcribe_labels_audio_as_wav_by_default():
+    gen = respx.post(GENERATE_URL).mock(return_value=httpx.Response(200, json=_candidates("ok")))
+
+    GeminiTranscriber(api_key="key123", model="gemini-2.0-flash").transcribe(b"RIFF....")
+
+    assert _audio_part(gen.calls.last.request)["inline_data"]["mime_type"] == "audio/wav"
+
+
+@respx.mock
+def test_files_api_labels_the_upload_and_the_reference_with_the_given_format():
+    start = respx.post(UPLOAD_START_URL).mock(
+        return_value=httpx.Response(200, headers={"X-Goog-Upload-URL": UPLOAD_SESSION_URL})
+    )
+    respx.post(UPLOAD_SESSION_URL).mock(
+        return_value=httpx.Response(
+            200, json={"file": {"name": FILE_NAME, "uri": FILE_URI, "state": "ACTIVE"}}
+        )
+    )
+    respx.delete(FILE_RESOURCE_URL).mock(return_value=httpx.Response(200))
+    gen = respx.post(GENERATE_URL).mock(return_value=httpx.Response(200, json=_candidates("ok")))
+
+    _large_transcriber().transcribe(b"this-is-big-audio", mime_type="audio/mp4")
+
+    assert start.calls.last.request.headers["X-Goog-Upload-Header-Content-Type"] == "audio/mp4"
+    assert _audio_part(gen.calls.last.request)["file_data"]["mime_type"] == "audio/mp4"
+
+
+@respx.mock
+def test_transcribe_prompt_forbids_inventing_speech():
+    # Silent recordings used to come back as a whole made-up exam conversation.
+    route = respx.post(GENERATE_URL).mock(return_value=httpx.Response(200, json=_candidates("x")))
+
+    GeminiTranscriber(api_key="key123", model="gemini-2.0-flash").transcribe(b"RIFF....")
+
+    prompt = " ".join(_text_parts(route.calls.last.request))
+    assert "only words that are actually audible" in prompt.lower()
+    assert "never guess or invent" in prompt.lower()
+    assert "[inaudible]" in prompt
+    assert "respond with exactly NO_SPEECH" in prompt
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["NO_SPEECH", "  no_speech. ", "", "[inaudible]", "Speaker 1: [inaudible] [inaudible]", "Speaker 1: NO_SPEECH"],
+)
+@respx.mock
+def test_transcribe_raises_no_speech_error_when_nothing_was_said(reply):
+    respx.post(GENERATE_URL).mock(return_value=httpx.Response(200, json=_candidates(reply)))
+
+    with pytest.raises(NoSpeechError):
+        GeminiTranscriber(api_key="key123", model="gemini-2.0-flash").transcribe(b"RIFF....")
+
+
+@respx.mock
+def test_transcribe_returns_a_real_transcript_that_mentions_no_speech():
+    text = "Owner: She had no speech problems, just a cough."
+    respx.post(GENERATE_URL).mock(return_value=httpx.Response(200, json=_candidates(text)))
+
+    assert GeminiTranscriber(api_key="key123", model="gemini-2.0-flash").transcribe(b"RIFF") == text

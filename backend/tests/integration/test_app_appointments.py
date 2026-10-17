@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from tests.integration.test_app import FakePipeline
 from vet_soap_notetaker_backend.app import create_app
 from vet_soap_notetaker_backend.llm.note_generation.parsing import NoteParsingError
+from vet_soap_notetaker_backend.llm.transcription import NoSpeechError
 from vet_soap_notetaker_backend.schemas import SoapNote
 from vet_soap_notetaker_backend.store import ExamStore
 
@@ -407,3 +408,145 @@ def test_create_appointment_logs_the_failed_stage(make_client, caplog):
 
     [line] = [r.getMessage() for r in caplog.records if "transcribe_ms" in r.getMessage()]
     assert "outcome=note_pending" in line and "NoteParsingError" in line
+
+
+# --- Audio format ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("content_type", "expected"),
+    [("audio/m4a", "audio/mp4"), ("audio/wav", "audio/wav"), (None, "audio/wav")],
+)
+def test_create_appointment_tells_the_transcriber_the_uploaded_format(
+    make_client, content_type, expected
+):
+    pipeline = FakePipeline(notes=[BELLA], transcript="one dog")
+    client, _ = make_client(pipeline=pipeline)
+    headers = {"Content-Type": content_type} if content_type else {}
+
+    client.post("/api/appointments", content=b"audio", headers=headers)
+
+    assert pipeline.received_mime == expected
+
+
+def test_desktop_soap_upload_tells_the_transcriber_the_uploaded_format(make_client):
+    pipeline = FakePipeline(notes=[BELLA], transcript="one dog")
+    client, _ = make_client(pipeline=pipeline)
+
+    client.post("/api/soap", content=b"RIFF", headers={"Content-Type": "audio/wav"})
+
+    assert pipeline.received_mime == "audio/wav"
+
+
+def test_create_appointment_logs_the_audio_format(make_client, caplog):
+    client, _ = make_client()
+
+    with caplog.at_level("INFO", logger="vet_soap_notetaker_backend.app"):
+        client.post("/api/appointments", content=b"audio", headers={"Content-Type": "audio/m4a"})
+
+    [line] = [r.getMessage() for r in caplog.records if "transcribe_ms" in r.getMessage()]
+    assert "audio_mime=audio/mp4" in line
+
+
+# --- No speech ----------------------------------------------------------------------
+
+
+def test_create_appointment_returns_422_and_saves_nothing_when_no_speech_was_heard(make_client):
+    pipeline = FakePipeline(transcribe_error=NoSpeechError())
+    client, store = make_client(pipeline=pipeline)
+
+    response = client.post("/api/appointments", content=b"audio", headers={"Content-Type": "audio/m4a"})
+
+    assert response.status_code == 422
+    assert response.json() == {"error": "no speech detected"}
+    assert store.list_appointments() == []
+    assert pipeline.received_transcript is None
+
+
+def test_desktop_soap_upload_returns_422_when_no_speech_was_heard(make_client):
+    client, store = make_client(pipeline=FakePipeline(transcribe_error=NoSpeechError()))
+
+    response = client.post("/api/soap", content=b"RIFF", headers={"Content-Type": "audio/wav"})
+
+    assert response.status_code == 422
+    assert response.json() == {"error": "no speech detected"}
+    assert store.list_appointments() == []
+
+
+def test_create_appointment_logs_a_recording_with_no_speech(make_client, caplog):
+    client, _ = make_client(pipeline=FakePipeline(transcribe_error=NoSpeechError()))
+
+    with caplog.at_level("INFO", logger="vet_soap_notetaker_backend.app"):
+        client.post("/api/appointments", content=b"audio")
+
+    [line] = [r.getMessage() for r in caplog.records if "recording processed" in r.getMessage()]
+    assert "outcome=no_speech" in line
+
+
+def test_recording_log_counts_the_transcript_words_but_never_includes_them(make_client, caplog):
+    # A count makes an invented transcript easy to spot (200 words from 10 seconds).
+    client, _ = make_client()
+
+    with caplog.at_level("INFO", logger="vet_soap_notetaker_backend.app"):
+        client.post("/api/appointments", content=b"audio")
+
+    [line] = [r.getMessage() for r in caplog.records if "recording processed" in r.getMessage()]
+    assert "transcript_words=3" in line  # "two dogs today"
+    assert "two dogs today" not in line
+
+
+def test_recording_log_counts_the_transcript_words_when_the_note_is_pending(make_client, caplog):
+    pipeline = FakePipeline(transcript="two dogs today", note_error=NoteParsingError("bad"))
+    client, _ = make_client(pipeline=pipeline)
+
+    with caplog.at_level("INFO", logger="vet_soap_notetaker_backend.app"):
+        client.post("/api/appointments", content=b"audio")
+
+    [line] = [r.getMessage() for r in caplog.records if "recording processed" in r.getMessage()]
+    assert "transcript_words=3" in line
+
+
+def test_recording_log_counts_no_words_when_no_speech_was_heard(make_client, caplog):
+    client, _ = make_client(pipeline=FakePipeline(transcribe_error=NoSpeechError()))
+
+    with caplog.at_level("INFO", logger="vet_soap_notetaker_backend.app"):
+        client.post("/api/appointments", content=b"audio")
+
+    [line] = [r.getMessage() for r in caplog.records if "recording processed" in r.getMessage()]
+    assert "transcript_words=0" in line
+
+
+def _silent_wav() -> bytes:
+    import io
+    import wave
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(16000)
+        out.writeframes(b"\x00\x00" * 16000)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("path", ["/api/appointments", "/api/soap"])
+def test_a_silent_wav_gets_422_without_paying_for_transcription(make_client, path):
+    pipeline = FakePipeline(notes=[BELLA], transcript="invented exam")
+    client, store = make_client(pipeline=pipeline)
+
+    response = client.post(path, content=_silent_wav(), headers={"Content-Type": "audio/wav"})
+
+    assert response.status_code == 422
+    assert response.json() == {"error": "no speech detected"}
+    assert pipeline.received_audio is None
+    assert store.list_appointments() == []
+
+
+def test_an_m4a_upload_always_goes_to_the_transcriber(make_client):
+    # m4a can't be checked for silence here, so the transcriber's NO_SPEECH is the guard.
+    pipeline = FakePipeline(notes=[BELLA], transcript="one dog")
+    client, _ = make_client(pipeline=pipeline)
+
+    client.post("/api/appointments", content=_silent_wav(), headers={"Content-Type": "audio/m4a"})
+
+    assert pipeline.received_audio is not None

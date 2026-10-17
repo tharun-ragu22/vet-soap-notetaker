@@ -10,7 +10,8 @@ from vet_soap_notetaker_backend.llm.http_retry import (
     DEFAULT_TIMEOUT_SECONDS,
     post_with_retries,
 )
-from vet_soap_notetaker_backend.llm.transcription import Transcriber
+from vet_soap_notetaker_backend.llm.transcription import Transcriber, require_speech
+from vet_soap_notetaker_backend.llm.transcription.audio_format import DEFAULT_MIME
 
 logger = logging.getLogger("vet_soap_notetaker_backend.gemini_transcriber")
 
@@ -18,12 +19,6 @@ ENDPOINT_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{mo
 # Resumable upload + file-resource endpoints for the Files API fallback.
 FILES_UPLOAD_ENDPOINT = "https://generativelanguage.googleapis.com/upload/v1beta/files"
 FILE_RESOURCE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/{name}"
-
-# NOTE: the mobile app records AAC in an .m4a container, so labelling every clip
-# "audio/wav" is technically wrong -- fixing that means threading the real
-# Content-Type through the Transcriber interface, tracked as a separate change.
-# Kept here for parity between the inline and Files API paths.
-AUDIO_MIME = "audio/wav"
 
 # Inline requests are capped at 100 MB by Gemini; we switch to the Files API
 # before that, leaving ~20 MB of head-room. The threshold is measured on the
@@ -33,8 +28,17 @@ INLINE_MAX_BYTES = 80 * 1024 * 1024
 # 120s timeout, so the Files API path waits longer.
 FILES_API_TIMEOUT_SECONDS = 300.0
 
+# The model reply for a recording with no intelligible speech. Without an explicit
+# way out, a silent clip came back as a whole invented exam conversation.
+NO_SPEECH = "NO_SPEECH"
+
 TRANSCRIPTION_PROMPT = (
-    "Transcribe this veterinary exam-room audio verbatim with speaker diarization. "
+    "Transcribe this audio verbatim with speaker diarization. It may be a recording from a "
+    "veterinary exam room; that is context for spelling clinical terms, not content to fill in. "
+    "Transcribe only words that are actually audible in the recording. Never guess or invent "
+    "speech, speakers, or dialogue that you cannot hear. Write [inaudible] for a word you can "
+    "hear but cannot make out. If the recording contains no intelligible speech (silence, "
+    f"background noise, or only inaudible sounds), respond with exactly {NO_SPEECH} and nothing else. "
     "Attribute every utterance to a speaker and start each speaker's turn on its own line "
     'prefixed with a label followed by a colon, e.g. "Veterinarian:" and "Owner:". '
     'Use "Veterinarian:", "Owner:", and "Technician:" when the role is clear from context; '
@@ -80,7 +84,7 @@ class GeminiTranscriber(Transcriber):
     def from_config(cls, config: BackendConfig) -> "GeminiTranscriber":
         return cls(api_key=config.gemini_api_key, model=config.gemini_transcription_model)
 
-    def transcribe(self, audio_bytes: bytes) -> str:
+    def transcribe(self, audio_bytes: bytes, mime_type: str = DEFAULT_MIME) -> str:
         # Small clips go inline; anything that would overflow the inline request
         # cap is uploaded via the Files API and referenced by URI instead.
         if _estimated_base64_len(len(audio_bytes)) > self.inline_max_bytes:
@@ -88,24 +92,24 @@ class GeminiTranscriber(Transcriber):
                 "audio is %d bytes, exceeding the inline ceiling -- using the Files API",
                 len(audio_bytes),
             )
-            return self._transcribe_via_files_api(audio_bytes)
-        return self._transcribe_inline(audio_bytes)
+            return self._transcribe_via_files_api(audio_bytes, mime_type)
+        return self._transcribe_inline(audio_bytes, mime_type)
 
-    def _transcribe_inline(self, audio_bytes: bytes) -> str:
+    def _transcribe_inline(self, audio_bytes: bytes, mime_type: str) -> str:
         audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
         response = post_with_retries(
             url=ENDPOINT_TEMPLATE.format(model=self.model),
             headers=self._auth_headers(),
             json=self._request_body(
-                {"inline_data": {"mime_type": AUDIO_MIME, "data": audio_b64}}
+                {"inline_data": {"mime_type": mime_type, "data": audio_b64}}
             ),
             timeout=self.timeout_seconds,
             max_retries=self.max_retries,
         )
         return self._parse_transcript(response.json())
 
-    def _transcribe_via_files_api(self, audio_bytes: bytes) -> str:
-        file_resource = self._upload_file(audio_bytes)
+    def _transcribe_via_files_api(self, audio_bytes: bytes, mime_type: str) -> str:
+        file_resource = self._upload_file(audio_bytes, mime_type)
         name = file_resource["name"]
         try:
             file_resource = self._wait_until_active(file_resource)
@@ -115,7 +119,7 @@ class GeminiTranscriber(Transcriber):
                 json=self._request_body(
                     {
                         "file_data": {
-                            "mime_type": AUDIO_MIME,
+                            "mime_type": mime_type,
                             "file_uri": file_resource["uri"],
                         }
                     }
@@ -127,7 +131,7 @@ class GeminiTranscriber(Transcriber):
         finally:
             self._delete_file(name)
 
-    def _upload_file(self, audio_bytes: bytes) -> dict:
+    def _upload_file(self, audio_bytes: bytes, mime_type: str) -> dict:
         # 1. Start a resumable upload -- the upload URL comes back in a header.
         start = post_with_retries(
             url=FILES_UPLOAD_ENDPOINT,
@@ -136,7 +140,7 @@ class GeminiTranscriber(Transcriber):
                 "X-Goog-Upload-Protocol": "resumable",
                 "X-Goog-Upload-Command": "start",
                 "X-Goog-Upload-Header-Content-Length": str(len(audio_bytes)),
-                "X-Goog-Upload-Header-Content-Type": AUDIO_MIME,
+                "X-Goog-Upload-Header-Content-Type": mime_type,
             },
             json={"file": {"display_name": "exam-audio"}},
             timeout=self.files_api_timeout_seconds,
@@ -214,7 +218,7 @@ class GeminiTranscriber(Transcriber):
 
     def _parse_transcript(self, data: dict) -> str:
         try:
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            transcript = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         except (KeyError, IndexError) as exc:
             block_reason = data.get("promptFeedback", {}).get("blockReason")
             finish_reason = (data.get("candidates") or [{}])[0].get("finishReason")
@@ -223,3 +227,4 @@ class GeminiTranscriber(Transcriber):
                 f"(blockReason={block_reason}, finishReason={finish_reason}); "
                 "the audio may be empty, silent, or blocked"
             ) from exc
+        return require_speech(transcript)

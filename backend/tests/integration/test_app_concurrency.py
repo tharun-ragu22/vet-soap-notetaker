@@ -32,7 +32,7 @@ class BlockingPipeline:
             self.release.wait(timeout=5)
             self.finished = True
 
-    def transcribe(self, audio_bytes):
+    def transcribe(self, audio_bytes, mime_type="audio/wav"):
         self._maybe_block("transcribe")
         return "owner reports vomiting"
 
