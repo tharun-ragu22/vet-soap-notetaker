@@ -77,6 +77,10 @@ attempted, so nothing is lost if the backend is down or the app is killed. The q
 - **Backend error replies** (e.g. a 502 when transcription fails): after 5 the automatic
   retries stop and the recording shows as **failed** — the home banner turns red ("N recordings
   failed to upload — tap to review").
+- **No speech heard** (a 422 — the backend found no intelligible speech, e.g. the microphone
+  was covered or muted): failed straight away with no automatic retries, since the same audio
+  would fail again and each try pays for transcription. It shows as "No speech heard in this
+  recording" with Retry and Discard as usual.
 - **Notes failed but the transcript was saved** (a 202): the audio is no longer needed; only
   the note generation is retried, never a re-upload.
 
@@ -234,7 +238,8 @@ Three layers of test run under the same `npm test` (and so under CI's `test-mobi
   `FakeBackend` — the closest thing to a device run in Node, with mocked audio uploads.
   Includes the upload failure paths: a backend that can't be reached (keeps retrying, then a
   manual Retry from the Uploads screen lands) and one that keeps returning 502 (stops after 5,
-  shows why, and Retry uploads it after recovery).
+  shows why, and Retry uploads it after recovery), plus a recording with no speech (a 422:
+  failed at once, never retried in the background).
 
 ### Local dev note (this repo's WSL checkout)
 

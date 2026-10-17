@@ -47,6 +47,15 @@ describe('describeUpload', () => {
     ).toEqual({ status: 'Upload failed after 5 tries', detail: 'Backend error (502)' });
   });
 
+  it('says no speech was heard, rather than a backend error', () => {
+    expect(
+      describeUpload(audio({ attempts: 1, failed: true, lastErrorKind: 'backend', lastStatus: 422 }), null),
+    ).toEqual({
+      status: 'No speech heard in this recording',
+      detail: "Check the microphone wasn't covered or muted, then Retry or Discard.",
+    });
+  });
+
   it('names a rejected API key', () => {
     expect(
       describeUpload(audio({ attempts: 5, failed: true, lastErrorKind: 'backend', lastStatus: 401 }), null).detail,

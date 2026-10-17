@@ -37,6 +37,12 @@ export function describeUpload(entry: QueueEntry, activeId: string | null): Uplo
     return { status: 'Uploaded — notes still generating', detail: TRANSCRIPT_SAFE };
   }
 
+  if (entry.failed && entry.lastErrorKind === 'backend' && entry.lastStatus === 422) {
+    return {
+      status: 'No speech heard in this recording',
+      detail: "Check the microphone wasn't covered or muted, then Retry or Discard.",
+    };
+  }
   if (entry.failed) return { status: `Upload failed after ${tries}`, detail: reason };
   if (entry.attempts > 0) {
     return {

@@ -322,7 +322,11 @@ export class UploadQueue {
       return { outcome: 'transient_failure' };
     }
     current.attempts += 1;
-    const parked = current.attempts >= this.maxAttempts;
+    // The backend heard no speech: the same audio would fail the same way (and pay
+    // for transcription each time), so stop at once and leave it to the vet.
+    const parked =
+      current.attempts >= this.maxAttempts ||
+      (current.lastStatus !== undefined && NON_RETRYABLE_STATUSES.has(current.lastStatus));
     if (parked) current.failed = true;
     await this.persist();
     return { outcome: parked ? 'parked' : 'transient_failure' };
@@ -353,6 +357,9 @@ export class UploadQueue {
     this.onChange?.(this.pending(), this.activeId);
   }
 }
+
+/** Backend replies that retrying the same recording can't fix (422: no speech). */
+const NON_RETRYABLE_STATUSES = new Set([422]);
 
 function errorKind(error: unknown): UploadErrorKind {
   if (!(error instanceof ApiClientError)) return 'other';

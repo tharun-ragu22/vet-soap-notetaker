@@ -108,6 +108,8 @@ export class FakeBackend {
   unreachable = false;
   /** Transcription fails: an upload gets a 502 and nothing is saved. */
   failTranscription = false;
+  /** No speech in the recording: an upload gets a 422 and nothing is saved. */
+  noSpeech = false;
 
   /** Plug this into `new ApiClient({ ..., fetch: backend.fetch })`. */
   readonly fetch: HttpFetch;
@@ -254,6 +256,7 @@ export class FakeBackend {
     if (method === 'POST' && pathname === '/api/appointments') {
       if (init.body == null) return response({ error: 'empty request body' }, 400);
       if (this.failTranscription) return response({ error: 'transcription failed' }, 502);
+      if (this.noSpeech) return response({ error: 'no speech detected' }, 422);
       const { transcript, patients } = this.notesForAudio(init.body);
       if (this.failNoteGeneration) {
         return response(this.appointmentJson(this.addPendingAppointment(transcript)), 202);

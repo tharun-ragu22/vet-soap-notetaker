@@ -319,5 +319,33 @@ describe('screens end-to-end', () => {
       expect(await apiClient.fetchAppointments()).toHaveLength(1);
       expect(queue.pending()).toHaveLength(0);
     });
+
+    it('a recording with no speech is failed at once, says so, and is never retried in the background', async () => {
+      const backend = new FakeBackend();
+      backend.noSpeech = true;
+      const apiClient = client(backend);
+      const uploads = jest.spyOn(apiClient, 'createAppointment');
+      const queue = makeQueue(apiClient, 5);
+
+      await recordOnce(queue);
+      await queue.processOnce();
+      await queue.processOnce();
+
+      expect(uploads).toHaveBeenCalledTimes(1);
+      const [entry] = queue.pending();
+      expect(entry).toMatchObject({ failed: true, attempts: 1 });
+      expect(await apiClient.fetchAppointments()).toHaveLength(0);
+
+      backend.noSpeech = false;
+      const onOpenAppointment = renderUploads(queue);
+      expect(screen.getByTestId(`upload-row-${entry.id}`)).toHaveTextContent('No speech heard in this recording', {
+        exact: false,
+      });
+
+      fireEvent.press(screen.getByTestId(`retry-${entry.id}`));
+
+      await waitFor(() => expect(onOpenAppointment).toHaveBeenCalled());
+      expect(await apiClient.fetchAppointments()).toHaveLength(1);
+    });
   });
 });

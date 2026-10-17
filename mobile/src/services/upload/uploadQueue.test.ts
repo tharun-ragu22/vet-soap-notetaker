@@ -349,6 +349,41 @@ describe('UploadQueue', () => {
     });
   });
 
+  describe('a recording with no speech (422)', () => {
+    const noSpeech = () => new ApiClientError('backend returned 422: {"error": "no speech detected"}', 422);
+
+    it('is marked failed on the first reply, not retried in the background', async () => {
+      const { queue, uploader } = makeQueue({ maxAttempts: 5 });
+      uploader.createAppointment.mockRejectedValue(noSpeech());
+
+      await queue.enqueue(REC);
+      await queue.processOnce();
+      await queue.processOnce();
+      await queue.processOnce();
+
+      expect(uploader.createAppointment).toHaveBeenCalledTimes(1);
+      expect(queue.pending()[0]).toMatchObject({
+        failed: true,
+        attempts: 1,
+        lastErrorKind: 'backend',
+        lastStatus: 422,
+      });
+    });
+
+    it('is kept, and a manual retry still uploads it', async () => {
+      const { queue, uploader, files } = makeQueue();
+      uploader.createAppointment.mockRejectedValueOnce(noSpeech());
+      const entry = await queue.enqueue(REC);
+      await queue.processOnce();
+      expect(files.deleted).toEqual([]);
+
+      uploader.createAppointment.mockResolvedValueOnce(appointment({ id: 'spoken' }));
+      const result = await queue.retry(entry.id);
+
+      expect(result).toMatchObject({ id: 'spoken' });
+    });
+  });
+
   describe('retry (manual, from the Uploads screen)', () => {
     it('clears a failed entry and uploads it now', async () => {
       const { queue, uploader } = makeQueue({ maxAttempts: 1 });
