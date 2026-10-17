@@ -24,6 +24,8 @@ MAX_WER = 0.15
 MIN_TERM_RECALL = 0.90
 MIN_WINDOW_RECALL = 0.80
 WINDOW_SECONDS = 300
+# Words a short clip's transcript may hold per word actually said; more is invented speech.
+MAX_SHORT_CLIP_WORD_RATIO = 1.5
 
 
 @dataclass(frozen=True)
@@ -105,3 +107,22 @@ class SpeakerLabelRate(Evaluator[TranscriptionInput, str, dict]):
 
     def evaluate(self, ctx: EvaluatorContext[TranscriptionInput, str, dict]) -> float:
         return speaker_label_rate(ctx.output)
+
+
+@dataclass
+class NoInventedSpeech(Evaluator[TranscriptionInput, str, dict]):
+    """For the short and silent clips: the transcript must not hold words nobody
+    said. A silent clip must come back empty (the transcriber's NoSpeechError);
+    a spoken one may be at most max_ratio times as long as what was said."""
+
+    max_ratio: float = MAX_SHORT_CLIP_WORD_RATIO
+
+    def evaluate(self, ctx: EvaluatorContext[TranscriptionInput, str, dict]) -> dict:
+        said = len(normalize_words(ctx.expected_output or ""))
+        heard = len(normalize_words(ctx.output))
+        if said == 0:
+            ok, reason = heard == 0, f"{heard} words from a silent clip"
+        else:
+            ok = heard <= said * self.max_ratio
+            reason = f"{heard} words for {said} spoken (max {self.max_ratio:g}x)"
+        return {"no_invented_speech": EvaluationReason(value=ok, reason=reason)}

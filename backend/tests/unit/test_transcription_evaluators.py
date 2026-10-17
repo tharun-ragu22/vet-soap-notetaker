@@ -2,6 +2,7 @@ from pydantic_evals.evaluators import EvaluatorContext
 
 from vet_soap_notetaker_backend.llm.evals.transcription.evaluators import (
     ClinicalTermRecall,
+    NoInventedSpeech,
     NoLateDropoff,
     SpeakerLabelRate,
     TranscriptionInput,
@@ -69,3 +70,39 @@ def test_no_late_dropoff_flags_the_window_that_went_quiet():
 def test_speaker_label_rate_is_a_score():
     assert SpeakerLabelRate().evaluate(_ctx(GOOD)) == 1.0
     assert SpeakerLabelRate().evaluate(_ctx("give vetmedin")) == 0.0
+
+
+def _short_ctx(output, expected):
+    return EvaluatorContext(
+        name="case",
+        inputs=TranscriptionInput(name="case", format="phone", audio_path="case.phone.m4a"),
+        metadata={},
+        expected_output=expected,
+        output=output,
+        duration=1.0,
+        _span_tree=None,
+        attributes={},
+        metrics={},
+    )
+
+
+def test_no_invented_speech_passes_an_empty_transcript_of_a_silent_clip():
+    result = NoInventedSpeech().evaluate(_short_ctx("", ""))
+    assert result["no_invented_speech"].value is True
+
+
+def test_no_invented_speech_fails_any_words_for_a_silent_clip():
+    # The real bug: a silent recording came back as a whole made-up exam.
+    result = NoInventedSpeech().evaluate(_short_ctx("Technician: Good morning.\nOwner: Good morning.", ""))
+    assert result["no_invented_speech"].value is False
+
+
+def test_no_invented_speech_passes_a_transcript_about_as_long_as_what_was_said():
+    result = NoInventedSpeech().evaluate(_short_ctx(REFERENCE, REFERENCE))
+    assert result["no_invented_speech"].value is True
+
+
+def test_no_invented_speech_fails_a_transcript_far_longer_than_what_was_said():
+    padded = REFERENCE + "Owner: and also she has been coughing every morning for a week now.\n" * 2
+    result = NoInventedSpeech().evaluate(_short_ctx(padded, REFERENCE))
+    assert result["no_invented_speech"].value is False

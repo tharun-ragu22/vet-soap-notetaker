@@ -257,7 +257,23 @@ Cases run one at a time so each duration is the provider's own latency. Evaluato
 - **no late drop-off** — every 5-minute window of the recording keeps ≥ 80% of its words, which
   catches a long transcript that degrades or stops partway through
 
-and report the share of lines with a speaker label. Every case must pass.
+and report the share of lines with a speaker label. Each clip is labelled with the format the backend
+would send the provider for that client (`audio/mp4` for the phone, `audio/wav` for the desktop).
+
+**Short and silent clips** (`llm/evals/transcription/short_clips.py`). A silent phone recording once
+came back as a whole invented exam conversation, so every run also transcribes, in both formats:
+
+- the first ~20 s of each recording, cut after the last turn that finishes in time and graded against
+  just those turns; and
+- 10 s and 30 s of silence.
+
+These are made at eval time with PyAV (a dev dependency that bundles ffmpeg), so no extra audio is
+needed. On top of latency and word error rate, **no invented speech** must hold: a silent clip must come
+back empty (the transcriber's `NO_SPEECH`, which the backend turns into a `422`), and a spoken clip's
+transcript can be at most 1.5× as long as what was said. The backend skips the provider for a silent
+WAV in production; the evals send it anyway, to test the prompt.
+
+Every case must pass.
 
 The audio (~300 MB) isn't in git. Generate it with `backend/scripts/transcription_eval_audio.ipynb` on
 Google Colab (free Kokoro TTS on a T4 GPU) and unzip `eval_audio.zip` into
@@ -268,8 +284,11 @@ the provider key in `backend/.env`:
 cd backend
 uv run python -m vet_soap_notetaker_backend.llm.evals.transcription.run
 uv run python -m vet_soap_notetaker_backend.llm.evals.transcription.run --formats phone --only otitis_hotspot_5min
+uv run python -m vet_soap_notetaker_backend.llm.evals.transcription.run --only short_clips   # just the short + silent clips
+# compare audio labels for the phone clips (the old, wrong one was audio/wav):
+uv run python -m vet_soap_notetaker_backend.llm.evals.transcription.run --formats phone --phone-mime audio/wav
 ```
 
 It calls the real provider (roughly $0.25 for a full run on gemini-2.5-flash) and writes every transcript
-plus `results.json` to `llm/evals/transcription/results/<timestamp>/` (gitignored). It isn't in CI yet,
+plus `results.json` to `llm/evals/transcription/results/<timestamp>/<dataset>/` (gitignored). It isn't in CI yet,
 because the audio isn't in the repo.
