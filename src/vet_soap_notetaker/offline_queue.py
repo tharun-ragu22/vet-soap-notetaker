@@ -9,6 +9,7 @@ from vet_soap_notetaker.api_client import (
     ApiClientError,
     BackendUnreachableError,
     ExamNotFoundError,
+    NoSpeechError,
     NotePendingError,
 )
 from vet_soap_notetaker.paths import get_appdata_base_dir
@@ -32,7 +33,7 @@ _STEM_FORMAT = "%Y%m%d_%H%M%S_%f"
 
 # Outcome of processing one queue entry.
 _DONE = "done"  # note ready, entry removed
-_DROPPED = "dropped"  # nothing left to do (exam deleted / unreadable), entry removed
+_DROPPED = "dropped"  # nothing left to do (exam deleted / unreadable / no speech), entry removed
 _STOP = "stop"  # backend still failing; keep the entry, end this pass
 
 
@@ -166,6 +167,14 @@ class OfflineQueue:
             note_path = path.with_suffix(".json")
             self._write_note_entry(note_path, exc.exam_id, attempts=0)
             return self._process_note(note_path)
+        except NoSpeechError:
+            # Nothing was said in it: retrying can't help and would block the
+            # queue while paying for transcription every pass. The pipeline
+            # archived this WAV as failed_*.wav when it first failed, so only
+            # the queued copy goes. Caught before ApiClientError (its base).
+            path.unlink()
+            logger.warning("queued recording %s has no speech; dropped from the queue", path)
+            return _DROPPED
         except ApiClientError as exc:
             logger.info("backend still unavailable, will retry later: %s", exc)
             return _STOP

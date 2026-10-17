@@ -7,6 +7,7 @@ from tests.fakes import RecordingAnalytics
 from vet_soap_notetaker.api_client import (
     ApiClientError,
     BackendUnreachableError,
+    NoSpeechError,
     NotePendingError,
     SoapNote,
 )
@@ -119,6 +120,14 @@ def test_a_note_pending_reply_is_reported(tmp_path):
 def test_an_unreachable_backend_is_reported(tmp_path):
     props = _fail_with(tmp_path, BackendUnreachableError("down"))
     assert props.only("note_failed")["properties"]["outcome"] == "backend_unreachable"
+
+
+def test_a_recording_with_no_speech_is_reported(tmp_path):
+    tracker = _fail_with(tmp_path, NoSpeechError("no speech"))
+
+    props = tracker.only("note_failed")["properties"]
+    assert props["outcome"] == "no_speech"
+    assert props["queued"] is False
 
 
 def test_a_backend_error_is_reported_without_its_message(tmp_path):

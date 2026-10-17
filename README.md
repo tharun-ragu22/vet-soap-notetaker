@@ -38,6 +38,10 @@ installing the phone app (EAS, TestFlight, LAN config).
    also queued for automatic retry, and a flyout explains what happened. A
    background worker retries queued recordings every 60 seconds and pops up a
    flyout with the recovered note once the backend comes back.
+6. If the backend hears no speech in the recording (e.g. the microphone was
+   muted), no note is made and a message says so. The audio is still archived
+   to `~/.vetscribe/recordings/`, but it isn't queued for retry -- the same
+   audio would fail the same way.
 
 A tray icon shows the current state at a glance: green (idle), red
 (recording), yellow (processing). Right-clicking the tray icon opens a menu

@@ -10,6 +10,7 @@ from vet_soap_notetaker.api_client import (
     ApiClientError,
     BackendUnreachableError,
     ExamNotFoundError,
+    NoSpeechError,
     NotePendingError,
 )
 
@@ -117,6 +118,20 @@ def test_generate_soap_note_raises_api_client_error_on_http_error_status():
 
     with pytest.raises(ApiClientError, match="500"):
         client.generate_soap_note(b"RIFF....")
+
+
+@respx.mock
+def test_generate_soap_note_raises_no_speech_error_on_a_422():
+    respx.post("https://vet_soap_notetaker.example.com/api/soap").mock(
+        return_value=httpx.Response(422, json={"error": "no speech detected"})
+    )
+
+    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
+
+    with pytest.raises(NoSpeechError):
+        client.generate_soap_note(b"RIFF....")
+    # Unaware callers still catch it as a plain backend failure.
+    assert issubclass(NoSpeechError, ApiClientError)
 
 
 @respx.mock

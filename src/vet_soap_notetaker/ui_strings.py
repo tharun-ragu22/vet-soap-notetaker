@@ -110,3 +110,10 @@ REGENERATE_EMPTY_TITLE = "Nothing to regenerate"
 REGENERATE_EMPTY_MESSAGE = "Add a transcript before regenerating the SOAP note."
 REGENERATE_ERROR_TITLE = "Regenerate failed"
 REGENERATE_ERROR_MESSAGE = "Could not regenerate the SOAP note:\n\n{error}"
+
+# Shown when the backend heard no speech in the recording (HTTP 422). Nothing
+# was saved and it isn't retried -- the same audio would fail the same way.
+NO_SPEECH_MESSAGE = (
+    "No speech was heard in that recording, so no note was made. Check the "
+    "microphone isn't muted. The audio was saved to {path}."
+)

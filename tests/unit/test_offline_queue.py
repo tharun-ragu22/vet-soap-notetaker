@@ -7,6 +7,7 @@ from vet_soap_notetaker.api_client import (
     ApiClientError,
     BackendUnreachableError,
     ExamNotFoundError,
+    NoSpeechError,
     NotePendingError,
     SoapNote,
 )
@@ -70,6 +71,32 @@ def test_process_once_stops_at_first_backend_failure_and_leaves_remaining_files_
     assert processed == []
     assert first.exists()
     on_note_ready.assert_not_called()
+
+
+def test_queued_audio_with_no_speech_is_dropped_and_the_pass_moves_on(tmp_path):
+    # Queued while the backend was down, then the backend hears no speech in it.
+    # Retrying can't help, and leaving it would block everything behind it while
+    # paying for transcription every pass. The pipeline archived the WAV as
+    # failed_*.wav when it first failed, so dropping the queued copy loses nothing.
+    queue_dir = tmp_path / "queue"
+    api_client = MagicMock()
+    api_client.generate_soap_note.side_effect = [
+        NoSpeechError("no speech"),
+        SoapNote(subjective="s2", objective="o2", assessment="a2", plan="p2"),
+    ]
+    on_note_ready = MagicMock()
+    queue = OfflineQueue(api_client=api_client, on_note_ready=on_note_ready, queue_dir=queue_dir)
+    silent = queue.enqueue(b"silent")
+    time.sleep(0.01)
+    spoken = queue.enqueue(b"spoken")
+
+    queue.process_once()
+
+    assert not silent.exists()
+    assert not spoken.exists()
+    on_note_ready.assert_called_once()
+    queue.process_once()
+    assert api_client.generate_soap_note.call_count == 2
 
 
 def test_start_runs_process_once_on_background_thread_until_stopped(tmp_path):

@@ -36,6 +36,12 @@ class ExamNotFoundError(ApiClientError):
     """The exam no longer exists on the backend (e.g. the vet deleted it)."""
 
 
+class NoSpeechError(ApiClientError):
+    """The backend heard no speech in the recording (HTTP 422), so no note was
+    made and nothing was saved. Re-sending the same audio would fail the same
+    way, so it must never be queued for retry."""
+
+
 class BackendUnreachableError(ApiClientError):
     """The request never got an answer (connection refused, DNS, timeout) --
     as opposed to the backend responding with an error."""
@@ -162,6 +168,9 @@ class ApiClient:
                 logger.warning("backend saved the transcript but the note is pending (exam %s)", exam_id)
                 raise NotePendingError(exam_id)
             raise ApiClientError("backend returned 202 without an exam id")
+        if response.status_code == 422:
+            logger.warning("backend heard no speech in the recording")
+            raise NoSpeechError("no speech was heard in the recording")
 
         return self._parse_soap_response(response)
 

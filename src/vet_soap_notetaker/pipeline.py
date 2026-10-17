@@ -10,6 +10,7 @@ from vet_soap_notetaker.analytics import NullAnalytics, injection_properties
 from vet_soap_notetaker.api_client import (
     ApiClientError,
     BackendUnreachableError,
+    NoSpeechError,
     NotePendingError,
 )
 from vet_soap_notetaker.paths import get_appdata_base_dir
@@ -123,6 +124,17 @@ class Pipeline:
             self.on_error(ui_strings.NOTE_PENDING_MESSAGE)
             self._transition(PipelineState.IDLE)
             return
+        except NoSpeechError as exc:
+            # 422: nothing was said. Archive the WAV (no data loss) but don't
+            # queue it -- re-sending the same audio would fail the same way and
+            # pay for transcription every pass. Caught before ApiClientError,
+            # which it subclasses.
+            self._report_failure(exc, stopped_at, recording_ms)
+            saved_path = self._save_failed_audio(audio_bytes)
+            logger.warning("backend heard no speech (audio saved to %s)", saved_path)
+            self.on_error(ui_strings.NO_SPEECH_MESSAGE.format(path=saved_path))
+            self._transition(PipelineState.IDLE)
+            return
         except ApiClientError as exc:
             self._report_failure(exc, stopped_at, recording_ms)
             saved_path = self._save_failed_audio(audio_bytes)
@@ -175,6 +187,8 @@ class Pipeline:
         # The error's type only, never its message (it carries backend bodies).
         if isinstance(exc, NotePendingError):
             outcome = "note_pending"
+        elif isinstance(exc, NoSpeechError):
+            outcome = "no_speech"
         elif isinstance(exc, BackendUnreachableError):
             outcome = "backend_unreachable"
         else:
@@ -187,7 +201,7 @@ class Pipeline:
                 "exam_id": getattr(exc, "exam_id", None),
                 "wait_ms": int((self._clock() - stopped_at) * 1000),
                 "recording_ms": recording_ms,
-                "queued": self.offline_queue is not None,
+                "queued": self.offline_queue is not None and not isinstance(exc, NoSpeechError),
             },
         )
 

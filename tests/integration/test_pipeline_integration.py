@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 
 from vet_soap_notetaker import ui_strings
-from vet_soap_notetaker.api_client import ApiClientError, NotePendingError, SoapNote
+from vet_soap_notetaker.api_client import ApiClientError, NoSpeechError, NotePendingError, SoapNote
 from vet_soap_notetaker.pipeline import Pipeline, PipelineState
 
 
@@ -257,4 +257,21 @@ def test_note_pending_without_an_offline_queue_still_returns_to_idle(tmp_path):
     pipeline.toggle_recording()
 
     deps["on_error"].assert_called_once_with(ui_strings.NOTE_PENDING_MESSAGE)
+    assert pipeline.state == PipelineState.IDLE
+
+
+def test_no_speech_keeps_the_audio_but_never_queues_it_for_retry(tmp_path):
+    # 422: the backend heard nothing. Re-sending the same audio would fail the
+    # same way every 60s (and pay for transcription each time), so it isn't
+    # queued -- but the WAV is still archived, so nothing is lost.
+    api_client = MagicMock(generate_soap_note=MagicMock(side_effect=NoSpeechError("no speech")))
+    pipeline, deps = _recording_pipeline(tmp_path, api_client)
+
+    pipeline.toggle_recording()
+
+    deps["offline_queue"].enqueue.assert_not_called()
+    [saved] = list((tmp_path / "recordings").glob("failed_*.wav"))
+    deps["on_error"].assert_called_once_with(ui_strings.NO_SPEECH_MESSAGE.format(path=saved))
+    assert "No speech was heard" in deps["on_error"].call_args[0][0]
+    deps["injector"].inject.assert_not_called()
     assert pipeline.state == PipelineState.IDLE
