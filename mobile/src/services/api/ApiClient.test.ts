@@ -1,4 +1,4 @@
-import { ApiClient, ApiClientError, DEFAULT_TIMEOUT_MS } from './ApiClient';
+import { ApiClient, ApiClientError, DEFAULT_TIMEOUT_MS, REACHABILITY_TIMEOUT_MS } from './ApiClient';
 import type { HttpFetch, HttpResponse } from './ApiClient';
 
 function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {}): HttpResponse {
@@ -364,6 +364,131 @@ describe('ApiClient', () => {
         await jest.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS - 60_000);
         await tracked;
         expect(settled).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
+  describe('cancelling from outside', () => {
+    function hanging() {
+      const signals: AbortSignal[] = [];
+      const fetchFn: HttpFetch = (_url, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal as AbortSignal;
+          signals.push(signal);
+          signal?.addEventListener('abort', () => reject(new Error('Aborted')));
+        });
+      return { fetchFn, signals };
+    }
+
+    it.each([
+      ['createAppointment', (c: ApiClient, signal: AbortSignal) => c.createAppointment(new Uint8Array([1]), 'audio/m4a', { signal })],
+      ['completeAppointment', (c: ApiClient, signal: AbortSignal) => c.completeAppointment('a1', { signal })],
+    ])('%s stops when its signal aborts, as "no answer"', async (_name, call) => {
+      const { fetchFn, signals } = hanging();
+      // A short own timeout keeps a failing run from hanging for the default 8 minutes.
+      const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: fetchFn, timeoutMs: 1000 });
+      const controller = new AbortController();
+
+      const result = call(client, controller.signal).then(
+        () => null,
+        (error: ApiClientError) => error,
+      );
+      await Promise.resolve();
+      controller.abort();
+
+      expect(signals[0]?.aborted).toBe(true); // straight away, not at the timeout
+      const error = await result;
+      expect(error).toBeInstanceOf(ApiClientError);
+      expect(error?.status).toBeUndefined();
+    });
+  });
+
+  describe('checkReachable', () => {
+    // Records the signal it was given; never answers until that signal aborts.
+    function hangingWithSignal() {
+      const signals: AbortSignal[] = [];
+      const fetchFn: HttpFetch = (_url, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal as AbortSignal;
+          signals.push(signal);
+          signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      return { fetchFn, signals };
+    }
+
+    async function errorOf(promise: Promise<unknown>): Promise<ApiClientError | null> {
+      try {
+        await promise;
+        return null;
+      } catch (error) {
+        return error as ApiClientError;
+      }
+    }
+
+    it.each([200, 404, 401])('treats any reply (%i) as reachable without reading the body', async (status) => {
+      const json = jest.fn();
+      const { fetchFn, calls } = stubFetch(() => ({
+        ok: status === 200,
+        status,
+        json,
+        text: async () => '',
+      }));
+      const client = new ApiClient({ baseUrl: 'http://host:8000/', apiKey: 'k', fetch: fetchFn });
+
+      await expect(client.checkReachable()).resolves.toBeUndefined();
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        url: 'http://host:8000/',
+        method: 'GET',
+        headers: { Authorization: 'Bearer k' },
+      });
+      expect(json).not.toHaveBeenCalled();
+    });
+
+    it('has no status when nothing answers', async () => {
+      const fetchFn: HttpFetch = async () => {
+        throw new TypeError('Network request failed');
+      };
+      const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: fetchFn });
+
+      const error = await errorOf(client.checkReachable());
+
+      expect(error).toBeInstanceOf(ApiClientError);
+      expect(error?.status).toBeUndefined();
+    });
+
+    it('gives up after its own short timeout, not the long upload one', async () => {
+      const { fetchFn, signals } = hangingWithSignal();
+      const client = new ApiClient({
+        baseUrl: 'http://host:8000',
+        fetch: fetchFn,
+        reachabilityTimeoutMs: 50,
+      });
+
+      const error = await errorOf(client.checkReachable());
+
+      expect(error).toBeInstanceOf(ApiClientError);
+      expect(error?.status).toBeUndefined();
+      expect(signals[0]?.aborted).toBe(true);
+    });
+
+    it('defaults to a 5 second timeout', async () => {
+      expect(REACHABILITY_TIMEOUT_MS).toBe(5000);
+      jest.useFakeTimers();
+      try {
+        const { fetchFn, signals } = hangingWithSignal();
+        const client = new ApiClient({ baseUrl: 'http://host:8000', fetch: fetchFn });
+        const result = errorOf(client.checkReachable());
+
+        await jest.advanceTimersByTimeAsync(4900);
+        expect(signals[0]?.aborted).toBe(false);
+
+        await jest.advanceTimersByTimeAsync(100);
+        expect(signals[0]?.aborted).toBe(true);
+        expect(await result).toBeInstanceOf(ApiClientError);
       } finally {
         jest.useRealTimers();
       }

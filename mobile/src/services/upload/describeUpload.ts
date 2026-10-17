@@ -14,8 +14,29 @@ const TRANSCRIPT_SAFE = 'The transcript is saved on the computer.';
  * the entry's error *kind* and HTTP status, never its raw `lastError`, which can
  * quote the backend's response body.
  */
-export function describeUpload(entry: QueueEntry, activeId: string | null): UploadDescription {
+export function describeUpload(
+  entry: QueueEntry,
+  activeId: string | null,
+  now: number = Date.now(),
+): UploadDescription {
   if (entry.id === activeId) return { status: 'Uploading…', detail: null };
+  const description = describeWaiting(entry);
+  if (!entry.lastAttemptAt) return description;
+  // So a recording that keeps retrying visibly isn't stuck.
+  const tried = `Last tried ${ago(Date.parse(entry.lastAttemptAt), now)}.`;
+  const { detail } = description;
+  if (!detail) return { ...description, detail: tried };
+  return { ...description, detail: `${detail}${detail.endsWith('.') ? '' : '.'} ${tried}` };
+}
+
+function ago(then: number, now: number): string {
+  const minutes = Math.floor((now - then) / 60_000);
+  if (!(minutes >= 1)) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  return `${Math.floor(minutes / 60)} h ago`;
+}
+
+function describeWaiting(entry: QueueEntry): UploadDescription {
 
   if (entry.lastErrorKind === 'unreachable' && !entry.failed) {
     return {

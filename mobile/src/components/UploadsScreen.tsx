@@ -15,6 +15,8 @@ export interface UploadsScreenProps {
   /** Discard a recording (or forget an uploaded one) — only ever the vet's choice. */
   onDiscard: (id: string) => Promise<void>;
   onOpenAppointment: (id: string) => void;
+  /** Clock for "Last tried …" (tests); defaults to Date.now. */
+  now?: () => number;
 }
 
 function formatDuration(ms: number): string {
@@ -33,6 +35,7 @@ export function UploadsScreen({
   onRetry,
   onDiscard,
   onOpenAppointment,
+  now = Date.now,
 }: UploadsScreenProps) {
   const [retrying, setRetrying] = useState<string | null>(null);
   const [armed, setArmed] = useState<string | null>(null);
@@ -72,7 +75,11 @@ export function UploadsScreen({
       data={entries}
       keyExtractor={(entry) => entry.id}
       renderItem={({ item }) => {
-        const { status, detail } = describeUpload(item, retrying === item.id ? item.id : activeId);
+        const { status, detail } = describeUpload(
+          item,
+          retrying === item.id ? item.id : activeId,
+          now(),
+        );
         const busy = item.id === activeId || item.id === retrying;
         const uploaded = item.stage === 'note';
         const failed = Boolean(item.failed);
@@ -102,8 +109,7 @@ export function UploadsScreen({
               <Pressable
                 testID={`discard-${item.id}`}
                 accessibilityRole="button"
-                disabled={busy}
-                style={[styles.button, styles.discard, busy && styles.disabled]}
+                style={[styles.button, styles.discard]}
                 onPress={() => void handleDiscard(item.id)}
               >
                 <Text style={styles.discardText}>

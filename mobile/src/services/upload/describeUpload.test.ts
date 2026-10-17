@@ -90,6 +90,42 @@ describe('describeUpload', () => {
     });
   });
 
+  describe('when it last tried', () => {
+    const NOW = Date.parse('2026-10-17T12:00:00Z');
+    const triedAgo = (ms: number) => new Date(NOW - ms).toISOString();
+
+    it('says it tried just now, under a minute ago', () => {
+      expect(
+        describeUpload(audio({ lastErrorKind: 'unreachable', lastAttemptAt: triedAgo(30_000) }), null, NOW),
+      ).toEqual({
+        status: "Can't reach the backend — retrying automatically",
+        detail: 'Check the address in Settings and that the computer is on. Last tried just now.',
+      });
+    });
+
+    it.each([
+      [90_000, '1 min ago'],
+      [7 * 60_000, '7 min ago'],
+      [125 * 60_000, '2 h ago'],
+    ])('after %i ms says "%s"', (ago, text) => {
+      const entry = audio({ lastErrorKind: 'unreachable', lastAttemptAt: triedAgo(ago) });
+      expect(describeUpload(entry, null, NOW).detail).toMatch(new RegExp(`Last tried ${text}\\.$`));
+    });
+
+    it('shows on a recording waiting to retry and on a failed one', () => {
+      const waiting = audio({ attempts: 2, lastErrorKind: 'backend', lastStatus: 502, lastAttemptAt: triedAgo(0) });
+      const failed = audio({ ...waiting, attempts: 5, failed: true });
+
+      expect(describeUpload(waiting, null, NOW).detail).toBe('Backend error (502). Last tried just now.');
+      expect(describeUpload(failed, null, NOW).detail).toBe('Backend error (502). Last tried just now.');
+    });
+
+    it('stays just "Uploading…" while it is uploading', () => {
+      const entry = audio({ lastErrorKind: 'unreachable', lastAttemptAt: triedAgo(60_000) });
+      expect(describeUpload(entry, 'a', NOW)).toEqual({ status: 'Uploading…', detail: null });
+    });
+  });
+
   it('never shows the raw error text, which can quote the backend', () => {
     const entry = audio({
       attempts: 5,

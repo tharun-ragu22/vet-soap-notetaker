@@ -111,8 +111,9 @@ export function ServicesProvider({
       store: asyncQueueStore,
       files: expoFileStore,
       uploader: {
-        createAppointment: (bytes, mime) => apiClient.createAppointment(bytes, mime),
-        completeAppointment: (id) => apiClient.completeAppointment(id),
+        checkReachable: () => apiClient.checkReachable(),
+        createAppointment: (bytes, mime, options) => apiClient.createAppointment(bytes, mime, options),
+        completeAppointment: (id, options) => apiClient.completeAppointment(id, options),
       },
       onChange: (entries, activeId) => {
         setUploads(entries);

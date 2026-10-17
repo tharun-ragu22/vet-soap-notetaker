@@ -71,6 +71,14 @@ function makeQueue(opts: Partial<UploadQueueOptions> = {}) {
   return { queue, store, files, uploader, onAppointmentReady, onChange };
 }
 
+/** Let the queue's async steps run until `mock` has been called. */
+async function waitForCall(mock: jest.Mock): Promise<void> {
+  for (let i = 0; i < 50 && mock.mock.calls.length === 0; i += 1) {
+    await new Promise<void>((resolve) => setImmediate(() => resolve()));
+  }
+  expect(mock).toHaveBeenCalled();
+}
+
 const REC = { uri: 'file:///cache/rec.m4a', mimeType: 'audio/m4a', durationMillis: 3000 };
 
 describe('UploadQueue', () => {
@@ -131,7 +139,7 @@ describe('UploadQueue', () => {
     await queue.enqueue(REC);
     await queue.processOnce();
 
-    expect(uploader.completeAppointment).toHaveBeenCalledWith('x1');
+    expect(uploader.completeAppointment).toHaveBeenCalledWith('x1', expect.anything());
     expect(queue.pending()).toHaveLength(0);
     expect(onAppointmentReady).toHaveBeenCalledWith(expect.objectContaining({ id: 'x1', transcript: 'A' }));
   });
@@ -258,7 +266,7 @@ describe('UploadQueue', () => {
       const result = await queue.tryProcess(entry.id);
 
       expect(result).toMatchObject({ id: 'p1', transcript: 'Done' });
-      expect(uploader.completeAppointment).toHaveBeenCalledWith('p1');
+      expect(uploader.completeAppointment).toHaveBeenCalledWith('p1', expect.anything());
       expect(queue.pending()).toHaveLength(0);
     });
 
@@ -346,6 +354,65 @@ describe('UploadQueue', () => {
       await queue.processOnce();
 
       expect(queue.pending()[0]).toMatchObject({ failed: true, lastErrorKind: 'other' });
+    });
+  });
+
+  describe('reachability check before each upload step', () => {
+    function withCheck(check: () => Promise<void>) {
+      const uploader = { ...makeUploader(), checkReachable: jest.fn(check) };
+      return { ...makeQueue({ uploader }), uploader };
+    }
+
+    it('never uploads when nothing answers, and that never counts as a try', async () => {
+      const { queue, uploader } = withCheck(async () => {
+        throw new ApiClientError('request to / failed: aborted');
+      });
+
+      await queue.enqueue(REC);
+      await queue.enqueue(REC);
+      await queue.processOnce();
+      await queue.processOnce();
+
+      expect(uploader.createAppointment).not.toHaveBeenCalled();
+      expect(uploader.checkReachable).toHaveBeenCalledTimes(2); // the pass stops at the first
+      const [entry] = queue.pending();
+      expect(entry).toMatchObject({ lastErrorKind: 'unreachable', attempts: 0, lastAttemptAt: 'T' });
+      expect(entry.failed).toBeFalsy();
+    });
+
+    it('checks before the audio upload and again before the note step', async () => {
+      const order: string[] = [];
+      const { queue, uploader } = withCheck(async () => {
+        order.push('check');
+      });
+      uploader.createAppointment.mockImplementation(async () => {
+        order.push('create');
+        return appointment({ id: 'p', notePending: true });
+      });
+      uploader.completeAppointment.mockImplementation(async () => {
+        order.push('complete');
+        return appointment({ id: 'p' });
+      });
+
+      await queue.enqueue(REC);
+      await queue.processOnce();
+
+      expect(order).toEqual(['check', 'create', 'check', 'complete']);
+      expect(queue.pending()).toHaveLength(0);
+    });
+
+    it('never runs the note step when nothing answers', async () => {
+      const { queue, uploader } = withCheck(async () => undefined);
+      uploader.createAppointment.mockResolvedValue(appointment({ id: 'p', notePending: true }));
+      uploader.checkReachable
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new ApiClientError('request to / failed: aborted'));
+
+      await queue.enqueue(REC);
+      await queue.processOnce();
+
+      expect(uploader.completeAppointment).not.toHaveBeenCalled();
+      expect(queue.pending()[0]).toMatchObject({ stage: 'note', lastErrorKind: 'unreachable', attempts: 0 });
     });
   });
 
@@ -473,19 +540,100 @@ describe('UploadQueue', () => {
     expect(activeIds[activeIds.length - 1]).toBeNull();
   });
 
-  it('refuses to discard an entry while it is uploading', async () => {
-    const { queue, uploader, files } = makeQueue();
-    let release!: (a: Appointment) => void;
-    uploader.createAppointment.mockImplementationOnce(
-      () => new Promise<Appointment>((resolve) => { release = resolve; }),
-    );
-    const entry = await queue.enqueue(REC);
-    const running = queue.processOnce();
+  describe('discarding the recording that is uploading', () => {
+    /** createAppointment hangs until its signal aborts, then fails like fetch does. */
+    function hangUntilAborted(uploader: ReturnType<typeof makeUploader>) {
+      const signals: AbortSignal[] = [];
+      uploader.createAppointment.mockImplementationOnce(
+        (_bytes: unknown, _mime: string, options?: { signal?: AbortSignal }) =>
+          new Promise<Appointment>((_resolve, reject) => {
+            const signal = options?.signal as AbortSignal;
+            signals.push(signal);
+            signal?.addEventListener('abort', () =>
+              reject(new ApiClientError('request to /api/appointments failed: Aborted')),
+            );
+          }),
+      );
+      return signals;
+    }
 
-    await expect(queue.remove(entry.id)).rejects.toThrow(/uploading/i);
-    expect(files.deleted).toHaveLength(0);
+    it('cancels the upload, then deletes the recording', async () => {
+      const { queue, uploader, files, store } = makeQueue();
+      const signals = hangUntilAborted(uploader);
+      const entry = await queue.enqueue(REC);
+      const running = queue.processOnce();
+      await waitForCall(uploader.createAppointment);
 
-    release(appointment());
-    await running;
+      await queue.remove(entry.id);
+
+      expect(signals[0]?.aborted).toBe(true);
+      expect(files.deleted).toEqual([entry.fileName]);
+      expect(queue.pending()).toHaveLength(0);
+      expect(store.saved).toHaveLength(0);
+      await running;
+    });
+
+    it('carries on with the next recording, without counting a failure', async () => {
+      const { queue, uploader, onAppointmentReady } = makeQueue();
+      hangUntilAborted(uploader);
+      uploader.createAppointment.mockResolvedValueOnce(appointment({ id: 'second' }));
+      const first = await queue.enqueue(REC);
+      await queue.enqueue(REC);
+      const running = queue.processOnce();
+      await waitForCall(uploader.createAppointment);
+
+      await queue.remove(first.id);
+      await running;
+
+      expect(uploader.createAppointment).toHaveBeenCalledTimes(2);
+      expect(onAppointmentReady).toHaveBeenCalledWith(expect.objectContaining({ id: 'second' }));
+      expect(queue.pending()).toHaveLength(0);
+    });
+
+    it('never starts uploading it again while its file is being deleted', async () => {
+      const { queue, uploader, files } = makeQueue();
+      hangUntilAborted(uploader);
+      const entry = await queue.enqueue(REC);
+      const running = queue.processOnce();
+      await waitForCall(uploader.createAppointment);
+      let releaseDelete!: () => void;
+      const realDelete = files.delete.bind(files);
+      // Only the first delete (the discard's) is slow.
+      files.delete = jest.fn(realDelete).mockImplementationOnce(
+        (name: string) =>
+          new Promise<void>((resolve) => {
+            releaseDelete = () => void realDelete(name).then(resolve);
+          }),
+      );
+
+      const removing = queue.remove(entry.id);
+      await running; // the cancelled pass has ended...
+      const again = queue.processOnce(); // ...and another starts while the file is still going
+      await new Promise<void>((resolve) => setImmediate(() => resolve()));
+      releaseDelete();
+      await Promise.all([removing, again]);
+
+      expect(uploader.createAppointment).toHaveBeenCalledTimes(1);
+      expect(queue.pending()).toHaveLength(0);
+    });
+
+    it('when the upload lands before the cancel does, the appointment is kept', async () => {
+      const { queue, uploader, onAppointmentReady } = makeQueue();
+      let release!: (a: Appointment) => void;
+      uploader.createAppointment.mockImplementationOnce(
+        () => new Promise<Appointment>((resolve) => { release = resolve; }),
+      );
+      const entry = await queue.enqueue(REC);
+      const running = queue.processOnce();
+      await waitForCall(uploader.createAppointment);
+
+      const removing = queue.remove(entry.id);
+      release(appointment({ id: 'landed' })); // ignores the abort: it had already finished
+      await removing;
+      await running;
+
+      expect(onAppointmentReady).toHaveBeenCalledWith(expect.objectContaining({ id: 'landed' }));
+      expect(queue.pending()).toHaveLength(0);
+    });
   });
 });

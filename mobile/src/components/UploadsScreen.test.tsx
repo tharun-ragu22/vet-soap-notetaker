@@ -55,12 +55,23 @@ describe('UploadsScreen', () => {
     expect(screen.getByTestId('upload-row-a2')).toHaveTextContent('Waiting to upload', { exact: false });
   });
 
-  it('shows the entry being uploaded and disables its buttons', () => {
-    renderScreen([audio()], { activeId: 'a1' });
+  it('shows the entry being uploaded: Retry is off, Discard still works', async () => {
+    const { props } = renderScreen([audio()], { activeId: 'a1' });
 
     expect(screen.getByTestId('upload-row-a1')).toHaveTextContent('Uploading…', { exact: false });
     expect(screen.getByTestId('retry-a1')).toBeDisabled();
-    expect(screen.getByTestId('discard-a1')).toBeDisabled();
+    expect(screen.getByTestId('discard-a1')).toBeEnabled();
+
+    fireEvent.press(screen.getByTestId('discard-a1'));
+    fireEvent.press(screen.getByTestId('discard-a1'));
+    await waitFor(() => expect(props.onDiscard).toHaveBeenCalledWith('a1'));
+  });
+
+  it('says when it last tried, on its clock', () => {
+    const unreachable = audio({ lastErrorKind: 'unreachable', lastAttemptAt: '2026-10-17T12:00:00Z' });
+    renderScreen([unreachable], { now: () => Date.parse('2026-10-17T12:03:10Z') });
+
+    expect(screen.getByTestId('upload-row-a1')).toHaveTextContent('Last tried 3 min ago.', { exact: false });
   });
 
   it('opens the appointment when a Retry lands', async () => {

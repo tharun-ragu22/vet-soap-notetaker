@@ -89,6 +89,16 @@ function response(body: unknown, status = 200): HttpResponse {
   };
 }
 
+/** Never answers; rejects only when the request is aborted, as fetch does. */
+function hangUntilAborted(init: HttpRequestInit): Promise<HttpResponse> {
+  return new Promise((_resolve, reject) => {
+    const signal = init.signal as AbortSignal | undefined;
+    const abort = () => reject(new TypeError('Aborted'));
+    if (signal?.aborted) abort();
+    signal?.addEventListener('abort', abort);
+  });
+}
+
 function notFound(what: string): HttpResponse {
   return response({ error: `${what} not found` }, 404);
 }
@@ -106,6 +116,13 @@ export class FakeBackend {
   failNoteGeneration: boolean;
   /** No answer at all (backend off or out of reach): every request throws, like fetch. */
   unreachable = false;
+  /**
+   * Nothing ever answers, like a firewall silently dropping the packets: every
+   * request hangs until it's aborted (its timeout, or a cancel).
+   */
+  hangs = false;
+  /** Up, but an upload (POST /api/appointments) hangs until it's aborted. */
+  hangUploads = false;
   /** Transcription fails: an upload gets a 502 and nothing is saved. */
   failTranscription = false;
   /** No speech in the recording: an upload gets a 422 and nothing is saved. */
@@ -242,6 +259,7 @@ export class FakeBackend {
   private async handle(url: string, init: HttpRequestInit = {}): Promise<HttpResponse> {
     // React Native's fetch rejects with this when nothing answers.
     if (this.unreachable) throw new TypeError('Network request failed');
+    if (this.hangs) return hangUntilAborted(init);
     const { pathname } = new URL(url);
     const method = (init.method ?? 'GET').toUpperCase();
     const headers = init.headers ?? {};
@@ -255,6 +273,7 @@ export class FakeBackend {
     // POST /api/appointments — upload audio: transcript + one exam per animal
     if (method === 'POST' && pathname === '/api/appointments') {
       if (init.body == null) return response({ error: 'empty request body' }, 400);
+      if (this.hangUploads) return hangUntilAborted(init);
       if (this.failTranscription) return response({ error: 'transcription failed' }, 502);
       if (this.noSpeech) return response({ error: 'no speech detected' }, 422);
       const { transcript, patients } = this.notesForAudio(init.body);

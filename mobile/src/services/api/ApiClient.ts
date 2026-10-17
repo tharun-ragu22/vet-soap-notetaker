@@ -29,10 +29,18 @@ export class ApiClientError extends Error {
  * for a long recording: Files API transcription (up to 300s) + note generation
  * (up to 120s) + retry backoff. If the phone gave up first, it would show
  * "Upload failed" and drop a recording the backend was still successfully
- * processing. A dead/unreachable backend still fails fast (connection error),
- * so this long ceiling only ever applies while the backend is genuinely working.
+ * processing. It does *not* make a dead backend fail fast: one that never answers
+ * (e.g. a firewall silently dropping packets) hangs a request for this whole time.
+ * That's what {@link ApiClient.checkReachable} is for.
  */
 export const DEFAULT_TIMEOUT_MS = 480_000;
+
+/**
+ * How long {@link ApiClient.checkReachable} waits for any answer at all. Any reply
+ * comes back in well under this when the backend is running, however slow it is
+ * to transcribe.
+ */
+export const REACHABILITY_TIMEOUT_MS = 5000;
 
 /** Minimal Response shape we depend on — decouples us from the DOM/undici lib. */
 export interface HttpResponse {
@@ -49,6 +57,12 @@ export interface HttpRequestInit {
   signal?: unknown;
 }
 
+/** Per-call options for the upload calls the queue makes. */
+export interface RequestOptions {
+  /** Aborting it cancels the request (the vet discarded the recording mid-upload). */
+  signal?: AbortSignal;
+}
+
 export type HttpFetch = (url: string, init?: HttpRequestInit) => Promise<HttpResponse>;
 
 export interface ApiClientOptions {
@@ -58,6 +72,8 @@ export interface ApiClientOptions {
   fetch?: HttpFetch;
   /** Per-request timeout in ms; 0 disables it. */
   timeoutMs?: number;
+  /** Timeout for {@link ApiClient.checkReachable}; defaults to REACHABILITY_TIMEOUT_MS. */
+  reachabilityTimeoutMs?: number;
 }
 
 interface RawExam {
@@ -112,12 +128,24 @@ export class ApiClient {
   private readonly apiKey: string;
   private readonly fetch: HttpFetch;
   private readonly timeoutMs: number;
+  private readonly reachabilityTimeoutMs: number;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.apiKey = options.apiKey ?? '';
     this.fetch = options.fetch ?? ((globalThis as { fetch?: HttpFetch }).fetch as HttpFetch);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.reachabilityTimeoutMs = options.reachabilityTimeoutMs ?? REACHABILITY_TIMEOUT_MS;
+  }
+
+  /**
+   * Is anything answering at the backend's address? Any HTTP reply counts, even a
+   * 404 or 401; only no answer within the short reachability timeout throws (an
+   * {@link ApiClientError} with no status). The upload queue calls this before each
+   * upload so a dead backend fails in seconds, not after the long upload timeout.
+   */
+  async checkReachable(): Promise<void> {
+    await this.send('/', { method: 'GET' }, this.reachabilityTimeoutMs);
   }
 
   /**
@@ -152,11 +180,16 @@ export class ApiClient {
    * with `notePending: true` and a single empty exam — finish it later with
    * {@link completeAppointment}, which needs no re-upload.
    */
-  async createAppointment(audio: AudioBody, mimeType: string): Promise<Appointment> {
+  async createAppointment(
+    audio: AudioBody,
+    mimeType: string,
+    options: RequestOptions = {},
+  ): Promise<Appointment> {
     const raw = await this.request('/api/appointments', {
       method: 'POST',
       headers: { 'Content-Type': mimeType },
       body: audio,
+      signal: options.signal,
     });
     return this.toAppointment(raw as RawAppointment);
   }
@@ -165,9 +198,10 @@ export class ApiClient {
    * Generate a note-pending appointment's notes from its saved transcript (no
    * re-upload). Idempotent: a complete appointment comes back unchanged.
    */
-  async completeAppointment(id: string): Promise<Appointment> {
+  async completeAppointment(id: string, options: RequestOptions = {}): Promise<Appointment> {
     const raw = await this.request(`/api/appointments/${encodeURIComponent(id)}/notes`, {
       method: 'POST',
+      signal: options.signal,
     });
     return this.toAppointment(raw as RawAppointment);
   }
@@ -313,16 +347,19 @@ export class ApiClient {
     return headers;
   }
 
-  private async request(path: string, init: HttpRequestInit): Promise<unknown> {
-    const url = `${this.baseUrl}${path}`;
-    const controller = this.timeoutMs > 0 ? new AbortController() : null;
-    const timer = controller
-      ? setTimeout(() => controller.abort(), this.timeoutMs)
-      : null;
-
-    let response: HttpResponse;
+  /**
+   * One fetch with a timeout; throws an ApiClientError with no status if nothing
+   * answers, or if the caller's own `init.signal` aborts it first.
+   */
+  private async send(path: string, init: HttpRequestInit, timeoutMs: number): Promise<HttpResponse> {
+    const outside = init.signal as AbortSignal | undefined;
+    const controller = timeoutMs > 0 || outside ? new AbortController() : null;
+    const timer = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    const cancel = () => controller?.abort();
+    if (outside?.aborted) cancel();
+    outside?.addEventListener('abort', cancel);
     try {
-      response = await this.fetch(url, {
+      return await this.fetch(`${this.baseUrl}${path}`, {
         ...init,
         headers: this.authHeaders(init.headers),
         signal: controller?.signal,
@@ -331,7 +368,12 @@ export class ApiClient {
       throw new ApiClientError(`request to ${path} failed: ${(error as Error).message}`);
     } finally {
       if (timer) clearTimeout(timer);
+      outside?.removeEventListener('abort', cancel);
     }
+  }
+
+  private async request(path: string, init: HttpRequestInit): Promise<unknown> {
+    const response = await this.send(path, init, this.timeoutMs);
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');

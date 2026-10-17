@@ -61,6 +61,17 @@ export interface FileStore {
 
 /** The backend operations the queue drives — the subset of ApiClient it needs. */
 export interface QueueUploader {
-  createAppointment(audio: AudioBody, mimeType: string): Promise<Appointment>;
-  completeAppointment(appointmentId: string): Promise<Appointment>;
+  /**
+   * Throws an ApiClientError with no status if nothing answers within a few seconds.
+   * Run before each step so a dead backend fails fast instead of hanging an upload
+   * for the whole (long) upload timeout.
+   */
+  checkReachable?(): Promise<void>;
+  /** `signal` aborts when the vet discards this recording mid-upload. */
+  createAppointment(
+    audio: AudioBody,
+    mimeType: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<Appointment>;
+  completeAppointment(appointmentId: string, options?: { signal?: AbortSignal }): Promise<Appointment>;
 }

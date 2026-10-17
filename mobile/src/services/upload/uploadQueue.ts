@@ -33,7 +33,7 @@ export interface UploadQueueOptions {
   onAppointmentReady?: (appointment: Appointment) => void;
 }
 
-type Outcome = 'completed' | 'advanced' | 'transient_failure' | 'parked';
+type Outcome = 'completed' | 'advanced' | 'transient_failure' | 'parked' | 'discarded';
 type StepResult = { outcome: Outcome; appointment?: Appointment };
 
 const DEFAULT_MAX_ATTEMPTS = 5;
@@ -60,6 +60,10 @@ export class UploadQueue {
   private running = false;
   private rerunRequested = false;
   private activeId: string | null = null;
+  /** Cancels the request in flight, and resolves once that attempt has settled. */
+  private inFlight: { abort: () => void; settled: Promise<void> } | null = null;
+  /** The entry the vet is discarding: not to be started again meanwhile. */
+  private discarding: string | null = null;
   private current: Promise<unknown> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -134,17 +138,27 @@ export class UploadQueue {
 
   /**
    * Discard an entry (and its audio file, if any) — only ever at the vet's request.
-   * Refused while that entry is uploading, so a half-sent upload can't lose its file.
+   * If it's uploading right now, that request is cancelled first. An upload that
+   * lands before the cancel does is kept: its appointment is already in History.
    */
   async remove(id: string): Promise<void> {
-    if (id === this.activeId) throw new Error('this recording is uploading right now');
-    const entry = this.entries.find((e) => e.id === id);
-    if (!entry) return;
-    if (entry.stage === 'audio') {
-      await this.safeDeleteFile(entry.fileName);
+    // Held until it's gone, so no pass starts uploading it again in the meantime.
+    this.discarding = id;
+    try {
+      while (id === this.activeId && this.inFlight) {
+        this.inFlight.abort();
+        await this.inFlight.settled;
+      }
+      const entry = this.entries.find((e) => e.id === id);
+      if (!entry) return;
+      if (entry.stage === 'audio') {
+        await this.safeDeleteFile(entry.fileName);
+      }
+      this.entries = this.entries.filter((e) => e.id !== id);
+      await this.persist();
+    } finally {
+      this.discarding = null;
     }
-    this.entries = this.entries.filter((e) => e.id !== id);
-    await this.persist();
   }
 
   /**
@@ -236,6 +250,7 @@ export class UploadQueue {
             break;
           }
           if (outcome === 'completed' || outcome === 'advanced') progressed = true;
+          // 'parked' and 'discarded' just move on to the next entry.
         }
       }
     } while (this.rerunRequested);
@@ -254,23 +269,32 @@ export class UploadQueue {
   }
 
   private async processEntry(entry: QueueEntry): Promise<StepResult> {
+    if (entry.id === this.discarding) return { outcome: 'discarded' };
+    const controller = new AbortController();
+    let settle!: () => void;
+    this.inFlight = { abort: () => controller.abort(), settled: new Promise((r) => { settle = r; }) };
     this.activeId = entry.id;
     this.notify();
     try {
+      await this.uploader.checkReachable?.();
       return entry.stage === 'audio'
-        ? await this.processAudio(entry)
-        : await this.processNote(entry);
+        ? await this.processAudio(entry, controller.signal)
+        : await this.processNote(entry, controller.signal);
     } catch (error) {
+      // Cancelled because the vet is discarding it: not a failure of any kind.
+      if (entry.id === this.discarding) return { outcome: 'discarded' };
       return this.recordFailure(entry, error);
     } finally {
       this.activeId = null;
+      this.inFlight = null;
+      settle();
       this.notify();
     }
   }
 
-  private async processAudio(entry: AudioEntry): Promise<StepResult> {
+  private async processAudio(entry: AudioEntry, signal: AbortSignal): Promise<StepResult> {
     const bytes = await this.files.read(entry.fileName);
-    const appointment = await this.uploader.createAppointment(bytes, entry.mimeType);
+    const appointment = await this.uploader.createAppointment(bytes, entry.mimeType, { signal });
 
     if (appointment.notePending) {
       // Transcription succeeded but note-gen didn't: the transcript is safe on
@@ -295,8 +319,8 @@ export class UploadQueue {
     return { outcome: 'completed', appointment };
   }
 
-  private async processNote(entry: NoteEntry): Promise<StepResult> {
-    const appointment = await this.uploader.completeAppointment(entry.appointmentId);
+  private async processNote(entry: NoteEntry, signal: AbortSignal): Promise<StepResult> {
+    const appointment = await this.uploader.completeAppointment(entry.appointmentId, { signal });
     this.drop(entry.id);
     await this.persist();
     this.onAppointmentReady?.(appointment);

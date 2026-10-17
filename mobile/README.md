@@ -73,7 +73,11 @@ attempted, so nothing is lost if the backend is down or the app is killed. The q
 
 - **Backend unreachable** (no answer at all — wrong address, PC off, firewall): it keeps
   retrying every 30 seconds and whenever the app returns to the foreground, for as long as
-  that lasts. These never count as failures.
+  that lasts. These never count as failures. Each try starts with a quick check that anything
+  answers at the backend's address (any reply counts, even an error); with no answer in
+  5 seconds the row shows "Can't reach the backend — retrying automatically" straight away,
+  rather than after the 8-minute upload timeout (a firewall that silently drops the request
+  would otherwise hang every try that long).
 - **Backend error replies** (e.g. a 502 when transcription fails): after 5 the automatic
   retries stop and the recording shows as **failed** — the home banner turns red ("N recordings
   failed to upload — tap to review").
@@ -85,9 +89,11 @@ attempted, so nothing is lost if the backend is down or the app is killed. The q
   the note generation is retried, never a re-upload.
 
 **☰ → Uploads** (or tapping the banner) lists every recording that hasn't become notes yet, with
-its status and a plain-words reason, a **Retry** (which opens the notes when it lands) and a
-two-tap **Discard**. Audio leaves the phone only after a successful upload or a confirmed
-Discard — never automatically.
+its status, a plain-words reason and when it last tried ("Last tried 2 min ago"), a **Retry**
+(which opens the notes when it lands) and a two-tap **Discard**. Discard works even while a
+recording is uploading: it cancels the upload first. (If the backend had already received the
+whole recording, it may still finish it, and the appointment appears in History.) Audio leaves
+the phone only after a successful upload or a confirmed Discard — never automatically.
 
 > **Dependency note:** the React family is pinned to `19.2.3` (a `react-dom` override
 > plus an exact `react-test-renderer`) so the `expo-router` deps resolve under a plain

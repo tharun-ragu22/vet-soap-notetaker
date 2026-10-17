@@ -294,6 +294,92 @@ describe('screens end-to-end', () => {
       expect(queue.pending()).toHaveLength(0);
     });
 
+    /** The app's own wiring: a short reachability check and cancellable uploads. */
+    function appQueue(backend: FakeBackend) {
+      const apiClient = new ApiClient({
+        baseUrl: 'http://clinic:8000',
+        fetch: backend.fetch,
+        reachabilityTimeoutMs: 50,
+      });
+      const files = new MemFileStore();
+      const queue = new UploadQueue({
+        store: new MemQueueStore(),
+        files,
+        uploader: {
+          checkReachable: () => apiClient.checkReachable(),
+          createAppointment: (bytes, mime, options) => apiClient.createAppointment(bytes, mime, options),
+          completeAppointment: (id, options) => apiClient.completeAppointment(id, options),
+        },
+      });
+      return { apiClient, files, queue };
+    }
+
+    it('says it cannot reach a backend that never answers, within seconds, and keeps the buttons', async () => {
+      const backend = new FakeBackend();
+      backend.hangs = true; // e.g. a firewall silently dropping the packets
+      const { apiClient, files, queue } = appQueue(backend);
+
+      const onRecorded = await recordOnce(queue); // Stop comes back instead of hanging
+      await queue.processOnce();
+      await queue.processOnce();
+
+      expect(onRecorded).not.toHaveBeenCalled();
+      const [entry] = queue.pending();
+      expect(entry).toMatchObject({ lastErrorKind: 'unreachable', attempts: 0 });
+      expect(entry.failed).toBeFalsy();
+
+      const onOpenAppointment = jest.fn();
+      render(
+        <UploadsScreen
+          entries={queue.pending()}
+          activeId={queue.uploading()}
+          onRetry={(id) => queue.retry(id)}
+          onDiscard={(id) => queue.remove(id)}
+          onOpenAppointment={onOpenAppointment}
+        />,
+      );
+      const row = screen.getByTestId(`upload-row-${entry.id}`);
+      expect(row).toHaveTextContent("Can't reach the backend — retrying automatically", { exact: false });
+      expect(row).toHaveTextContent('Last tried just now.', { exact: false });
+      expect(screen.getByTestId(`retry-${entry.id}`)).toBeEnabled();
+      expect(screen.getByTestId(`discard-${entry.id}`)).toBeEnabled();
+
+      backend.hangs = false;
+      fireEvent.press(screen.getByTestId(`retry-${entry.id}`));
+
+      await waitFor(() => expect(onOpenAppointment).toHaveBeenCalled());
+      const [appointment] = await apiClient.fetchAppointments();
+      expect(onOpenAppointment).toHaveBeenCalledWith(appointment.id);
+      expect(files.files.size).toBe(0);
+    });
+
+    it('discards a recording while it is uploading, cancelling the upload', async () => {
+      const backend = new FakeBackend();
+      backend.hangUploads = true; // up, but this upload is taking a long time
+      const { apiClient, files, queue } = appQueue(backend);
+      const entry = await queue.enqueue({ uri: 'file:///r.m4a', mimeType: 'audio/m4a', durationMillis: 28_000 });
+      const running = queue.processOnce();
+      await waitFor(() => expect(queue.uploading()).toBe(entry.id));
+
+      render(
+        <UploadsScreen
+          entries={queue.pending()}
+          activeId={queue.uploading()}
+          onRetry={(id) => queue.retry(id)}
+          onDiscard={(id) => queue.remove(id)}
+          onOpenAppointment={jest.fn()}
+        />,
+      );
+      expect(screen.getByTestId(`upload-row-${entry.id}`)).toHaveTextContent('Uploading…', { exact: false });
+      fireEvent.press(screen.getByTestId(`discard-${entry.id}`));
+      fireEvent.press(screen.getByTestId(`discard-${entry.id}`));
+
+      await waitFor(() => expect(queue.pending()).toHaveLength(0));
+      await running;
+      expect(files.files.size).toBe(0);
+      expect(await apiClient.fetchAppointments()).toHaveLength(0);
+    });
+
     it('stops retrying after 5 backend errors, shows why, and a Retry after recovery uploads it', async () => {
       const backend = new FakeBackend();
       backend.failTranscription = true;
