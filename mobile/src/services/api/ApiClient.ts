@@ -139,13 +139,14 @@ export class ApiClient {
   }
 
   /**
-   * Is anything answering at the backend's address? Any HTTP reply counts, even a
-   * 404 or 401; only no answer within the short reachability timeout throws (an
+   * Is anything answering at the backend's address? Asks `GET /api/health`, but any
+   * HTTP reply counts, even a 404 (an older backend without that route) or a 401;
+   * only no answer within the short reachability timeout throws (an
    * {@link ApiClientError} with no status). The upload queue calls this before each
    * upload so a dead backend fails in seconds, not after the long upload timeout.
    */
   async checkReachable(): Promise<void> {
-    await this.send('/', { method: 'GET' }, this.reachabilityTimeoutMs);
+    await this.send('/api/health', { method: 'GET' }, this.reachabilityTimeoutMs);
   }
 
   /**

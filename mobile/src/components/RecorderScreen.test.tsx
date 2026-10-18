@@ -96,6 +96,49 @@ describe('RecorderScreen', () => {
     expect(audioService.state).toBe('idle');
   });
 
+  describe('the background-upload notice follows the queue', () => {
+    const view = (audioService: AudioService, hasPendingUploads: boolean) => (
+      <RecorderScreen
+        audioService={audioService}
+        enqueueRecording={jest.fn(async () => null)}
+        hasPendingUploads={hasPendingUploads}
+      />
+    );
+
+    async function recordAndStop() {
+      fireEvent.press(screen.getByText(/start/i));
+      await waitFor(() => expect(screen.getByText(/stop/i)).toBeTruthy());
+      fireEvent.press(screen.getByText(/stop/i));
+      await waitFor(() => expect(screen.getByText(/start/i)).toBeTruthy());
+    }
+
+    it('goes away once nothing is waiting, and does not come back', async () => {
+      const audioService = new AudioService(makeRecorder());
+      const { rerender } = render(view(audioService, true));
+
+      await recordAndStop();
+      expect(screen.getByText(/uploading in the background/i)).toBeTruthy();
+
+      // it uploaded in the background, or the vet discarded it
+      rerender(view(audioService, false));
+      expect(screen.queryByText(/uploading in the background/i)).toBeNull();
+
+      rerender(view(audioService, true));
+      expect(screen.queryByText(/uploading in the background/i)).toBeNull();
+    });
+
+    it('never shows when the recording was discarded before the Stop finished', async () => {
+      const audioService = new AudioService(makeRecorder());
+      const { rerender } = render(view(audioService, false));
+
+      await recordAndStop();
+      expect(screen.queryByText(/uploading in the background/i)).toBeNull();
+
+      rerender(view(audioService, true));
+      expect(screen.queryByText(/uploading in the background/i)).toBeNull();
+    });
+  });
+
   it('surfaces a start failure and stays idle', async () => {
     const recorder = makeRecorder({
       start: jest.fn(async () => {

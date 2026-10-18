@@ -24,6 +24,7 @@ export default function RecorderRoute() {
       <RecorderScreen
         audioService={audioService}
         enqueueRecording={enqueueRecording}
+        hasPendingUploads={uploads.length > 0}
         onRecorded={(appointment) => router.push(`/appointment/${appointment.id}`)}
       />
       {/* Floated at the top as an overlay so it never shifts the recorder, which

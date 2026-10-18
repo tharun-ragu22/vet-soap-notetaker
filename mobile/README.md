@@ -74,7 +74,8 @@ attempted, so nothing is lost if the backend is down or the app is killed. The q
 - **Backend unreachable** (no answer at all — wrong address, PC off, firewall): it keeps
   retrying every 30 seconds and whenever the app returns to the foreground, for as long as
   that lasts. These never count as failures. Each try starts with a quick check that anything
-  answers at the backend's address (any reply counts, even an error); with no answer in
+  answers at the backend's address (`GET /api/health`; any reply counts, even an error, so an
+  older backend without that route works too); with no answer in
   5 seconds the row shows "Can't reach the backend — retrying automatically" straight away,
   rather than after the 8-minute upload timeout (a firewall that silently drops the request
   would otherwise hang every try that long).

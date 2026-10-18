@@ -90,7 +90,8 @@ app (`mobile/`). One recording is an **appointment**: it owns the transcript, an
 own AVImark chart. When note generation fails after a good transcription, the appointment is
 saved with one empty, `note_pending` exam and the request returns `202`; finishing it fills that
 exam with the first animal's note and adds the others. All endpoints sit behind the same bearer
-auth.
+auth, except `GET /api/health`: it answers `{"status": "ok"}` to anyone, and the phone calls it
+before each upload to check the backend is reachable.
 
 Appointments (the mobile app):
 

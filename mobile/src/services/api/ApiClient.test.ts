@@ -441,7 +441,7 @@ describe('ApiClient', () => {
 
       expect(calls).toHaveLength(1);
       expect(calls[0]).toMatchObject({
-        url: 'http://host:8000/',
+        url: 'http://host:8000/api/health',
         method: 'GET',
         headers: { Authorization: 'Bearer k' },
       });

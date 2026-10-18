@@ -1,4 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { useState } from 'react';
+import { Text } from 'react-native';
 
 import { ApiClient } from '../services/api/ApiClient';
 import { AudioService } from '../services/audio/AudioService';
@@ -7,6 +9,7 @@ import { AppointmentScreen } from '../components/AppointmentScreen';
 import { HistoryScreen } from '../components/HistoryScreen';
 import { RecorderScreen } from '../components/RecorderScreen';
 import { UploadsScreen } from '../components/UploadsScreen';
+import { uploadBanner } from '../services/upload/uploadBanner';
 import { UploadQueue } from '../services/upload/uploadQueue';
 import type { FileStore, QueueEntry, QueueStore } from '../services/upload/types';
 import { FakeBackend } from './fakeBackend';
@@ -295,7 +298,7 @@ describe('screens end-to-end', () => {
     });
 
     /** The app's own wiring: a short reachability check and cancellable uploads. */
-    function appQueue(backend: FakeBackend) {
+    function appQueue(backend: FakeBackend, onChange?: (entries: QueueEntry[]) => void) {
       const apiClient = new ApiClient({
         baseUrl: 'http://clinic:8000',
         fetch: backend.fetch,
@@ -310,6 +313,7 @@ describe('screens end-to-end', () => {
           createAppointment: (bytes, mime, options) => apiClient.createAppointment(bytes, mime, options),
           completeAppointment: (id, options) => apiClient.completeAppointment(id, options),
         },
+        onChange,
       });
       return { apiClient, files, queue };
     }
@@ -378,6 +382,44 @@ describe('screens end-to-end', () => {
       await running;
       expect(files.files.size).toBe(0);
       expect(await apiClient.fetchAppointments()).toHaveLength(0);
+    });
+
+    it('drops the "uploading in the background" notice when the recording is discarded mid-upload', async () => {
+      const backend = new FakeBackend();
+      backend.hangUploads = true;
+      let showEntries: (entries: QueueEntry[]) => void = () => {};
+      const { files, queue } = appQueue(backend, (entries) => showEntries(entries));
+
+      // The home route: the recorder plus the queue banner, both fed by the queue.
+      function Home() {
+        const [entries, setEntries] = useState<QueueEntry[]>([]);
+        showEntries = setEntries;
+        const banner = uploadBanner(entries);
+        return (
+          <>
+            <RecorderScreen
+              audioService={new AudioService(recorder())}
+              enqueueRecording={enqueueVia(queue)}
+              hasPendingUploads={entries.length > 0}
+            />
+            {banner ? <Text>{banner.text}</Text> : null}
+          </>
+        );
+      }
+      render(<Home />);
+
+      fireEvent.press(screen.getByText(/start/i));
+      await waitFor(() => expect(screen.getByText(/stop/i)).toBeTruthy());
+      fireEvent.press(screen.getByText(/stop/i));
+      await waitFor(() => expect(queue.uploading()).not.toBeNull());
+      expect(screen.getByText('1 recording waiting to upload…')).toBeTruthy();
+
+      await act(() => queue.remove(queue.uploading()!)); // the Uploads screen's Discard
+
+      await waitFor(() => expect(screen.getByText(/start/i)).toBeTruthy()); // the Stop has returned
+      expect(screen.queryByText(/uploading in the background/i)).toBeNull();
+      expect(screen.queryByText(/waiting to upload/i)).toBeNull();
+      expect(files.files.size).toBe(0);
     });
 
     it('stops retrying after 5 backend errors, shows why, and a Retry after recovery uploads it', async () => {

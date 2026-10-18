@@ -803,3 +803,15 @@ def test_regenerate_returns_every_patient(make_config):
 
     assert [p["patient_name"] for p in body["patients"]] == ["Bella", "Max"]
     assert body["plan"] == "p1"
+
+
+def test_health_answers_200_without_auth_for_the_phones_reachability_check(make_config):
+    # Called before every phone upload. It must not need the key (a wrong key still
+    # means the backend is up) and must say nothing beyond "ok".
+    app = create_app(config=make_config(backend_api_key="secret"), pipeline=FakePipeline())
+    client = TestClient(app)
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}

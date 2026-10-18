@@ -21,6 +21,11 @@ export interface RecorderScreenProps {
    * real expo-keep-awake wrapper.
    */
   keepAwake?: KeepAwake;
+  /**
+   * Whether any recording is still waiting on the phone. The "uploading in the
+   * background" notice only shows while one is. Defaults to true.
+   */
+  hasPendingUploads?: boolean;
 }
 
 type Phase = 'idle' | 'recording' | 'processing';
@@ -40,10 +45,16 @@ export function RecorderScreen({
   enqueueRecording,
   onRecorded,
   keepAwake = expoKeepAwake,
+  hasPendingUploads = true,
 }: RecorderScreenProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // The notice says a recording is waiting; once none is (it uploaded later, or the
+  // vet discarded it, even mid-upload before this Stop returned), clear it. Done
+  // during render, React's pattern for state that follows a prop.
+  if (notice !== null && !hasPendingUploads) setNotice(null);
 
   // Keep the display on only while actively recording (not idle, and not during the
   // brief upload — the durable queue survives a sleep/lock, so there's no reason to

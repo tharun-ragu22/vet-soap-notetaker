@@ -376,6 +376,14 @@ def create_app(
             return {}
         return body if isinstance(body, dict) else None
 
+    # --- Health -------------------------------------------------------------------
+
+    @app.get("/api/health")
+    async def health():
+        # The phone's reachability check before each upload. No auth: a reply of any
+        # kind means the backend is up, and this one says nothing else.
+        return {"status": "ok"}
+
     # --- Appointments: one recording, one exam per animal ----------------------
 
     @app.post("/api/appointments")
