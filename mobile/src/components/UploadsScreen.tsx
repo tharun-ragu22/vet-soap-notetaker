@@ -15,6 +15,10 @@ export interface UploadsScreenProps {
   /** Discard a recording (or forget an uploaded one) — only ever the vet's choice. */
   onDiscard: (id: string) => Promise<void>;
   onOpenAppointment: (id: string) => void;
+  /** Open the player for a recording still on the phone; no Play buttons without it. */
+  onPlay?: (id: string) => void;
+  /** A new recording is in progress: playback would go into it, so Play is off. */
+  recording?: boolean;
   /** Clock for "Last tried …" (tests); defaults to Date.now. */
   now?: () => number;
 }
@@ -35,6 +39,8 @@ export function UploadsScreen({
   onRetry,
   onDiscard,
   onOpenAppointment,
+  onPlay,
+  recording = false,
   now = Date.now,
 }: UploadsScreenProps) {
   const [retrying, setRetrying] = useState<string | null>(null);
@@ -97,6 +103,18 @@ export function UploadsScreen({
               </Text>
             ) : null}
             <View style={styles.actions}>
+              {onPlay && item.stage === 'audio' ? (
+                <Pressable
+                  testID={`play-${item.id}`}
+                  accessibilityRole="button"
+                  accessibilityLabel="Play recording"
+                  disabled={recording}
+                  style={[styles.button, styles.play, recording && styles.disabled]}
+                  onPress={() => onPlay(item.id)}
+                >
+                  <Text style={styles.playText}>▶ Play</Text>
+                </Pressable>
+              ) : null}
               <Pressable
                 testID={`retry-${item.id}`}
                 accessibilityRole="button"
@@ -181,6 +199,15 @@ const styles = StyleSheet.create({
   discard: {
     borderWidth: 1,
     borderColor: '#c0392b',
+  },
+  play: {
+    borderWidth: 1,
+    borderColor: '#1b3a5b',
+  },
+  playText: {
+    color: '#1b3a5b',
+    fontSize: 15,
+    fontWeight: '600',
   },
   disabled: {
     opacity: 0.5,

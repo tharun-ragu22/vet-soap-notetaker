@@ -13,7 +13,10 @@ export default function RootLayout() {
   return (
     <ServicesProvider>
       <SafeAreaProvider>
-        <Stack />
+        <Stack>
+          {/* The Outbox player: a sheet the vet swipes down to close. */}
+          <Stack.Screen name="player" options={{ presentation: 'modal', headerShown: false }} />
+        </Stack>
       </SafeAreaProvider>
     </ServicesProvider>
   );

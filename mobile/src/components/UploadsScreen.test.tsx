@@ -125,3 +125,45 @@ describe('UploadsScreen', () => {
     expect(screen.getByText('All recordings are uploaded.')).toBeTruthy();
   });
 });
+
+describe('playing a recording from the Outbox', () => {
+  it('opens the player for a recording still on the phone', () => {
+    const onPlay = jest.fn();
+    renderScreen([failed, audio({ id: 'a2' })], { onPlay });
+
+    expect(screen.getByTestId('play-a1')).toHaveTextContent('▶ Play');
+    fireEvent.press(screen.getByTestId('play-a2'));
+
+    expect(onPlay).toHaveBeenCalledWith('a2');
+  });
+
+  it('can be played while it is uploading', () => {
+    const onPlay = jest.fn();
+    renderScreen([audio()], { onPlay, activeId: 'a1' });
+
+    fireEvent.press(screen.getByTestId('play-a1'));
+
+    expect(onPlay).toHaveBeenCalledWith('a1');
+  });
+
+  it('has no Play for an uploaded recording, whose audio is no longer on the phone', () => {
+    renderScreen([note()], { onPlay: jest.fn() });
+
+    expect(screen.queryByTestId('play-n1')).toBeNull();
+  });
+
+  it('has no Play without a player', () => {
+    renderScreen([audio()]);
+
+    expect(screen.queryByTestId('play-a1')).toBeNull();
+  });
+
+  it('turns Play off while a new recording is being made', () => {
+    const onPlay = jest.fn();
+    renderScreen([audio()], { onPlay, recording: true });
+
+    expect(screen.getByTestId('play-a1')).toBeDisabled();
+    fireEvent.press(screen.getByTestId('play-a1'));
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+});

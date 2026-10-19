@@ -1,6 +1,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 
 import type { AudioBody } from '../api/types';
+import type { PlaybackFiles } from '../audio/types';
 import type { FileStore } from './types';
 
 /**
@@ -37,6 +38,33 @@ export const expoFileStore: FileStore = {
 
   async delete(fileName: string): Promise<void> {
     const file = new File(uploadsDirectory(), fileName);
+    if (file.exists) {
+      file.delete();
+    }
+  },
+};
+
+const PLAYBACK_DIR = 'playback';
+
+/**
+ * The Outbox player's {@link PlaybackFiles}: it plays a copy in the cache, so the
+ * queue can upload and delete the original while the vet is still listening.
+ * Holding clears any copies a crash left behind (one player is open at a time).
+ */
+export const expoPlaybackFiles: PlaybackFiles = {
+  async hold(fileName: string): Promise<string> {
+    const dir = new Directory(Paths.cache, PLAYBACK_DIR);
+    if (dir.exists) {
+      dir.delete();
+    }
+    dir.create({ intermediates: true });
+    const copy = new File(dir, fileName);
+    await new File(uploadsDirectory(), fileName).copy(copy);
+    return copy.uri;
+  },
+
+  async release(uri: string): Promise<void> {
+    const file = new File(uri);
     if (file.exists) {
       file.delete();
     }
