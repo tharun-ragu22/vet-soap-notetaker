@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import { HistoryScreen } from '../components/HistoryScreen';
 import { useServices } from '../services/context';
 
-/** History route: the synced appointment feed; tapping a row opens the appointment. */
+/** Notes route (☰ → Notes): the synced appointment feed; tapping a row opens the appointment. */
 export default function HistoryRoute() {
   const { apiClient } = useServices();
 
@@ -26,7 +26,7 @@ export default function HistoryRoute() {
 
   return (
     <>
-      <Stack.Screen options={{ title: 'History' }} />
+      <Stack.Screen options={{ title: 'Notes' }} />
       <HistoryScreen
         apiClient={apiClient}
         reloadSignal={reloadSignal}

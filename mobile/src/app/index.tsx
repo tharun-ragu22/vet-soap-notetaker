@@ -6,14 +6,14 @@ import { RecorderScreen } from '../components/RecorderScreen';
 import { useServices } from '../services/context';
 import { uploadBanner } from '../services/upload/uploadBanner';
 
-/** Home route: one-tap exam capture, with History, Uploads and Settings in the ☰ menu. */
+/** Home route: one-tap exam capture, with Notes, Outbox and Settings in the ☰ menu. */
 export default function RecorderRoute() {
   const { audioService, enqueueRecording, uploads, settings } = useServices();
   const banner = uploadBanner(uploads);
 
   return (
     <View style={styles.container}>
-      {/* The menu lives in the header so History, Uploads and Settings are always one
+      {/* The menu lives in the header so Notes, Outbox and Settings are always one
           tap away at the top, rather than buried below the recorder. */}
       <Stack.Screen
         options={{

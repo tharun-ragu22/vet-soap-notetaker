@@ -17,20 +17,31 @@ function audio(id: string, overrides: Partial<AudioEntry> = {}): AudioEntry {
 }
 
 describe('AppMenu', () => {
-  it('opens a menu with History, Uploads and Settings', () => {
+  it('opens a menu with Notes and Settings, and no Outbox when nothing is waiting', () => {
     render(<AppMenu uploads={[]} onNavigate={jest.fn()} />);
-    expect(screen.queryByText('History')).toBeNull();
+    expect(screen.queryByText('Notes')).toBeNull();
 
     fireEvent.press(screen.getByLabelText('Menu'));
 
-    expect(screen.getByText('History')).toBeTruthy();
-    expect(screen.getByText('Uploads')).toBeTruthy();
+    expect(screen.getByText('Notes')).toBeTruthy();
+    expect(screen.getByText('Settings')).toBeTruthy();
+    expect(screen.queryByText('Outbox')).toBeNull();
+    expect(screen.queryByText('History')).toBeNull();
+    expect(screen.queryByText('Uploads')).toBeNull();
+  });
+
+  it('shows Outbox while a recording is waiting', () => {
+    render(<AppMenu uploads={[audio('a')]} onNavigate={jest.fn()} />);
+
+    fireEvent.press(screen.getByLabelText('Menu'));
+
+    expect(screen.getByText('Notes')).toBeTruthy();
+    expect(screen.getByText('Outbox')).toBeTruthy();
     expect(screen.getByText('Settings')).toBeTruthy();
   });
 
   it.each([
-    ['History', '/history'],
-    ['Uploads', '/uploads'],
+    ['Notes', '/history'],
     ['Settings', '/settings'],
   ])('tapping %s navigates to %s and closes the menu', (label, path) => {
     const onNavigate = jest.fn();
@@ -43,15 +54,29 @@ describe('AppMenu', () => {
     expect(screen.queryByText(label)).toBeNull();
   });
 
-  it('badges Uploads with how many are waiting', () => {
+  it('tapping Outbox navigates to /uploads and closes the menu', () => {
+    const onNavigate = jest.fn();
+    render(<AppMenu uploads={[audio('a')]} onNavigate={onNavigate} />);
+
+    fireEvent.press(screen.getByLabelText('Menu'));
+    const outbox = screen.queryByText('Outbox');
+    expect(outbox).not.toBeNull();
+    fireEvent.press(outbox!);
+
+    expect(onNavigate).toHaveBeenCalledWith('/uploads');
+    expect(screen.queryByText('Outbox')).toBeNull();
+  });
+
+  it('badges Outbox with how many are waiting', () => {
     render(<AppMenu uploads={[audio('a'), audio('b')]} onNavigate={jest.fn()} />);
 
     fireEvent.press(screen.getByLabelText('Menu'));
 
+    expect(screen.queryByText('Outbox')).not.toBeNull();
     expect(screen.getByTestId('menu-uploads-badge')).toHaveTextContent('2');
   });
 
-  it('badges Uploads with how many failed, when any did', () => {
+  it('badges Outbox with how many failed, when any did', () => {
     render(<AppMenu uploads={[audio('a', { failed: true }), audio('b')]} onNavigate={jest.fn()} />);
 
     fireEvent.press(screen.getByLabelText('Menu'));
@@ -59,11 +84,21 @@ describe('AppMenu', () => {
     expect(screen.getByTestId('menu-uploads-badge')).toHaveTextContent('1 failed');
   });
 
-  it('shows no badge when everything is uploaded', () => {
+  it('keeps Outbox in the menu while only a failed recording is left', () => {
+    render(<AppMenu uploads={[audio('a', { failed: true })]} onNavigate={jest.fn()} />);
+
+    fireEvent.press(screen.getByLabelText('Menu'));
+
+    expect(screen.queryByText('Outbox')).not.toBeNull();
+    expect(screen.getByTestId('menu-uploads-badge')).toHaveTextContent('1 failed');
+  });
+
+  it('shows no Outbox item or badge when everything is uploaded', () => {
     render(<AppMenu uploads={[]} onNavigate={jest.fn()} />);
 
     fireEvent.press(screen.getByLabelText('Menu'));
 
+    expect(screen.queryByText('Outbox')).toBeNull();
     expect(screen.queryByTestId('menu-uploads-badge')).toBeNull();
   });
 
@@ -73,6 +108,6 @@ describe('AppMenu', () => {
     fireEvent.press(screen.getByLabelText('Menu'));
     fireEvent.press(screen.getByTestId('menu-backdrop'));
 
-    expect(screen.queryByText('History')).toBeNull();
+    expect(screen.queryByText('Notes')).toBeNull();
   });
 });

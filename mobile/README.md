@@ -48,11 +48,13 @@ the mobile analogue of the desktop `build_app()`) and pass them down.
 | Route | Screen | Purpose |
 |---|---|---|
 | `/` (`index`) | `RecorderScreen` | One-tap capture of a whole appointment (feature A) |
-| `/history` | `HistoryScreen` | Backend-synced appointment feed, one row per recording naming every animal, searchable by pet name (feature B) |
+| `/history` | `HistoryScreen` | **Notes**: the backend-synced appointment feed, one row per recording naming every animal, searchable by pet name (feature B) |
 | `/appointment/[id]` | `AppointmentScreen` | The shared transcript and a SOAP card per animal: edit, **Regenerate**, **Save**, **Inject into AVImark** per animal, and **Delete** (features B & C) |
-| `/uploads` | `UploadsScreen` | Recordings still on the phone: where each is up to and why, with **Retry** and **Discard** |
+| `/uploads` | `UploadsScreen` | **Outbox**: recordings still on the phone: where each is up to and why, with **Retry** and **Discard** |
 
-History, Uploads and Settings open from the **☰ menu** at the top left of the home screen.
+Notes, Outbox and Settings open from the **☰ menu** at the top left of the home screen.
+Outbox is only in the menu while a recording is waiting to upload or has failed, so it isn't
+mistaken for Notes; the home screen's upload banner opens it too.
 
 One recording can cover several animals: the backend's AI writes a separate SOAP note for
 each, and they share the one transcript. Everything on the appointment screen is a local
@@ -89,11 +91,11 @@ attempted, so nothing is lost if the backend is down or the app is killed. The q
 - **Notes failed but the transcript was saved** (a 202): the audio is no longer needed; only
   the note generation is retried, never a re-upload.
 
-**☰ → Uploads** (or tapping the banner) lists every recording that hasn't become notes yet, with
+**☰ → Outbox** (or tapping the banner) lists every recording that hasn't become notes yet, with
 its status, a plain-words reason and when it last tried ("Last tried 2 min ago"), a **Retry**
 (which opens the notes when it lands) and a two-tap **Discard**. Discard works even while a
 recording is uploading: it cancels the upload first. (If the backend had already received the
-whole recording, it may still finish it, and the appointment appears in History.) Audio leaves
+whole recording, it may still finish it, and the appointment appears in Notes.) Audio leaves
 the phone only after a successful upload or a confirmed Discard — never automatically.
 
 > **Dependency note:** the React family is pinned to `19.2.3` (a `react-dom` override
@@ -244,7 +246,7 @@ Three layers of test run under the same `npm test` (and so under CI's `test-mobi
   with actual gestures (tap record, edit + save, tap Inject) through the real `ApiClient` and
   `FakeBackend` — the closest thing to a device run in Node, with mocked audio uploads.
   Includes the upload failure paths: a backend that can't be reached (keeps retrying, then a
-  manual Retry from the Uploads screen lands) and one that keeps returning 502 (stops after 5,
+  manual Retry from the Outbox screen lands) and one that keeps returning 502 (stops after 5,
   shows why, and Retry uploads it after recovery), plus a recording with no speech (a 422:
   failed at once, never retried in the background).
 

@@ -6,25 +6,28 @@ import type { QueueEntry } from '../services/upload/types';
 export type MenuPath = '/history' | '/uploads' | '/settings';
 
 export interface AppMenuProps {
-  /** The upload queue, for the Uploads badge. */
+  /** The upload queue: whether Outbox shows at all, and its badge. */
   uploads: QueueEntry[];
   onNavigate: (path: MenuPath) => void;
 }
 
 const ITEMS: { label: string; path: MenuPath }[] = [
-  { label: 'History', path: '/history' },
-  { label: 'Uploads', path: '/uploads' },
+  { label: 'Notes', path: '/history' },
+  { label: 'Outbox', path: '/uploads' },
   { label: 'Settings', path: '/settings' },
 ];
 
 /**
- * The ☰ header button and the menu it opens: History, Uploads and Settings. A plain
+ * The ☰ header button and the menu it opens: Notes, Outbox and Settings. Outbox only
+ * shows while a recording is waiting or failed, so it isn't mistaken for Notes. A plain
  * Modal rather than a swipe drawer, so it needs no extra native modules.
  */
 export function AppMenu({ uploads, onNavigate }: AppMenuProps) {
   const [open, setOpen] = useState(false);
   const failed = uploads.filter((e) => e.failed).length;
   const badge = failed > 0 ? `${failed} failed` : uploads.length > 0 ? String(uploads.length) : null;
+
+  const items = ITEMS.filter(({ path }) => path !== '/uploads' || uploads.length > 0);
 
   const go = (path: MenuPath) => {
     setOpen(false);
@@ -47,7 +50,7 @@ export function AppMenu({ uploads, onNavigate }: AppMenuProps) {
         <Modal transparent animationType="fade" visible onRequestClose={() => setOpen(false)}>
           <Pressable testID="menu-backdrop" style={styles.backdrop} onPress={() => setOpen(false)}>
             <View style={styles.panel}>
-              {ITEMS.map(({ label, path }) => (
+              {items.map(({ label, path }) => (
                 <Pressable
                   key={path}
                   accessibilityRole="button"
