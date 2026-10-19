@@ -1,12 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
-import type { ApiClient } from '../services/api/ApiClient';
-import type { Appointment } from '../services/api/types';
+import type { ApiClient } from "../services/api/ApiClient";
+import type { Appointment } from "../services/api/types";
 
 export interface HistoryScreenProps {
   /** Only the read surface is needed here; the backend is the source of truth. */
-  apiClient: Pick<ApiClient, 'fetchAppointments'>;
+  apiClient: Pick<ApiClient, "fetchAppointments">;
   /** Called with the appointment id when a row is tapped (route pushes its screen). */
   onOpenAppointment?: (id: string) => void;
   /**
@@ -20,7 +28,7 @@ export interface HistoryScreenProps {
   reloadSignal?: number;
 }
 
-type Status = 'loading' | 'ready' | 'error';
+type Status = "loading" | "ready" | "error";
 
 function formatDate(iso: string): string {
   const date = new Date(iso);
@@ -30,17 +38,34 @@ function formatDate(iso: string): string {
 
 /** The animals in an appointment, unnamed ones labelled by position ("Bella, Patient 2"). */
 function animalNames(appointment: Appointment): string {
-  return appointment.exams.map((exam, i) => exam.patientName || `Patient ${i + 1}`).join(', ');
+  return appointment.exams
+    .map((exam, i) => exam.patientName || `Patient ${i + 1}`)
+    .join(", ");
 }
 
 function hasNames(appointment: Appointment): boolean {
-  return appointment.exams.length > 1 || Boolean(appointment.exams[0]?.patientName);
+  return (
+    appointment.exams.length > 1 || Boolean(appointment.exams[0]?.patientName)
+  );
+}
+
+/**
+ * Whether any animal in the appointment has a name containing the search, ignoring
+ * case and surrounding spaces. An empty search matches everything; unnamed animals
+ * ("Patient 2") have no name to match.
+ */
+function matchesPetName(appointment: Appointment, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return appointment.exams.some((exam) =>
+    exam.patientName?.toLowerCase().includes(needle),
+  );
 }
 
 function snippetOf(appointment: Appointment): string {
-  if (appointment.notePending) return 'Notes pending — still generating';
+  if (appointment.notePending) return "Notes pending — still generating";
   const first = appointment.exams[0];
-  return first?.assessment || first?.subjective || 'No note yet';
+  return first?.assessment || first?.subjective || "No note yet";
 }
 
 /**
@@ -49,9 +74,15 @@ function snippetOf(appointment: Appointment): string {
  * Loads on mount and exposes explicit loading / empty / error (with retry) states so a
  * transient backend hiccup never leaves a blank screen with no way forward.
  */
-export function HistoryScreen({ apiClient, onOpenAppointment, reloadSignal }: HistoryScreenProps) {
-  const [status, setStatus] = useState<Status>('loading');
+export function HistoryScreen({
+  apiClient,
+  onOpenAppointment,
+  reloadSignal,
+}: HistoryScreenProps) {
+  const [status, setStatus] = useState<Status>("loading");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  // Kept across the quiet refetch on return, so the filter still applies to the new list.
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     // No list yet to fall back to, so a failed initial load must still show
@@ -65,10 +96,10 @@ export function HistoryScreen({ apiClient, onOpenAppointment, reloadSignal }: Hi
       (result) => {
         if (!active) return;
         setAppointments(result);
-        setStatus('ready');
+        setStatus("ready");
       },
       () => {
-        if (active) setStatus('error');
+        if (active) setStatus("error");
       },
     );
     return () => {
@@ -91,7 +122,7 @@ export function HistoryScreen({ apiClient, onOpenAppointment, reloadSignal }: Hi
       (result) => {
         if (!active) return;
         setAppointments(result);
-        setStatus('ready');
+        setStatus("ready");
       },
       () => {
         // Don't let a failed background refresh wipe out a list we already have;
@@ -104,17 +135,17 @@ export function HistoryScreen({ apiClient, onOpenAppointment, reloadSignal }: Hi
   }, [reloadSignal, apiClient]);
 
   const retry = useCallback(() => {
-    setStatus('loading');
+    setStatus("loading");
     apiClient.fetchAppointments().then(
       (result) => {
         setAppointments(result);
-        setStatus('ready');
+        setStatus("ready");
       },
-      () => setStatus('error'),
+      () => setStatus("error"),
     );
   }, [apiClient]);
 
-  if (status === 'loading') {
+  if (status === "loading") {
     return (
       <View style={styles.center}>
         <ActivityIndicator />
@@ -123,11 +154,15 @@ export function HistoryScreen({ apiClient, onOpenAppointment, reloadSignal }: Hi
     );
   }
 
-  if (status === 'error') {
+  if (status === "error") {
     return (
       <View style={styles.center}>
         <Text style={styles.error}>Couldn&apos;t load appointments.</Text>
-        <Pressable accessibilityRole="button" style={styles.retry} onPress={retry}>
+        <Pressable
+          accessibilityRole="button"
+          style={styles.retry}
+          onPress={retry}
+        >
           <Text style={styles.retryText}>Retry</Text>
         </Pressable>
       </View>
@@ -143,46 +178,84 @@ export function HistoryScreen({ apiClient, onOpenAppointment, reloadSignal }: Hi
   }
 
   return (
-    <FlatList
-      data={appointments}
-      keyExtractor={(appointment) => appointment.id}
-      contentContainerStyle={styles.list}
-      renderItem={({ item }) => (
-        <Pressable
-          testID={`appointment-row-${item.id}`}
-          accessibilityRole="button"
-          style={styles.row}
-          onPress={() => onOpenAppointment?.(item.id)}
-        >
-          {/* A lone animal with no name falls back to the creation date as the
+    <View style={styles.screen}>
+      <TextInput
+        style={styles.search}
+        placeholder="Search by pet name"
+        accessibilityLabel="Search by pet name"
+        value={query}
+        onChangeText={setQuery}
+        autoCorrect={false}
+        autoCapitalize="none"
+        clearButtonMode="while-editing"
+      />
+      <FlatList
+        data={appointments.filter((appointment) =>
+          matchesPetName(appointment, query),
+        )}
+        keyExtractor={(appointment) => appointment.id}
+        contentContainerStyle={styles.list}
+        keyboardShouldPersistTaps="handled"
+        ListEmptyComponent={
+          <Text style={[styles.muted, styles.noMatches]}>
+            No appointments for &quot;{query.trim()}&quot;.
+          </Text>
+        }
+        renderItem={({ item }) => (
+          <Pressable
+            testID={`appointment-row-${item.id}`}
+            accessibilityRole="button"
+            style={styles.row}
+            onPress={() => onOpenAppointment?.(item.id)}
+          >
+            {/* A lone animal with no name falls back to the creation date as the
               heading rather than a useless "Patient 1". */}
-          <Text style={styles.patient}>
-            {hasNames(item) ? animalNames(item) : formatDate(item.createdAt)}
-          </Text>
-          {/* Only show the date as a subtitle when it isn't already the heading. */}
-          {hasNames(item) ? (
-            <Text style={styles.date}>
-              {formatDate(item.createdAt)}
-              {item.exams.length > 1 ? ` · ${item.exams.length} animals` : ''}
+            <Text style={styles.patient}>
+              {hasNames(item) ? animalNames(item) : formatDate(item.createdAt)}
             </Text>
-          ) : null}
-          <Text style={styles.snippet} numberOfLines={2}>
-            {snippetOf(item)}
-          </Text>
-        </Pressable>
-      )}
-    />
+            {/* Only show the date as a subtitle when it isn't already the heading. */}
+            {hasNames(item) ? (
+              <Text style={styles.date}>
+                {formatDate(item.createdAt)}
+                {item.exams.length > 1 ? ` · ${item.exams.length} animals` : ""}
+              </Text>
+            ) : null}
+            <Text style={styles.snippet} numberOfLines={2}>
+              {snippetOf(item)}
+            </Text>
+          </Pressable>
+        )}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: "#fff",
+  },
+  search: {
+    marginHorizontal: 12,
+    marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: "#f2f5f8",
+    fontSize: 16,
+    color: "#1b3a5b",
+  },
+  noMatches: {
+    textAlign: "center",
+    marginTop: 24,
+  },
   center: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     gap: 12,
     padding: 24,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   list: {
     padding: 12,
@@ -191,40 +264,40 @@ const styles = StyleSheet.create({
   row: {
     padding: 16,
     borderRadius: 12,
-    backgroundColor: '#f2f5f8',
+    backgroundColor: "#f2f5f8",
     gap: 4,
   },
   patient: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#1b3a5b',
+    fontWeight: "700",
+    color: "#1b3a5b",
   },
   date: {
     fontSize: 12,
-    color: '#6b7480',
+    color: "#6b7480",
   },
   snippet: {
     fontSize: 14,
-    color: '#333',
+    color: "#333",
   },
   muted: {
     fontSize: 16,
-    color: '#6b7480',
+    color: "#6b7480",
   },
   error: {
     fontSize: 16,
-    color: '#c0392b',
-    textAlign: 'center',
+    color: "#c0392b",
+    textAlign: "center",
   },
   retry: {
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 10,
-    backgroundColor: '#1b7f4b',
+    backgroundColor: "#1b7f4b",
   },
   retryText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
   },
 });

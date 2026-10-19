@@ -48,7 +48,7 @@ the mobile analogue of the desktop `build_app()`) and pass them down.
 | Route | Screen | Purpose |
 |---|---|---|
 | `/` (`index`) | `RecorderScreen` | One-tap capture of a whole appointment (feature A) |
-| `/history` | `HistoryScreen` | Backend-synced appointment feed, one row per recording naming every animal (feature B) |
+| `/history` | `HistoryScreen` | Backend-synced appointment feed, one row per recording naming every animal, searchable by pet name (feature B) |
 | `/appointment/[id]` | `AppointmentScreen` | The shared transcript and a SOAP card per animal: edit, **Regenerate**, **Save**, **Inject into AVImark** per animal, and **Delete** (features B & C) |
 | `/uploads` | `UploadsScreen` | Recordings still on the phone: where each is up to and why, with **Retry** and **Discard** |
 

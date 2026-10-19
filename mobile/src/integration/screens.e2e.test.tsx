@@ -159,6 +159,20 @@ describe('screens end-to-end', () => {
     expect(screen.getByText('Otitis externa')).toBeTruthy();
   });
 
+  it('history feed can be searched by pet name', async () => {
+    const backend = new FakeBackend();
+    backend.seedExam({ patient_name: 'Rex' });
+    backend.seedExam({ patient_name: 'Bella' });
+
+    render(<HistoryScreen apiClient={client(backend)} />);
+    await waitFor(() => expect(screen.getByText('Bella')).toBeTruthy());
+
+    fireEvent.changeText(screen.getByPlaceholderText(/search by pet name/i), 'rex');
+
+    expect(screen.queryByText('Rex')).not.toBeNull();
+    expect(screen.queryByText('Bella')).toBeNull();
+  });
+
   it('appointment: editing and saving writes through to the backend', async () => {
     const backend = new FakeBackend();
     const seeded = backend.seedExam({ patient_name: 'Rex' });

@@ -165,3 +165,97 @@ describe('HistoryScreen', () => {
     await waitFor(() => expect(screen.getByText(/notes pending/i)).toBeTruthy());
   });
 });
+
+describe('HistoryScreen search by pet name', () => {
+  /** Rex, Bella, a Milo + Bella visit, and two visits with unnamed animals. */
+  const appointments = () => [
+    makeAppointment({ id: 'appt-rex' }, ['Rex']),
+    makeAppointment({ id: 'appt-bella' }, ['Bella']),
+    makeAppointment({ id: 'appt-milo-bella' }, ['Milo', 'Bella']),
+    makeAppointment({ id: 'appt-duke' }, ['Duke', undefined]),
+    makeAppointment({ id: 'appt-unnamed' }, [undefined]),
+  ];
+
+  /** The ids of the rows on screen, in order. */
+  function shownRows(): string[] {
+    return screen
+      .queryAllByTestId(/appointment-row-/)
+      .map((row) => String(row.props.testID).replace('appointment-row-', ''));
+  }
+
+  function search(text: string) {
+    const field = screen.queryByPlaceholderText(/search by pet name/i);
+    expect(field).not.toBeNull();
+    fireEvent.changeText(field!, text);
+  }
+
+  async function renderLoaded(fetchAppointments = jest.fn(async () => appointments())) {
+    const client = makeApiClient(fetchAppointments);
+    const view = render(<HistoryScreen apiClient={client} reloadSignal={0} />);
+    await waitFor(() => expect(screen.getByText('Rex')).toBeTruthy());
+    return { ...view, client };
+  }
+
+  it('keeps only appointments with an animal whose name contains the search', async () => {
+    await renderLoaded();
+
+    search('bel');
+
+    expect(shownRows()).toEqual(['appt-bella', 'appt-milo-bella']);
+  });
+
+  it('ignores case and surrounding spaces', async () => {
+    await renderLoaded();
+
+    search('  REX ');
+
+    expect(shownRows()).toEqual(['appt-rex']);
+  });
+
+  it('says nothing matched and keeps the search field', async () => {
+    await renderLoaded();
+
+    search('zzz');
+
+    expect(shownRows()).toEqual([]);
+    expect(screen.queryByText('No appointments for "zzz".')).not.toBeNull();
+    expect(screen.queryByPlaceholderText(/search by pet name/i)).not.toBeNull();
+  });
+
+  it('shows every appointment again once the search is cleared', async () => {
+    await renderLoaded();
+
+    search('rex');
+    search('');
+
+    expect(shownRows()).toEqual([
+      'appt-rex',
+      'appt-bella',
+      'appt-milo-bella',
+      'appt-duke',
+      'appt-unnamed',
+    ]);
+  });
+
+  it('never matches the "Patient N" label of an unnamed animal', async () => {
+    await renderLoaded();
+
+    search('patient');
+
+    expect(shownRows()).toEqual([]);
+  });
+
+  it('keeps the search applied when the list refreshes on return', async () => {
+    const fetchAppointments = jest
+      .fn()
+      .mockResolvedValueOnce(appointments())
+      .mockResolvedValueOnce(appointments().filter((a) => a.id !== 'appt-bella'));
+    const { rerender, client } = await renderLoaded(fetchAppointments);
+
+    search('bel');
+    rerender(<HistoryScreen apiClient={client} reloadSignal={1} />);
+
+    await waitFor(() => expect(shownRows()).toEqual(['appt-milo-bella']));
+    expect(screen.queryByDisplayValue('bel')).not.toBeNull();
+  });
+});
