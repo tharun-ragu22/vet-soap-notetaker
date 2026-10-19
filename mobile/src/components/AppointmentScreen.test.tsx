@@ -343,3 +343,84 @@ describe('AppointmentScreen', () => {
     });
   });
 });
+
+describe('collapsing an animal card', () => {
+  /** Presses a card's header toggle, failing on an assertion if there isn't one. */
+  function toggle(index: number) {
+    const header = screen.queryByTestId(`toggle-${index}`);
+    expect(header).not.toBeNull();
+    fireEvent.press(header!);
+  }
+
+  const fields = (index: number) => [
+    `name-${index}`,
+    ...['subjective', 'objective', 'assessment', 'plan'].map((f) => `field-${index}-${f}`),
+  ];
+
+  it('starts every card expanded', () => {
+    renderScreen();
+
+    expect(screen.queryByTestId('name-0')).not.toBeNull();
+    expect(screen.queryByTestId('field-0-subjective')).not.toBeNull();
+    expect(screen.queryByTestId('toggle-0')?.props.accessibilityState).toEqual(
+      expect.objectContaining({ expanded: true }),
+    );
+  });
+
+  it("tapping the header hides that animal's fields but keeps its name and Inject", () => {
+    renderScreen();
+
+    toggle(0);
+
+    for (const id of fields(0)) expect(screen.queryByTestId(id)).toBeNull();
+    expect(screen.getByText('Bella')).toBeTruthy();
+    expect(screen.queryByTestId('inject-0')).not.toBeNull();
+    for (const id of fields(1)) expect(screen.queryByTestId(id)).not.toBeNull();
+    expect(screen.getByTestId('toggle-0').props.accessibilityState).toEqual(
+      expect.objectContaining({ expanded: false }),
+    );
+    expect(screen.getByLabelText('Expand Bella')).toBeTruthy();
+  });
+
+  it('tapping it again shows the fields with their values', () => {
+    renderScreen();
+
+    toggle(0);
+    toggle(0);
+
+    expect(screen.getByTestId('field-0-subjective').props.value).toBe('S1');
+    expect(screen.getByLabelText('Collapse Bella')).toBeTruthy();
+  });
+
+  it('keeps edits made before collapsing, and Save sends them', async () => {
+    const { apiClient } = renderScreen();
+
+    fireEvent.changeText(screen.getByTestId('field-0-subjective'), 'bella edited');
+    toggle(0);
+    fireEvent.press(screen.getByText('Save Changes'));
+
+    await waitFor(() => expect(apiClient.updateAppointment).toHaveBeenCalledTimes(1));
+    expect(apiClient.updateAppointment.mock.calls[0][1].exams[0].subjective).toBe('bella edited');
+  });
+
+  it('injects from a collapsed card', async () => {
+    const { apiClient } = renderScreen();
+
+    toggle(0);
+    fireEvent.press(screen.getByTestId('inject-0'));
+
+    await waitFor(() => expect(screen.getByText(/sent to the desktop/i)).toBeTruthy());
+    expect(apiClient.requestInjection).toHaveBeenCalledWith('exam-1');
+  });
+
+  it('keeps a collapsed card collapsed when another animal is removed', () => {
+    renderScreen();
+
+    toggle(1);
+    fireEvent.press(screen.getByTestId('remove-0'));
+    fireEvent.press(screen.getByTestId('remove-0'));
+
+    expect(screen.getByText('Max')).toBeTruthy();
+    expect(screen.queryByTestId('field-0-subjective')).toBeNull();
+  });
+});

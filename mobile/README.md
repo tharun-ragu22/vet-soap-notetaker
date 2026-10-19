@@ -49,7 +49,7 @@ the mobile analogue of the desktop `build_app()`) and pass them down.
 |---|---|---|
 | `/` (`index`) | `RecorderScreen` | One-tap capture of a whole appointment (feature A) |
 | `/history` | `HistoryScreen` | **Notes**: the backend-synced appointment feed, one row per recording naming every animal, searchable by pet name (feature B) |
-| `/appointment/[id]` | `AppointmentScreen` | The shared transcript and a SOAP card per animal: edit, **Regenerate**, **Save**, **Inject into AVImark** per animal, and **Delete** (features B & C) |
+| `/appointment/[id]` | `AppointmentScreen` | The shared transcript and a SOAP card per animal (tap a name to collapse its card; Inject stays): edit, **Regenerate**, **Save**, **Inject into AVImark** per animal, and **Delete** (features B & C) |
 | `/uploads` | `UploadsScreen` | **Outbox**: recordings still on the phone: where each is up to and why, with **Retry** and **Discard** |
 
 Notes, Outbox and Settings open from the **☰ menu** at the top left of the home screen.

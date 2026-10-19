@@ -189,6 +189,34 @@ describe('screens end-to-end', () => {
     expect(persisted.assessment).toBe('Gastroenteritis');
   });
 
+  it('appointment: a collapsed animal is saved unchanged alongside an edit to another', async () => {
+    const backend = new FakeBackend({
+      notesForAudio: () => ({
+        transcript: 'vet: Bella and Max',
+        patients: [
+          { patient_name: 'Bella', subjective: 'S1', objective: 'O1', assessment: 'Otitis externa', plan: 'Otomax' },
+          { patient_name: 'Max', subjective: 'S2', objective: 'O2', assessment: 'Pad laceration', plan: 'Carprofen' },
+        ],
+      }),
+    });
+    const apiClient = client(backend);
+    const created = await apiClient.createAppointment(new Uint8Array([1]), 'audio/m4a');
+
+    render(<AppointmentScreen appointment={created} apiClient={apiClient} pendingPollMs={0} />);
+
+    fireEvent.press(screen.getByLabelText('Collapse Bella'));
+    expect(screen.queryByTestId('field-0-assessment')).toBeNull();
+    fireEvent.changeText(screen.getByTestId('field-1-plan'), 'Carprofen 5 days');
+    fireEvent.press(screen.getByText(/save changes/i));
+
+    await waitFor(() => expect(screen.getByText(/saved/i)).toBeTruthy());
+    const persisted = await apiClient.getAppointment(created.id);
+    expect(persisted.exams.map((e) => [e.patientName, e.assessment, e.plan])).toEqual([
+      ['Bella', 'Otitis externa', 'Otomax'],
+      ['Max', 'Pad laceration', 'Carprofen 5 days'],
+    ]);
+  });
+
   it('a two-animal visit: one recording, a note per animal, each injected into its own chart', async () => {
     // The feature's acceptance scenario: the vet records the whole appointment,
     // stops, and sees an individual SOAP note per animal sharing one transcript,

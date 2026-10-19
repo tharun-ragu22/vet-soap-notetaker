@@ -113,6 +113,9 @@ export function AppointmentScreen({
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [inject, setInject] = useState<InjectState | null>(null);
   const [removeArmed, setRemoveArmed] = useState<string | null>(null);
+  // Collapsed cards, by stable card key so the state follows the animal when another
+  // is removed. Collapsing only hides the fields: the draft and Inject are unaffected.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const newKeys = useRef(0);
 
   const load = (next: Appointment) => {
@@ -219,6 +222,14 @@ export function AppointmentScreen({
     }
   };
 
+  const toggleCollapsed = (key: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  };
+
   const handleRemove = (card: Card) => {
     if (removeArmed !== card.key) {
       setRemoveArmed(card.key);
@@ -317,68 +328,86 @@ export function AppointmentScreen({
       keyboardDismissMode="on-drag"
       keyboardShouldPersistTaps="handled"
     >
-      {cards.map((card, index) => (
-        <View key={card.key} style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.patient}>{card.patientName?.trim() || `Patient ${index + 1}`}</Text>
-            {cards.length > 1 ? (
+      {cards.map((card, index) => {
+        const label = card.patientName?.trim() || `Patient ${index + 1}`;
+        const expanded = !collapsed.has(card.key);
+        return (
+          <View key={card.key} style={styles.card}>
+            <View style={styles.cardHeader}>
               <Pressable
-                testID={`remove-${index}`}
+                testID={`toggle-${index}`}
                 accessibilityRole="button"
-                accessibilityLabel={`Remove ${card.patientName || `Patient ${index + 1}`}`}
-                onPress={() => handleRemove(card)}
+                accessibilityState={{ expanded }}
+                accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${label}`}
+                style={styles.toggle}
+                onPress={() => toggleCollapsed(card.key)}
               >
-                <Text style={styles.remove}>
-                  {removeArmed === card.key ? 'Tap again to remove' : 'Remove'}
-                </Text>
+                <Text style={styles.patient}>{label}</Text>
+                <Text style={styles.chevron}>{expanded ? '▾' : '▸'}</Text>
               </Pressable>
+              {cards.length > 1 ? (
+                <Pressable
+                  testID={`remove-${index}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${card.patientName || `Patient ${index + 1}`}`}
+                  onPress={() => handleRemove(card)}
+                >
+                  <Text style={styles.remove}>
+                    {removeArmed === card.key ? 'Tap again to remove' : 'Remove'}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </View>
+            {expanded ? (
+              <>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Patient name</Text>
+                  <TextInput
+                    testID={`name-${index}`}
+                    style={styles.input}
+                    value={card.patientName ?? ''}
+                    placeholder={`Patient ${index + 1}`}
+                    onChangeText={(value) => setCardField(index, 'patientName', value)}
+                  />
+                </View>
+                {SECTIONS.map(([field, label]) => (
+                  <View key={field} style={styles.field}>
+                    <Text style={styles.label}>{label}</Text>
+                    <TextInput
+                      testID={`field-${index}-${field}`}
+                      style={styles.input}
+                      value={card[field]}
+                      onChangeText={(value) => setCardField(index, field, value)}
+                      multiline
+                    />
+                  </View>
+                ))}
+              </>
+            ) : null}
+            <Pressable
+              testID={`inject-${index}`}
+              accessibilityRole="button"
+              style={[
+                styles.button,
+                styles.inject,
+                inject?.index === index && inject.status === 'sending' && styles.busy,
+              ]}
+              onPress={() => handleInject(index)}
+              disabled={inject?.status === 'sending'}
+            >
+              <Text style={styles.buttonText}>
+                {inject?.index === index && inject.status === 'sending' ? 'Sending…' : 'Inject into AVImark'}
+              </Text>
+            </Pressable>
+            {inject?.index === index && inject.status === 'sent' ? (
+              <Text style={styles.ok}>Sent to the desktop — it will paste into AVImark.</Text>
+            ) : null}
+            {inject?.index === index && inject.status === 'error' ? (
+              <Text style={styles.error}>Injection request failed: {inject.error}</Text>
             ) : null}
           </View>
-          <View style={styles.field}>
-            <Text style={styles.label}>Patient name</Text>
-            <TextInput
-              testID={`name-${index}`}
-              style={styles.input}
-              value={card.patientName ?? ''}
-              placeholder={`Patient ${index + 1}`}
-              onChangeText={(value) => setCardField(index, 'patientName', value)}
-            />
-          </View>
-          {SECTIONS.map(([field, label]) => (
-            <View key={field} style={styles.field}>
-              <Text style={styles.label}>{label}</Text>
-              <TextInput
-                testID={`field-${index}-${field}`}
-                style={styles.input}
-                value={card[field]}
-                onChangeText={(value) => setCardField(index, field, value)}
-                multiline
-              />
-            </View>
-          ))}
-          <Pressable
-            testID={`inject-${index}`}
-            accessibilityRole="button"
-            style={[
-              styles.button,
-              styles.inject,
-              inject?.index === index && inject.status === 'sending' && styles.busy,
-            ]}
-            onPress={() => handleInject(index)}
-            disabled={inject?.status === 'sending'}
-          >
-            <Text style={styles.buttonText}>
-              {inject?.index === index && inject.status === 'sending' ? 'Sending…' : 'Inject into AVImark'}
-            </Text>
-          </Pressable>
-          {inject?.index === index && inject.status === 'sent' ? (
-            <Text style={styles.ok}>Sent to the desktop — it will paste into AVImark.</Text>
-          ) : null}
-          {inject?.index === index && inject.status === 'error' ? (
-            <Text style={styles.error}>Injection request failed: {inject.error}</Text>
-          ) : null}
-        </View>
-      ))}
+        );
+      })}
 
       <View style={styles.field}>
         <Text style={styles.label}>Transcript (shared by every animal)</Text>
@@ -443,6 +472,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  toggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 1,
+  },
+  chevron: {
+    fontSize: 18,
+    color: '#6b7480',
   },
   patient: {
     fontSize: 22,
