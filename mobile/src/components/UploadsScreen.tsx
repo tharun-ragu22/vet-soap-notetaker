@@ -99,7 +99,7 @@ export function UploadsScreen({
             {detail ? <Text style={styles.detail}>{detail}</Text> : null}
             {uploaded ? (
               <Text style={styles.detail}>
-                Removing it here only clears this list; the appointment stays in History.
+                Removing it here only clears this list; the appointment stays in Notes.
               </Text>
             ) : null}
             <View style={styles.actions}>

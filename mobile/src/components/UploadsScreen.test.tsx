@@ -109,11 +109,11 @@ describe('UploadsScreen', () => {
     await waitFor(() => expect(props.onDiscard).toHaveBeenCalledWith('a1'));
   });
 
-  it('offers Remove for an uploaded recording and says it stays in History', () => {
+  it('offers Remove for an uploaded recording and says it stays in Notes', () => {
     renderScreen([note()]);
 
     expect(screen.getByTestId('discard-n1')).toHaveTextContent('Remove');
-    expect(screen.getByTestId('upload-row-n1')).toHaveTextContent('stays in History', { exact: false });
+    expect(screen.getByTestId('upload-row-n1')).toHaveTextContent('the appointment stays in Notes.', { exact: false });
     expect(screen.getByTestId('upload-row-n1')).toHaveTextContent('Uploaded — notes still generating', {
       exact: false,
     });
