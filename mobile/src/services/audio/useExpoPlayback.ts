@@ -10,7 +10,8 @@ import type { Playback } from './types';
  * A null uri (the copy isn't ready yet) gives a player with nothing loaded.
  */
 export function useExpoPlayback(uri: string | null): Playback {
-  const player = useAudioPlayer(uri ? { uri } : null);
+  // More frequent position updates than the 500 ms default, for a smooth scrubber.
+  const player = useAudioPlayer(uri ? { uri } : null, { updateInterval: 250 });
   const status = useAudioPlayerStatus(player);
 
   // Closing the sheet stops the sound, whatever expo-audio does when it releases the player.
@@ -40,7 +41,9 @@ export function useExpoPlayback(uri: string | null): Playback {
       pause() {
         player.pause();
       },
-      seekTo: (seconds) => player.seekTo(seconds),
+      // Exactly there: without tolerances expo-audio's iOS seek allows any error,
+      // which landed scrubs back at the start or where it already was.
+      seekTo: (seconds) => player.seekTo(seconds, 0, 0),
     }),
     [player, status.isLoaded, status.playing, status.currentTime, status.duration],
   );

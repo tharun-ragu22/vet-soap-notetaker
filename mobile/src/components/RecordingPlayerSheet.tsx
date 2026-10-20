@@ -37,33 +37,59 @@ export function RecordingPlayerSheet({
 }: RecordingPlayerSheetProps) {
   const { status } = playback;
   const width = useRef(0);
+  // Where the touch landed on the bar, and the finger's screen x then.
+  const grab = useRef({ x: 0, pageX: 0 });
+  // The seek still landing, so Play can wait for it.
+  const seeking = useRef<Promise<void> | null>(null);
   // While a finger is on the scrubber the thumb follows it; the seek happens on release.
   const [dragTime, setDragTime] = useState<number | null>(null);
+  // Where it was let go, shown until the player has got there.
+  const [pendingTime, setPendingTime] = useState<number | null>(null);
 
   const duration = status.duration > 0 ? status.duration : durationMillis / 1000;
-  const shown = Math.min(dragTime ?? status.currentTime, duration);
+  const shown = Math.min(dragTime ?? pendingTime ?? status.currentTime, duration);
   const progress = duration > 0 ? shown / duration : 0;
+
+  const seek = (seconds: number) => {
+    setPendingTime(seconds);
+    const landing = playback.seekTo(seconds);
+    seeking.current = landing;
+    void landing.finally(() => {
+      if (seeking.current !== landing) return;
+      seeking.current = null;
+      setPendingTime(null);
+    });
+  };
 
   const toggle = () => {
     if (status.playing) {
       playback.pause();
-    } else if (status.currentTime >= duration - END_SLACK_SECONDS) {
-      void playback.seekTo(0).then(() => playback.play());
-    } else {
-      playback.play();
+      return;
     }
+    const atEnd = shown >= duration - END_SLACK_SECONDS;
+    const start = () => (atEnd ? playback.seekTo(0).then(() => playback.play()) : playback.play());
+    if (seeking.current) void seeking.current.then(start);
+    else void start();
   };
 
-  const follow = (event: GestureResponderEvent) =>
-    setDragTime(timeAt(event.nativeEvent.locationX, width.current, duration));
+  // Measured from the finger's screen position, not locationX: iOS gives locationX
+  // relative to whatever view is under the finger now, which jumps when it drifts off the bar.
+  const timeUnder = (event: GestureResponderEvent) =>
+    timeAt(grab.current.x + event.nativeEvent.pageX - grab.current.pageX, width.current, duration);
+
+  const begin = (event: GestureResponderEvent) => {
+    grab.current = { x: event.nativeEvent.locationX, pageX: event.nativeEvent.pageX };
+    setDragTime(timeUnder(event));
+  };
+
+  const follow = (event: GestureResponderEvent) => setDragTime(timeUnder(event));
 
   const release = (event: GestureResponderEvent) => {
     setDragTime(null);
-    void playback.seekTo(timeAt(event.nativeEvent.locationX, width.current, duration));
+    seek(timeUnder(event));
   };
 
-  const seekBy = (seconds: number) =>
-    void playback.seekTo(Math.min(Math.max(status.currentTime + seconds, 0), duration));
+  const seekBy = (seconds: number) => seek(Math.min(Math.max(shown + seconds, 0), duration));
 
   return (
     <View style={styles.sheet}>
@@ -95,7 +121,7 @@ export function RecordingPlayerSheet({
             onMoveShouldSetResponder={() => true}
             // Keep the drag rather than hand it to the sheet's swipe-down.
             onResponderTerminationRequest={() => false}
-            onResponderGrant={follow}
+            onResponderGrant={begin}
             onResponderMove={follow}
             onResponderRelease={release}
           >

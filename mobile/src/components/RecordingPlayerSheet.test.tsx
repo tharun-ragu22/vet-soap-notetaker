@@ -31,8 +31,16 @@ function layOut(width: number) {
   fireEvent(screen.getByTestId('player-scrubber'), 'layout', { nativeEvent: { layout: { width, height: 40 } } });
 }
 
-function touch(name: 'responderGrant' | 'responderMove' | 'responderRelease', x: number) {
-  fireEvent(screen.getByTestId('player-scrubber'), name, { nativeEvent: { locationX: x } });
+/** A touch on the bar: `x` along it, and `pageX` on screen (the same unless the finger drifts off). */
+function touch(name: 'responderGrant' | 'responderMove' | 'responderRelease', x: number, pageX = x) {
+  fireEvent(screen.getByTestId('player-scrubber'), name, { nativeEvent: { locationX: x, pageX } });
+}
+
+/** A seekTo that lands only when the test says so. */
+function slowSeek(playback: Playback) {
+  let land!: () => void;
+  playback.seekTo = jest.fn(() => new Promise<void>((resolve) => { land = resolve; }));
+  return () => act(async () => land());
 }
 
 describe('RecordingPlayerSheet', () => {
@@ -108,8 +116,55 @@ describe('RecordingPlayerSheet', () => {
 
     fireEvent(scrubber, 'accessibilityAction', { nativeEvent: { actionName: 'increment' } });
     expect(playback.seekTo).toHaveBeenLastCalledWith(1200);
+    // From where the thumb now is (the end), so quick swipes add up.
     fireEvent(scrubber, 'accessibilityAction', { nativeEvent: { actionName: 'decrement' } });
-    expect(playback.seekTo).toHaveBeenLastCalledWith(1175);
+    expect(playback.seekTo).toHaveBeenLastCalledWith(1185);
+  });
+
+  it('follows the finger along the screen even when it drifts off the bar', () => {
+    const playback = fakePlayback();
+    renderSheet({ playback });
+    layOut(300);
+
+    touch('responderGrant', 30, 50);
+    // iOS measures locationX from whatever view is under the finger now.
+    touch('responderMove', 5, 170);
+    expect(screen.getByTestId('player-elapsed')).toHaveTextContent('10:00');
+
+    touch('responderRelease', 5, 170);
+    expect(playback.seekTo).toHaveBeenCalledWith(600);
+  });
+
+  it('keeps showing where it was let go until the seek lands, then follows the player', async () => {
+    const playback = fakePlayback();
+    const land = slowSeek(playback);
+    const { rerender, props } = renderSheet({ playback });
+    layOut(300);
+
+    touch('responderGrant', 150);
+    touch('responderRelease', 150);
+    expect(screen.getByTestId('player-elapsed')).toHaveTextContent('10:00');
+
+    await land();
+    rerender(<RecordingPlayerSheet {...props} playback={{ ...playback, status: { ...playback.status, currentTime: 610 } }} />);
+    expect(screen.getByTestId('player-elapsed')).toHaveTextContent('10:10');
+  });
+
+  it('after scrubbing back while paused, plays only once the seek has landed', async () => {
+    const playback = fakePlayback({ currentTime: 600 });
+    const land = slowSeek(playback);
+    renderSheet({ playback });
+    layOut(300);
+
+    touch('responderGrant', 75);
+    touch('responderRelease', 75);
+    expect(playback.seekTo).toHaveBeenCalledWith(300);
+    fireEvent.press(screen.getByTestId('player-toggle'));
+    expect(playback.play).not.toHaveBeenCalled();
+
+    await land();
+    expect(playback.play).toHaveBeenCalledTimes(1);
+    expect(playback.seekTo).toHaveBeenCalledTimes(1);
   });
 
   it('uses the recorded length until the player knows the real one', () => {
