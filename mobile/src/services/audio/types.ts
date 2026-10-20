@@ -32,32 +32,31 @@ export interface KeepAwake {
   deactivate(): void;
 }
 
-/** Where a recording's playback is up to, in seconds. */
+/** Where a recording's playback is up to. */
 export interface PlaybackStatus {
   loaded: boolean;
   playing: boolean;
-  currentTime: number;
-  duration: number;
+  /** It has just played to the end. */
+  finished: boolean;
 }
 
 /**
- * The thin native-playback seam for the Outbox player. RecordingPlayerSheet owns
- * the controls and depends only on this, so tests inject a fake; the real
+ * The thin native-playback seam for the Outbox's Play/Stop. useOutboxPlayer owns
+ * when to play and stop and depends only on this, so tests inject a fake; the real
  * useExpoPlayback (wrapping expo-audio) is wired in only at the route.
  */
 export interface Playback {
   status: PlaybackStatus;
   play(): void;
   pause(): void;
-  seekTo(seconds: number): Promise<void>;
 }
 
 /**
- * Gives the player its own copy of a queued recording, so the queue can upload
+ * Gives playback its own copy of a queued recording, so the queue can upload
  * and delete the original while the vet is still listening.
  */
 export interface PlaybackFiles {
-  /** Copy a stored recording somewhere private to the player; returns the copy's uri. */
+  /** Copy a stored recording somewhere private to playback; returns the copy's uri. */
   hold(fileName: string): Promise<string>;
   /** Delete a copy made by {@link hold}. */
   release(uri: string): Promise<void>;

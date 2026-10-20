@@ -81,3 +81,21 @@ describe('useHeldRecording', () => {
     expect(files.release).not.toHaveBeenCalled();
   });
 });
+
+describe('useHeldRecording when the recording changes', () => {
+  it("never hands back the previous recording's copy or error", async () => {
+    const files = fakeFiles();
+    const { result, rerender } = renderHook(({ name }: { name: string | null }) => useHeldRecording(name, files), {
+      initialProps: { name: 'rec.m4a' as string | null },
+    });
+    await waitFor(() => expect(result.current.uri).not.toBeNull());
+
+    rerender({ name: 'other.m4a' });
+    // other.m4a isn't on the phone: an error, and never rec.m4a's copy meanwhile.
+    expect(result.current.uri).toBeNull();
+    await waitFor(() => expect(result.current.error).toBe(true));
+
+    rerender({ name: null });
+    expect(result.current).toEqual({ uri: null, error: false });
+  });
+});

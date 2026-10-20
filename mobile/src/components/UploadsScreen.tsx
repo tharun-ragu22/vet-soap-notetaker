@@ -15,8 +15,13 @@ export interface UploadsScreenProps {
   /** Discard a recording (or forget an uploaded one) — only ever the vet's choice. */
   onDiscard: (id: string) => Promise<void>;
   onOpenAppointment: (id: string) => void;
-  /** Open the player for a recording still on the phone; no Play buttons without it. */
+  /** Play a recording still on the phone, from the start; no Play buttons without it. */
   onPlay?: (id: string) => void;
+  onStop?: () => void;
+  /** The recording playing now: its row shows Stop instead of Play. */
+  playingId?: string | null;
+  /** The recording whose last Play failed. */
+  failedId?: string | null;
   /** A new recording is in progress: playback would go into it, so Play is off. */
   recording?: boolean;
   /** Clock for "Last tried …" (tests); defaults to Date.now. */
@@ -40,6 +45,9 @@ export function UploadsScreen({
   onDiscard,
   onOpenAppointment,
   onPlay,
+  onStop,
+  playingId = null,
+  failedId = null,
   recording = false,
   now = Date.now,
 }: UploadsScreenProps) {
@@ -102,8 +110,21 @@ export function UploadsScreen({
                 Removing it here only clears this list; the appointment stays in Notes.
               </Text>
             ) : null}
+            {item.id === failedId ? (
+              <Text style={[styles.detail, styles.failed]}>This recording couldn&apos;t be played.</Text>
+            ) : null}
             <View style={styles.actions}>
-              {onPlay && item.stage === 'audio' ? (
+              {item.id === playingId ? (
+                <Pressable
+                  testID={`stop-${item.id}`}
+                  accessibilityRole="button"
+                  accessibilityLabel="Stop recording"
+                  style={[styles.button, styles.play]}
+                  onPress={onStop}
+                >
+                  <Text style={styles.playText}>■ Stop</Text>
+                </Pressable>
+              ) : onPlay && item.stage === 'audio' ? (
                 <Pressable
                   testID={`play-${item.id}`}
                   accessibilityRole="button"

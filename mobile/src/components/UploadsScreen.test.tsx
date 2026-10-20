@@ -127,7 +127,7 @@ describe('UploadsScreen', () => {
 });
 
 describe('playing a recording from the Outbox', () => {
-  it('opens the player for a recording still on the phone', () => {
+  it('plays a recording still on the phone', () => {
     const onPlay = jest.fn();
     renderScreen([failed, audio({ id: 'a2' })], { onPlay });
 
@@ -165,5 +165,31 @@ describe('playing a recording from the Outbox', () => {
     expect(screen.getByTestId('play-a1')).toBeDisabled();
     fireEvent.press(screen.getByTestId('play-a1'));
     expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it('shows Stop on the recording that is playing, and Play on the others', () => {
+    const onStop = jest.fn();
+    renderScreen([audio(), audio({ id: 'a2' })], { onPlay: jest.fn(), onStop, playingId: 'a1' });
+
+    expect(screen.queryByTestId('play-a1')).toBeNull();
+    expect(screen.getByTestId('stop-a1')).toHaveTextContent('■ Stop');
+    expect(screen.getByTestId('play-a2')).toHaveTextContent('▶ Play');
+    fireEvent.press(screen.getByTestId('stop-a1'));
+
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Stop on a recording that finished uploading while it played', () => {
+    renderScreen([note({ id: 'a1' })], { onPlay: jest.fn(), onStop: jest.fn(), playingId: 'a1' });
+
+    expect(screen.getByTestId('stop-a1')).toHaveTextContent('■ Stop');
+  });
+
+  it('says when a recording could not be played', () => {
+    renderScreen([audio(), audio({ id: 'a2' })], { onPlay: jest.fn(), failedId: 'a2' });
+
+    expect(screen.getByTestId('upload-row-a2')).toHaveTextContent(/This recording couldn't be played\./);
+    expect(screen.getByTestId('upload-row-a1')).not.toHaveTextContent(/couldn't be played/);
+    expect(screen.getByTestId('play-a2')).toHaveTextContent('▶ Play');
   });
 });

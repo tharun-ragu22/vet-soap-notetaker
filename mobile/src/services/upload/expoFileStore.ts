@@ -47,9 +47,9 @@ export const expoFileStore: FileStore = {
 const PLAYBACK_DIR = 'playback';
 
 /**
- * The Outbox player's {@link PlaybackFiles}: it plays a copy in the cache, so the
+ * The Outbox's {@link PlaybackFiles}: Play plays a copy in the cache, so the
  * queue can upload and delete the original while the vet is still listening.
- * Holding clears any copies a crash left behind (one player is open at a time).
+ * Holding clears any copies a crash left behind (one recording plays at a time).
  */
 export const expoPlaybackFiles: PlaybackFiles = {
   async hold(fileName: string): Promise<string> {
