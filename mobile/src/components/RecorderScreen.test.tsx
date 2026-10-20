@@ -26,6 +26,7 @@ const appointment: Appointment = {
   createdAt: '2026-09-22T10:00:00Z',
   transcript: 'vet: hello',
   notePending: false,
+  status: 'complete',
   exams: [],
 };
 
@@ -94,6 +95,34 @@ describe('RecorderScreen', () => {
     expect(onRecorded).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByText(/start/i)).toBeTruthy());
     expect(audioService.state).toBe('idle');
+  });
+
+  it('on stop, an async upload returns to idle and says the note will be announced', async () => {
+    const audioService = new AudioService(makeRecorder());
+    const processing: Appointment = { ...appointment, status: 'processing', notePending: true };
+    const onRecorded = jest.fn();
+    render(
+      <RecorderScreen
+        audioService={audioService}
+        enqueueRecording={jest.fn(async () => processing)}
+        onRecorded={onRecorded}
+        hasPendingUploads={false}
+      />,
+    );
+
+    fireEvent.press(screen.getByText(/start/i));
+    await waitFor(() => expect(screen.getByText(/stop/i)).toBeTruthy());
+    fireEvent.press(screen.getByText(/stop/i));
+
+    await waitFor(() =>
+      expect(screen.getByText("Uploaded — you'll see a notice here when the note is ready.")).toBeTruthy(),
+    );
+    expect(onRecorded).not.toHaveBeenCalled();
+    expect(audioService.state).toBe('idle');
+
+    // The next recording clears it.
+    fireEvent.press(screen.getByText(/start/i));
+    await waitFor(() => expect(screen.queryByText(/^Uploaded/)).toBeNull());
   });
 
   describe('the background-upload notice follows the queue', () => {

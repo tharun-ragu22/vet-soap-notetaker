@@ -24,6 +24,7 @@ function makeAppointment(overrides: Partial<Appointment> = {}): Appointment {
     createdAt: '2026-10-16T10:00:00Z',
     transcript: 'vet: Bella and Max today',
     notePending: false,
+    status: overrides.notePending ? 'note_pending' : 'complete',
     exams: [
       makeExam(),
       makeExam({ id: 'exam-2', patientName: 'Max', subjective: 'S2', objective: 'O2', assessment: 'A2', plan: 'P2' }),
@@ -51,6 +52,7 @@ function makeClient(overrides: Partial<Record<keyof Client, jest.Mock>> = {}) {
     })),
     completeAppointment: jest.fn(),
     getAppointment: jest.fn(),
+    retryAppointment: jest.fn(),
     ...overrides,
   };
   return client as typeof client & Client;
@@ -270,6 +272,73 @@ describe('AppointmentScreen', () => {
 
     await waitFor(() => expect(screen.getByText(/delete failed/i)).toBeTruthy());
     expect(onDeleted).not.toHaveBeenCalled();
+  });
+
+  describe('an async upload the computer is still working on', () => {
+    const placeholder = makeExam({ patientName: undefined, subjective: '', objective: '', assessment: '', plan: '', notePending: true });
+    const processing = makeAppointment({ status: 'processing', notePending: true, transcript: '', exams: [placeholder] });
+
+    it('says it is processing, with nothing to edit or generate yet', () => {
+      renderScreen({ appointment: processing });
+
+      expect(screen.getByText(/processing on the computer/i)).toBeTruthy();
+      expect(screen.queryByText('Generate notes now')).toBeNull();
+      expect(screen.queryByText('Save Changes')).toBeNull();
+      expect(screen.getByText('Delete Appointment')).toBeTruthy();
+    });
+
+    it('shows the notes once they are done, while the screen is open', async () => {
+      jest.useFakeTimers();
+      try {
+        const apiClient = makeClient({
+          getAppointment: jest.fn().mockResolvedValueOnce(processing).mockResolvedValueOnce(makeAppointment()),
+        });
+        renderScreen({ appointment: processing, apiClient, pendingPollMs: 1000 });
+
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(2000);
+        });
+
+        expect(screen.getByTestId('name-1').props.value).toBe('Max');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('a failed recording offers Retry, which sends it back to processing', async () => {
+      const failed = { ...processing, status: 'failed' as const };
+      const apiClient = makeClient({ retryAppointment: jest.fn(async () => processing) });
+      renderScreen({ appointment: failed, apiClient });
+
+      expect(screen.getByText(/couldn't transcribe this recording/i)).toBeTruthy();
+      fireEvent.press(screen.getByText('Retry'));
+
+      await waitFor(() => expect(screen.getByText(/processing on the computer/i)).toBeTruthy());
+      expect(apiClient.retryAppointment).toHaveBeenCalledWith('appt-1');
+    });
+
+    it('a failed Retry says so and stays failed', async () => {
+      const failed = { ...processing, status: 'failed' as const };
+      const apiClient = makeClient({
+        retryAppointment: jest.fn(async () => {
+          throw new Error('backend returned 409');
+        }),
+      });
+      renderScreen({ appointment: failed, apiClient });
+
+      fireEvent.press(screen.getByText('Retry'));
+
+      await waitFor(() => expect(screen.getByText(/retry failed/i)).toBeTruthy());
+      expect(screen.getByText(/couldn't transcribe this recording/i)).toBeTruthy();
+    });
+
+    it('a recording with no speech can only be deleted', () => {
+      renderScreen({ appointment: { ...processing, status: 'no_speech' } });
+
+      expect(screen.getByText(/no speech was heard/i)).toBeTruthy();
+      expect(screen.queryByText('Retry')).toBeNull();
+      expect(screen.getByText('Delete Appointment')).toBeTruthy();
+    });
   });
 
   describe('while the notes are still generating', () => {

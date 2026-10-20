@@ -2,6 +2,7 @@ import type {
   Appointment,
   AppointmentDraft,
   AppointmentExam,
+  AppointmentStatus,
   AudioBody,
   Exam,
   InjectionRequest,
@@ -63,6 +64,21 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+/** Options for {@link ApiClient.createAppointment}. */
+export interface UploadOptions extends RequestOptions {
+  /**
+   * Identifies this recording across retries (the upload queue's entry id): a
+   * repeat after a lost reply gets the same appointment back, never a duplicate.
+   */
+  idempotencyKey?: string;
+}
+
+/** Where and how to open the backend's live `/api/events` stream. */
+export interface EventStreamTarget {
+  url: string;
+  headers: Record<string, string>;
+}
+
 export type HttpFetch = (url: string, init?: HttpRequestInit) => Promise<HttpResponse>;
 
 export interface ApiClientOptions {
@@ -96,6 +112,8 @@ interface RawAppointment {
   created_at: string;
   transcript: string;
   note_pending: boolean;
+  /** Absent from a backend older than async uploads. */
+  status?: AppointmentStatus;
   exams: RawAppointmentExam[];
 }
 
@@ -176,23 +194,43 @@ export class ApiClient {
   }
 
   /**
-   * Upload a recording and get back the appointment: the shared transcript and one
-   * exam per animal. On a 202 (transcribed, note generation failed) it comes back
-   * with `notePending: true` and a single empty exam — finish it later with
-   * {@link completeAppointment}, which needs no re-upload.
+   * Upload a recording. Asks for async processing (`Prefer: respond-async`): the
+   * backend replies 202 with a `processing` appointment as soon as the audio is
+   * saved, and announces the finished notes on {@link eventStream}. A backend older
+   * than that ignores the header and replies with the finished appointment, or a 202
+   * with `notePending: true` (transcribed, note generation failed) — finish that
+   * with {@link completeAppointment}, which needs no re-upload.
    */
   async createAppointment(
     audio: AudioBody,
     mimeType: string,
-    options: RequestOptions = {},
+    options: UploadOptions = {},
   ): Promise<Appointment> {
+    const headers: Record<string, string> = { 'Content-Type': mimeType, Prefer: 'respond-async' };
+    if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
     const raw = await this.request('/api/appointments', {
       method: 'POST',
-      headers: { 'Content-Type': mimeType },
+      headers,
       body: audio,
       signal: options.signal,
     });
     return this.toAppointment(raw as RawAppointment);
+  }
+
+  /** Process a `failed` recording again from the audio the backend kept. */
+  async retryAppointment(id: string): Promise<Appointment> {
+    const raw = await this.request(`/api/appointments/${encodeURIComponent(id)}/retry`, {
+      method: 'POST',
+    });
+    return this.toAppointment(raw as RawAppointment);
+  }
+
+  /** The live stream of finished recordings (see services/events). */
+  eventStream(): EventStreamTarget {
+    return {
+      url: `${this.baseUrl}/api/events`,
+      headers: this.authHeaders({ Accept: 'text/event-stream' }),
+    };
   }
 
   /**
@@ -397,6 +435,7 @@ export class ApiClient {
       createdAt: raw.created_at,
       transcript: raw.transcript,
       notePending: raw.note_pending ?? false,
+      status: raw.status ?? (raw.note_pending ? 'note_pending' : 'complete'),
       exams: (raw.exams ?? []).map((e) => this.toAppointmentExam(e)),
     };
   }

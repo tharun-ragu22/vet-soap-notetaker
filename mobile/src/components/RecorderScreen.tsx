@@ -11,10 +11,15 @@ export interface RecorderScreenProps {
   audioService: AudioService;
   /**
    * Durably queue the finished recording and attempt it immediately. Resolves to the
-   * appointment if it uploaded right away, or null if it's still queued for background retry.
+   * appointment if it uploaded right away — finished (an older, synchronous backend)
+   * or still `processing` on the backend (async: the outcome is announced later) —
+   * or null if it's still queued for background retry.
    */
   enqueueRecording: (result: RecordingResult) => Promise<Appointment | null>;
-  /** Called once the backend has generated and stored the notes (one per animal). */
+  /**
+   * Called when the upload came back with the notes already generated (an older,
+   * synchronous backend). An async upload's notes are announced by the app's toast.
+   */
   onRecorded?: (appointment: Appointment) => void;
   /**
    * Holds the display awake while recording. Injectable for tests; defaults to the
@@ -29,6 +34,11 @@ export interface RecorderScreenProps {
 }
 
 type Phase = 'idle' | 'recording' | 'processing';
+
+/** `queued`: still on the phone, cleared once nothing is; `uploaded`: on the backend. */
+type Notice = { kind: 'queued' | 'uploaded'; text: string };
+
+const UPLOADED = "Uploaded — you'll see a notice here when the note is ready.";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -49,12 +59,12 @@ export function RecorderScreen({
 }: RecorderScreenProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
 
-  // The notice says a recording is waiting; once none is (it uploaded later, or the
-  // vet discarded it, even mid-upload before this Stop returned), clear it. Done
-  // during render, React's pattern for state that follows a prop.
-  if (notice !== null && !hasPendingUploads) setNotice(null);
+  // The queued notice says a recording is waiting; once none is (it uploaded later,
+  // or the vet discarded it, even mid-upload before this Stop returned), clear it.
+  // Done during render, React's pattern for state that follows a prop.
+  if (notice?.kind === 'queued' && !hasPendingUploads) setNotice(null);
 
   // Keep the display on only while actively recording (not idle, and not during the
   // brief upload — the durable queue survives a sleep/lock, so there's no reason to
@@ -92,11 +102,14 @@ export function RecorderScreen({
     }
     try {
       const appointment = await enqueueRecording(result);
-      if (appointment) {
+      if (appointment?.status === 'complete' || appointment?.status === 'note_pending') {
         onRecorded?.(appointment);
+      } else if (appointment) {
+        // The backend has it and is processing it; the toast says when it's done.
+        setNotice({ kind: 'uploaded', text: UPLOADED });
       } else {
         // Saved durably but not uploaded yet — the queue will keep retrying.
-        setNotice('Saved — uploading in the background.');
+        setNotice({ kind: 'queued', text: 'Saved — uploading in the background.' });
       }
     } catch (e) {
       // enqueue itself failed (couldn't even save the file to disk).
@@ -138,7 +151,7 @@ export function RecorderScreen({
         <Text style={styles.buttonText}>{label}</Text>
       </Pressable>
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+      {notice ? <Text style={styles.notice}>{notice.text}</Text> : null}
     </View>
   );
 }

@@ -56,6 +56,7 @@ const appointment = {
   createdAt: '2026-10-16T10:00:00Z',
   transcript: 'two dogs today',
   notePending: false,
+  status: 'complete',
   exams: [
     {
       id: 'exam-1',
@@ -99,6 +100,83 @@ describe('ApiClient appointments', () => {
       Authorization: 'Bearer secret',
     });
     expect(result).toEqual(appointment);
+  });
+
+  it('createAppointment asks for async processing and sends the recording key', async () => {
+    const { fetchFn, calls } = stubFetch(() => jsonResponse(rawAppointment));
+
+    await client(fetchFn).createAppointment(new Uint8Array([1]), 'audio/m4a', {
+      idempotencyKey: 'rec-uuid-1',
+    });
+
+    expect(calls[0].headers).toMatchObject({
+      Prefer: 'respond-async',
+      'Idempotency-Key': 'rec-uuid-1',
+    });
+  });
+
+  it('createAppointment sends no key when none is given', async () => {
+    const { fetchFn, calls } = stubFetch(() => jsonResponse(rawAppointment));
+
+    await client(fetchFn).createAppointment(new Uint8Array([1]), 'audio/m4a');
+
+    expect(calls[0].headers['Idempotency-Key']).toBeUndefined();
+  });
+
+  it('createAppointment maps a 202 processing reply', async () => {
+    const processing = {
+      ...rawAppointment,
+      transcript: '',
+      note_pending: true,
+      status: 'processing',
+      exams: [{ ...rawExam('exam-1', null, ''), note_pending: true }],
+    };
+    const { fetchFn } = stubFetch(() => jsonResponse(processing, 202));
+
+    const result = await client(fetchFn).createAppointment(new Uint8Array([1]), 'audio/m4a');
+
+    expect(result.status).toBe('processing');
+  });
+
+  it.each(['processing', 'note_pending', 'failed', 'no_speech', 'complete'] as const)(
+    'maps the backend status %s',
+    async (status) => {
+      const { fetchFn } = stubFetch(() => jsonResponse({ ...rawAppointment, status }));
+      expect((await client(fetchFn).getAppointment('appt-1')).status).toBe(status);
+    },
+  );
+
+  it('derives the status from note_pending for a backend that sends none', async () => {
+    const pending = { ...rawAppointment, note_pending: true };
+    const { fetchFn } = stubFetch((call) =>
+      jsonResponse(call.url.endsWith('appt-1') ? rawAppointment : pending),
+    );
+
+    expect((await client(fetchFn).getAppointment('appt-1')).status).toBe('complete');
+    expect((await client(fetchFn).getAppointment('appt-2')).status).toBe('note_pending');
+  });
+
+  it('retryAppointment POSTs to the retry route', async () => {
+    const { fetchFn, calls } = stubFetch(() =>
+      jsonResponse({ ...rawAppointment, status: 'processing' }, 202),
+    );
+
+    const result = await client(fetchFn).retryAppointment('appt/1');
+
+    expect(calls[0]).toMatchObject({
+      url: 'http://host:8000/api/appointments/appt%2F1/retry',
+      method: 'POST',
+    });
+    expect(result.status).toBe('processing');
+  });
+
+  it('eventStream points at /api/events with the bearer key', () => {
+    const { fetchFn } = stubFetch(() => jsonResponse({}));
+
+    expect(client(fetchFn).eventStream()).toEqual({
+      url: 'http://host:8000/api/events',
+      headers: { Authorization: 'Bearer secret', Accept: 'text/event-stream' },
+    });
   });
 
   it('createAppointment maps a 202 to a note-pending appointment', async () => {

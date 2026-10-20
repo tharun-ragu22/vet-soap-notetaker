@@ -1,3 +1,5 @@
+import { randomUUID } from 'expo-crypto';
+
 import { ApiClientError } from '../api/ApiClient';
 import type { Appointment } from '../api/types';
 import type {
@@ -31,7 +33,17 @@ export interface UploadQueueOptions {
   onChange?: (entries: QueueEntry[], activeId: string | null) => void;
   /** Fired with a fully-generated appointment once it lands (not for partial transitions). */
   onAppointmentReady?: (appointment: Appointment) => void;
+  /**
+   * Fired when the backend took the recording to process in the background (an
+   * async upload: `processing`, or a repeat that already `failed` / found
+   * `no_speech`). The audio is gone from the phone; the outcome comes later, on the
+   * backend's event stream.
+   */
+  onUploaded?: (appointment: Appointment) => void;
 }
+
+/** Statuses of an async upload the backend owns now (not the sync 202's note_pending). */
+const BACKEND_OWNED = new Set(['processing', 'failed', 'no_speech']);
 
 type Outcome = 'completed' | 'advanced' | 'transient_failure' | 'parked' | 'discarded';
 type StepResult = { outcome: Outcome; appointment?: Appointment };
@@ -75,16 +87,20 @@ export class UploadQueue {
   private readonly now: () => string;
   private readonly onChange?: (entries: QueueEntry[], activeId: string | null) => void;
   private readonly onAppointmentReady?: (appointment: Appointment) => void;
+  private readonly onUploaded?: (appointment: Appointment) => void;
 
   constructor(options: UploadQueueOptions) {
     this.store = options.store;
     this.files = options.files;
     this.uploader = options.uploader;
     this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-    this.idFactory = options.idFactory ?? (() => Math.random().toString(36).slice(2));
+    // The id doubles as the upload's Idempotency-Key, which the backend compares
+    // across every phone: a clash could hand back another recording's appointment.
+    this.idFactory = options.idFactory ?? randomUUID;
     this.now = options.now ?? (() => new Date().toISOString());
     this.onChange = options.onChange;
     this.onAppointmentReady = options.onAppointmentReady;
+    this.onUploaded = options.onUploaded;
   }
 
   /** Restore the queue from persisted metadata (call once on app start). */
@@ -294,7 +310,22 @@ export class UploadQueue {
 
   private async processAudio(entry: AudioEntry, signal: AbortSignal): Promise<StepResult> {
     const bytes = await this.files.read(entry.fileName);
-    const appointment = await this.uploader.createAppointment(bytes, entry.mimeType, { signal });
+    // The entry id identifies this recording on every attempt: if a reply is lost
+    // after the backend saved the upload, the retry gets that appointment back.
+    const appointment = await this.uploader.createAppointment(bytes, entry.mimeType, {
+      signal,
+      idempotencyKey: entry.id,
+    });
+
+    if (BACKEND_OWNED.has(appointment.status)) {
+      // Saved on the backend, which processes it from here: the phone's copy and
+      // queue entry are done with.
+      await this.safeDeleteFile(entry.fileName);
+      this.drop(entry.id);
+      await this.persist();
+      this.onUploaded?.(appointment);
+      return { outcome: 'completed', appointment };
+    }
 
     if (appointment.notePending) {
       // Transcription succeeded but note-gen didn't: the transcript is safe on

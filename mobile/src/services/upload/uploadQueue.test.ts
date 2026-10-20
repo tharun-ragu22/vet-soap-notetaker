@@ -1,3 +1,5 @@
+jest.mock('expo-crypto', () => ({ randomUUID: () => 'uuid-from-expo-crypto' }));
+
 import { ApiClientError } from '../api/ApiClient';
 import type { Appointment } from '../api/types';
 import { UploadQueue, type UploadQueueOptions } from './uploadQueue';
@@ -39,6 +41,7 @@ function appointment(overrides: Partial<Appointment> = {}): Appointment {
     createdAt: '2026-01-01T00:00:00Z',
     transcript: '',
     notePending: false,
+    status: overrides.notePending ? 'note_pending' : 'complete',
     exams: [],
     ...overrides,
   };
@@ -56,6 +59,7 @@ function makeQueue(opts: Partial<UploadQueueOptions> = {}) {
   const files = (opts.files as FakeFileStore) ?? new FakeFileStore();
   const uploader = (opts.uploader as ReturnType<typeof makeUploader>) ?? makeUploader();
   const onAppointmentReady = jest.fn();
+  const onUploaded = jest.fn();
   const onChange = jest.fn();
   let seq = 0;
   const queue = new UploadQueue({
@@ -65,10 +69,11 @@ function makeQueue(opts: Partial<UploadQueueOptions> = {}) {
     idFactory: () => `q${seq++}`,
     now: () => 'T',
     onAppointmentReady,
+    onUploaded,
     onChange,
     ...opts,
   });
-  return { queue, store, files, uploader, onAppointmentReady, onChange };
+  return { queue, store, files, uploader, onAppointmentReady, onUploaded, onChange };
 }
 
 /** Let the queue's async steps run until `mock` has been called. */
@@ -82,6 +87,77 @@ async function waitForCall(mock: jest.Mock): Promise<void> {
 const REC = { uri: 'file:///cache/rec.m4a', mimeType: 'audio/m4a', durationMillis: 3000 };
 
 describe('UploadQueue', () => {
+  describe('async uploads (the backend processes in the background)', () => {
+    it('sends the entry id as the idempotency key, the same on every attempt', async () => {
+      const { queue, uploader } = makeQueue();
+      uploader.createAppointment
+        .mockRejectedValueOnce(new ApiClientError('backend returned 503', 503))
+        .mockResolvedValueOnce(appointment({ status: 'processing', notePending: true }));
+
+      const entry = await queue.enqueue(REC);
+      await queue.processOnce();
+      await queue.processOnce();
+
+      const keys = uploader.createAppointment.mock.calls.map(([, , options]) => options.idempotencyKey);
+      expect(keys).toEqual([entry.id, entry.id]);
+    });
+
+    it.each(['processing', 'failed', 'no_speech'] as const)(
+      'a %s reply means the backend has it: the audio is deleted and the entry dropped',
+      async (status) => {
+        const { queue, files, uploader, onUploaded, onAppointmentReady } = makeQueue();
+        const reply = appointment({ id: 'srv-1', status, notePending: status === 'processing' });
+        uploader.createAppointment.mockResolvedValue(reply);
+
+        const entry = await queue.enqueue(REC);
+        const result = await queue.tryProcess(entry.id);
+
+        expect(result).toEqual(reply);
+        expect(queue.pending()).toEqual([]);
+        expect(files.deleted).toEqual([entry.fileName]);
+        expect(onUploaded).toHaveBeenCalledWith(reply);
+        expect(onAppointmentReady).not.toHaveBeenCalled();
+        expect(uploader.completeAppointment).not.toHaveBeenCalled();
+      },
+    );
+
+    it('a lost reply never duplicates the recording: the retry gets the same appointment', async () => {
+      // The fake backend saves the upload, then the connection drops before the
+      // reply arrives (app backgrounded, Wi-Fi blip) -- the original bug.
+      const saved = new Map<string, Appointment>();
+      let dropNextReply = true;
+      const uploader = makeUploader();
+      uploader.createAppointment.mockImplementation(async (_bytes, _mime, options) => {
+        const key = options.idempotencyKey;
+        if (!saved.has(key)) saved.set(key, appointment({ id: `appt-${saved.size + 1}`, status: 'processing', notePending: true }));
+        if (dropNextReply) {
+          dropNextReply = false;
+          throw new ApiClientError('request to /api/appointments failed: Network request failed');
+        }
+        return saved.get(key)!;
+      });
+      const { queue, onUploaded } = makeQueue({ uploader });
+
+      await queue.enqueue(REC);
+      await queue.processOnce(); // reply lost
+      await queue.processOnce(); // retried
+
+      expect(saved.size).toBe(1);
+      expect(queue.pending()).toEqual([]);
+      expect(onUploaded).toHaveBeenCalledTimes(1);
+      expect(onUploaded).toHaveBeenCalledWith(expect.objectContaining({ id: 'appt-1' }));
+    });
+
+    it('names new recordings with a random UUID by default', async () => {
+      const queue = new UploadQueue({
+        store: new FakeQueueStore(),
+        files: new FakeFileStore(),
+        uploader: makeUploader(),
+      });
+      expect((await queue.enqueue(REC)).id).toBe('uuid-from-expo-crypto');
+    });
+  });
+
   it('persists the recording to disk and metadata before any upload (persist-first)', async () => {
     const { queue, store, files } = makeQueue();
 

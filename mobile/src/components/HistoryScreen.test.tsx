@@ -29,6 +29,7 @@ function makeAppointment(
     createdAt: '2026-09-22T10:00:00Z',
     transcript: 'vet: hello',
     notePending: false,
+    status: overrides.notePending ? 'note_pending' : 'complete',
     exams: names.map((patientName, i) => makeExam({ id: `exam-${i + 1}`, patientName })),
     ...overrides,
   };
@@ -163,6 +164,19 @@ describe('HistoryScreen', () => {
     render(<HistoryScreen apiClient={makeApiClient(fetchAppointments)} />);
 
     await waitFor(() => expect(screen.getByText(/notes pending/i)).toBeTruthy());
+  });
+
+  it.each([
+    ['processing', 'Processing on the computer…'],
+    ['failed', "Couldn't transcribe — tap to retry"],
+    ['no_speech', 'No speech heard'],
+  ] as const)('says where a %s recording is up to', async (status, text) => {
+    const fetchAppointments = jest.fn(async () => [
+      makeAppointment({ status, notePending: status === 'processing' }, [undefined]),
+    ]);
+    render(<HistoryScreen apiClient={makeApiClient(fetchAppointments)} />);
+
+    await waitFor(() => expect(screen.getByText(text)).toBeTruthy());
   });
 });
 

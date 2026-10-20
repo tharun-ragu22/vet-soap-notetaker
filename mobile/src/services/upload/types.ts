@@ -67,11 +67,14 @@ export interface QueueUploader {
    * for the whole (long) upload timeout.
    */
   checkReachable?(): Promise<void>;
-  /** `signal` aborts when the vet discards this recording mid-upload. */
+  /**
+   * `signal` aborts when the vet discards this recording mid-upload;
+   * `idempotencyKey` is the entry id, the same on every attempt.
+   */
   createAppointment(
     audio: AudioBody,
     mimeType: string,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; idempotencyKey?: string },
   ): Promise<Appointment>;
   completeAppointment(appointmentId: string, options?: { signal?: AbortSignal }): Promise<Appointment>;
 }

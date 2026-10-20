@@ -18,6 +18,7 @@ export interface AppointmentScreenProps {
     | 'requestInjection'
     | 'completeAppointment'
     | 'getAppointment'
+    | 'retryAppointment'
   >;
   /** Called after the appointment is deleted from the backend (e.g. to navigate away). */
   onDeleted?: () => void;
@@ -42,6 +43,7 @@ type RegenStatus = 'idle' | 'regenerating' | 'done' | 'error';
 // Deleting is destructive and irreversible, so it takes a confirming second tap.
 type DeleteStatus = 'idle' | 'confirm' | 'deleting' | 'error';
 type GenerateStatus = 'idle' | 'generating' | 'error';
+type RetryStatus = 'idle' | 'retrying' | 'error';
 interface InjectState {
   index: number;
   status: 'sending' | 'sent' | 'error';
@@ -110,6 +112,8 @@ export function AppointmentScreen({
   const [deleteStatus, setDeleteStatus] = useState<DeleteStatus>('idle');
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [generateStatus, setGenerateStatus] = useState<GenerateStatus>('idle');
+  const [retryStatus, setRetryStatus] = useState<RetryStatus>('idle');
+  const [retryError, setRetryError] = useState<string | null>(null);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [inject, setInject] = useState<InjectState | null>(null);
   const [removeArmed, setRemoveArmed] = useState<string | null>(null);
@@ -126,6 +130,8 @@ export function AppointmentScreen({
 
   // Poll a pending appointment until its notes exist (the upload queue keeps
   // retrying in the background, and the desktop or another phone may finish it).
+  // (A processing async upload holds a note-pending placeholder too, so it's polled
+  // the same way while this screen is open.)
   const pending = saved.notePending;
   useEffect(() => {
     if (!pending || pendingPollMs <= 0) return;
@@ -259,6 +265,18 @@ export function AppointmentScreen({
     }
   };
 
+  const handleRetry = async () => {
+    setRetryStatus('retrying');
+    setRetryError(null);
+    try {
+      load(await apiClient.retryAppointment(saved.id));
+      setRetryStatus('idle');
+    } catch (e) {
+      setRetryError(messageOf(e));
+      setRetryStatus('error');
+    }
+  };
+
   const handleGenerate = async () => {
     setGenerateStatus('generating');
     setGenerateError(null);
@@ -290,6 +308,40 @@ export function AppointmentScreen({
       {deleteStatus === 'error' ? <Text style={styles.error}>Delete failed: {deleteError}</Text> : null}
     </>
   );
+
+  // An async upload with no transcript yet: nothing to show but where it's up to.
+  if (saved.status === 'processing' || saved.status === 'failed' || saved.status === 'no_speech') {
+    return (
+      <ScrollView contentContainerStyle={styles.container}>
+        {saved.status === 'processing' ? (
+          <Text style={styles.notice}>
+            Processing on the computer — the notes will appear here when they&apos;re ready.
+          </Text>
+        ) : saved.status === 'no_speech' ? (
+          <Text style={styles.notice}>
+            No speech was heard in this recording. Check the microphone wasn&apos;t covered or muted.
+          </Text>
+        ) : (
+          <>
+            <Text style={styles.notice}>
+              Couldn&apos;t transcribe this recording. The audio is saved on the computer, so it can be
+              tried again.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              style={[styles.button, styles.regen, retryStatus === 'retrying' && styles.busy]}
+              onPress={handleRetry}
+              disabled={retryStatus === 'retrying'}
+            >
+              <Text style={styles.buttonText}>{retryStatus === 'retrying' ? 'Retrying…' : 'Retry'}</Text>
+            </Pressable>
+            {retryStatus === 'error' ? <Text style={styles.error}>Retry failed: {retryError}</Text> : null}
+          </>
+        )}
+        {deleteButton}
+      </ScrollView>
+    );
+  }
 
   if (pending) {
     return (

@@ -63,6 +63,9 @@ function matchesPetName(appointment: Appointment, query: string): boolean {
 }
 
 function snippetOf(appointment: Appointment): string {
+  if (appointment.status === 'processing') return 'Processing on the computer…';
+  if (appointment.status === 'failed') return "Couldn't transcribe — tap to retry";
+  if (appointment.status === 'no_speech') return 'No speech heard';
   if (appointment.notePending) return "Notes pending — still generating";
   const first = appointment.exams[0];
   return first?.assessment || first?.subjective || "No note yet";

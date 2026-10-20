@@ -21,6 +21,10 @@ import type { Appointment } from './api/types';
 import { AudioService } from './audio/AudioService';
 import type { RecordingResult } from './audio/types';
 import { useExpoAudioRecorder } from './audio/useExpoAudioRecorder';
+import { AppointmentWatcher, readyNoteOf, type ReadyNote } from './events/appointmentWatcher';
+import { asyncWaitingStore } from './events/asyncWaitingStore';
+import { expoStreamFetch } from './events/expoStreamFetch';
+import { readEventStream } from './events/sse';
 import { asyncQueueStore } from './upload/asyncQueueStore';
 import { expoFileStore } from './upload/expoFileStore';
 import type { QueueEntry } from './upload/types';
@@ -51,6 +55,10 @@ export interface Services {
   retryUpload: (id: string) => Promise<Appointment | null>;
   /** The vet's Discard: deletes the recording from the phone. */
   discardUpload: (id: string) => Promise<void>;
+  /** Recordings that finished processing since the toast was last dismissed. */
+  readyNotes: ReadyNote[];
+  /** Hide the toast (it timed out, or the vet tapped it). */
+  dismissReady: () => void;
   /** The backend connection currently in effect (editable via the Settings screen). */
   settings: AppSettings;
   /** Persists new settings and rebuilds the ApiClient against them, no restart needed. */
@@ -76,6 +84,12 @@ export function ServicesProvider({
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [uploads, setUploads] = useState<QueueEntry[]>([]);
   const [activeUploadId, setActiveUploadId] = useState<string | null>(null);
+  const [readyNotes, setReadyNotes] = useState<ReadyNote[]>([]);
+
+  const announce = useCallback((note: ReadyNote) => {
+    setReadyNotes((current) => [...current.filter((n) => n.appointmentId !== note.appointmentId), note]);
+  }, []);
+  const dismissReady = useCallback(() => setReadyNotes([]), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,11 +116,39 @@ export function ServicesProvider({
     [settings],
   );
 
+  // Hears when uploaded recordings finish processing on the backend (its /api/events
+  // stream, open only while the app is in front and something is waiting) and
+  // announces them through the toast. Rebuilt with the backend connection; what it
+  // waits on is persisted.
+  const watcher = useMemo(() => {
+    if (!apiClient) return null;
+    return new AppointmentWatcher({
+      store: asyncWaitingStore,
+      getAppointment: (id) => apiClient.getAppointment(id),
+      openStream: (signal, onEvent) =>
+        readEventStream({ target: apiClient.eventStream(), fetch: expoStreamFetch, signal, onEvent }),
+      onReady: announce,
+    });
+  }, [apiClient, announce]);
+
+  useEffect(() => {
+    if (!watcher) return;
+    void watcher.load();
+    watcher.setActive(AppState.currentState === 'active');
+    const subscription = AppState.addEventListener('change', (state) => {
+      watcher.setActive(state === 'active');
+    });
+    return () => {
+      subscription.remove();
+      watcher.stop();
+    };
+  }, [watcher]);
+
   // One queue, rebuilt only when the backend connection changes (rare — a Settings
   // edit). Its state is persisted, so a rebuild reloads the pending entries from disk;
   // nothing is lost. Null until the first settings load resolves.
   const queue = useMemo(() => {
-    if (!apiClient) return null;
+    if (!apiClient || !watcher) return null;
     return new UploadQueue({
       store: asyncQueueStore,
       files: expoFileStore,
@@ -119,8 +161,16 @@ export function ServicesProvider({
         setUploads(entries);
         setActiveUploadId(activeId);
       },
+      // The backend has the recording: wait for its outcome (or announce it, if a
+      // repeat found it already failed).
+      onUploaded: (appointment) => {
+        if (appointment.status === 'processing') void watcher.wait(appointment.id);
+        else announce(readyNoteOf(appointment));
+      },
+      // An older, synchronous backend finished it during the upload itself.
+      onAppointmentReady: (appointment) => announce(readyNoteOf(appointment)),
     });
-  }, [apiClient]);
+  }, [apiClient, watcher, announce]);
 
   // Restore persisted entries, drain once, then retry on a timer and whenever the
   // app returns to the foreground (a common moment for connectivity to be back).
@@ -176,6 +226,8 @@ export function ServicesProvider({
       activeUploadId,
       retryUpload,
       discardUpload,
+      readyNotes,
+      dismissReady,
       settings,
       updateSettings,
     };
@@ -187,6 +239,8 @@ export function ServicesProvider({
     activeUploadId,
     retryUpload,
     discardUpload,
+    readyNotes,
+    dismissReady,
     settings,
     updateSettings,
   ]);

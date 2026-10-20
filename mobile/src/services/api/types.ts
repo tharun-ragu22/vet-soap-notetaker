@@ -39,6 +39,14 @@ export interface AppointmentExam extends SoapFields {
 }
 
 /**
+ * Where a recording is up to on the backend. An async upload starts `processing`;
+ * `failed` (transcription failed: Retry re-runs it from the saved audio) and
+ * `no_speech` are terminal; `note_pending` has a transcript but no notes yet
+ * (finish with completeAppointment); `complete` has its notes.
+ */
+export type AppointmentStatus = 'processing' | 'note_pending' | 'failed' | 'no_speech' | 'complete';
+
+/**
  * One recording: the transcript, shared by every animal seen, and one exam per
  * animal. While note generation is pending (a 202) it holds a single empty,
  * note-pending exam; finish it with ApiClient.completeAppointment().
@@ -48,6 +56,7 @@ export interface Appointment {
   createdAt: string;
   transcript: string;
   notePending: boolean;
+  status: AppointmentStatus;
   exams: AppointmentExam[];
 }
 
