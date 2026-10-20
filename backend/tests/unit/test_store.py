@@ -468,3 +468,179 @@ def test_json_file_store_loads_a_flat_list_of_exams_as_one_appointment_each(tmp_
     assert exam.transcript == "old transcript"
     assert exam.patient_name == "Rex"
     assert store.get_appointment(exam.appointment_id).exams == (exam,)
+
+
+# --- async (processing) appointments -------------------------------------------
+
+
+def test_create_processing_saves_a_processing_appointment_with_its_key():
+    store = _fixed_store()
+
+    appointment, created = store.create_processing("key-1", "sha-1", "audio/mp4")
+
+    assert created is True
+    assert appointment.stage == "processing"
+    assert appointment.recording_key == "key-1"
+    assert appointment.audio_sha256 == "sha-1"
+    assert appointment.audio_mime == "audio/mp4"
+    assert appointment.to_dict()["status"] == "processing"
+    assert store.get_appointment(appointment.id) == appointment
+
+
+def test_create_processing_with_a_known_key_returns_the_existing_appointment():
+    store = _fixed_store()
+    first, _ = store.create_processing("key-1", "sha-1", "audio/mp4")
+
+    again, created = store.create_processing("key-1", "sha-other", "audio/mp4")
+
+    assert created is False
+    assert again == first
+    assert len(store.list_appointments()) == 1
+
+
+def test_create_processing_without_a_key_always_creates():
+    store = _fixed_store()
+    store.create_processing(None, "sha-1", "audio/mp4")
+    store.create_processing(None, "sha-1", "audio/mp4")
+    assert len(store.list_appointments()) == 2
+
+
+def test_the_key_still_finds_the_appointment_once_processing_is_done():
+    store = _fixed_store()
+    appointment, _ = store.create_processing("key-1", "sha-1", "audio/mp4")
+    store.finish_processing(appointment.id, "two dogs", [BELLA, MAX])
+
+    again, created = store.create_processing("key-1", "sha-1", "audio/mp4")
+
+    assert created is False
+    assert again.id == appointment.id
+    assert again.to_dict()["status"] == "complete"
+
+
+def test_finish_processing_fills_in_the_transcript_and_one_exam_per_animal():
+    store = _fixed_store()
+    appointment, _ = store.create_processing("key-1", "sha-1", "audio/mp4")
+
+    done = store.finish_processing(appointment.id, "two dogs", [BELLA, MAX])
+
+    assert done.stage is None
+    assert done.transcript == "two dogs"
+    assert [e.patient_name for e in done.exams] == ["Bella", "Max"]
+    assert all(e.transcript == "two dogs" and not e.note_pending for e in done.exams)
+    assert done.to_dict()["status"] == "complete"
+
+
+def test_finish_processing_of_a_deleted_appointment_returns_none():
+    store = _fixed_store()
+    appointment, _ = store.create_processing("key-1", "sha-1", "audio/mp4")
+    store.delete_appointment(appointment.id)
+    assert store.finish_processing(appointment.id, "t", [BELLA]) is None
+    assert store.list_appointments() == []
+
+
+def test_mark_note_pending_keeps_the_transcript_for_a_later_note():
+    store = _fixed_store()
+    appointment, _ = store.create_processing("key-1", "sha-1", "audio/mp4")
+
+    pending = store.mark_note_pending(appointment.id, "two dogs")
+
+    assert pending.stage is None
+    assert pending.transcript == "two dogs"
+    assert pending.to_dict()["status"] == "note_pending"
+    # The existing /notes path finishes it.
+    store.complete_pending(pending.exams[0].id, [BELLA])
+    assert store.get_appointment(appointment.id).to_dict()["status"] == "complete"
+
+
+@pytest.mark.parametrize("stage", ["failed", "no_speech"])
+def test_mark_failed_sets_a_terminal_status(stage):
+    store = _fixed_store()
+    appointment, _ = store.create_processing("key-1", "sha-1", "audio/mp4")
+
+    failed = store.mark_failed(appointment.id, stage)
+
+    assert failed.stage == stage
+    assert failed.to_dict()["status"] == stage
+
+
+def test_restart_processing_puts_a_failed_appointment_back_to_processing():
+    store = _fixed_store()
+    appointment, _ = store.create_processing("key-1", "sha-1", "audio/mp4")
+    store.mark_failed(appointment.id, "failed")
+
+    again = store.restart_processing(appointment.id)
+
+    assert again.stage == "processing"
+    assert store.restart_processing("missing") is None
+
+
+def test_list_processing_returns_only_appointments_still_processing():
+    store = _fixed_store()
+    waiting, _ = store.create_processing("k1", "s1", "audio/mp4")
+    done, _ = store.create_processing("k2", "s2", "audio/mp4")
+    store.finish_processing(done.id, "t", [BELLA])
+    store.add_appointment("sync", [MAX])
+
+    assert [a.id for a in store.list_processing()] == [waiting.id]
+
+
+def test_desktop_list_hides_appointments_without_a_transcript_yet():
+    store = _fixed_store()
+    store.create_processing("k1", "s1", "audio/mp4")
+    failed, _ = store.create_processing("k2", "s2", "audio/mp4")
+    store.mark_failed(failed.id, "failed")
+    synced = store.add_appointment("sync", [MAX])
+
+    assert [e.id for e in store.list()] == [synced.exams[0].id]
+
+
+def test_existing_appointments_report_complete_or_note_pending():
+    store = _fixed_store()
+    assert store.add_appointment("t", [BELLA]).to_dict()["status"] == "complete"
+    assert store.add_pending_appointment("t").to_dict()["status"] == "note_pending"
+
+
+def test_json_file_store_round_trips_processing_fields(tmp_path):
+    path = tmp_path / "exams.json"
+    store = JsonFileExamStore(path)
+    processing, _ = store.create_processing("key-1", "sha-1", "audio/mp4")
+    failed, _ = store.create_processing("key-2", "sha-2", "audio/wav")
+    store.mark_failed(failed.id, "failed")
+
+    reopened = JsonFileExamStore(path)
+
+    assert reopened.list_appointments() == store.list_appointments()
+    assert [a.id for a in reopened.list_processing()] == [processing.id]
+    assert reopened.create_processing("key-2", "sha-2", "audio/wav") == (
+        reopened.get_appointment(failed.id),
+        False,
+    )
+
+
+def test_json_file_store_loads_appointments_saved_before_processing_existed(tmp_path):
+    path = tmp_path / "exams.json"
+    path.write_text(json.dumps({"appointments": [{
+        "id": "a1", "created_at": "2026-01-01T00:00:00Z", "transcript": "t",
+        "exams": [{"id": "e1", "created_at": "2026-01-01T00:00:00Z", "subjective": "s",
+                   "objective": "o", "assessment": "a", "plan": "p",
+                   "patient_name": None, "note_pending": False}],
+    }]}))
+
+    appointment = JsonFileExamStore(path).get_appointment("a1")
+
+    assert appointment.stage is None
+    assert appointment.recording_key is None
+    assert appointment.to_dict()["status"] == "complete"
+
+
+def test_a_note_written_by_hand_for_a_failed_recording_makes_it_a_normal_appointment():
+    store = _fixed_store()
+    appointment, _ = store.create_processing("k", "sha", "audio/mp4")
+    store.mark_failed(appointment.id, "failed")
+
+    updated = store.update_appointment(appointment.id, transcript="typed up", exams=[
+        ExamEdit("s", "o", "a", "p", patient_name="Bella", id=appointment.exams[0].id)
+    ])
+
+    assert updated.stage is None
+    assert updated.to_dict()["status"] == "complete"

@@ -1,11 +1,17 @@
+import asyncio
+import hashlib
+import json
 import logging
 import socket
+import tempfile
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.sse import KEEPALIVE_COMMENT, EventSourceResponse, format_sse_event
 from starlette.concurrency import run_in_threadpool
 
 from vet_soap_notetaker_backend.analytics import (
@@ -15,6 +21,8 @@ from vet_soap_notetaker_backend.analytics import (
     make_analytics,
 )
 from vet_soap_notetaker_backend.config import BackendConfig
+from vet_soap_notetaker_backend.events import EventHub
+from vet_soap_notetaker_backend.jobs import AppointmentWorker
 from vet_soap_notetaker_backend.injection_queue import InjectionQueue
 from vet_soap_notetaker_backend.llm.note_generation import get_note_generator
 from vet_soap_notetaker_backend.llm.note_generation.parsing import NoteParsingError
@@ -33,6 +41,8 @@ _NOTE_FIELDS = (*_SOAP_FIELDS, "transcript")
 # Client-supplied analytics headers longer than this are ignored rather than
 # forwarded to PostHog.
 _MAX_ANALYTICS_HEADER_LEN = 200
+# The phone sends its queue entry's UUID; anything longer isn't one.
+_MAX_IDEMPOTENCY_KEY_LEN = 128
 
 
 def _elapsed_ms(start: float) -> int:
@@ -72,6 +82,8 @@ def create_app(
     store: ExamStore | None = None,
     injection_queue: InjectionQueue | None = None,
     analytics: Analytics | None = None,
+    audio_dir: Path | str | None = None,
+    events_keepalive_seconds: float = 15.0,
 ) -> FastAPI:
     config = config or BackendConfig.from_env()
     pipeline = pipeline or SoapPipeline(
@@ -81,10 +93,20 @@ def create_app(
     store = store if store is not None else ExamStore()
     injection_queue = injection_queue if injection_queue is not None else InjectionQueue()
     analytics = analytics if analytics is not None else make_analytics(config)
+    # Where async uploads wait to be processed (main.py puts it next to the
+    # exams file, so it survives restarts); tests get a throwaway directory.
+    audio_dir = Path(audio_dir) if audio_dir is not None else Path(
+        tempfile.mkdtemp(prefix="vsn-incoming-")
+    )
+    events = EventHub()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Pick up uploads a restart interrupted, then process new ones.
+        worker.resume()
+        worker.start()
         yield
+        await worker.stop()
         # Flush whatever the client has batched before the process exits.
         analytics.shutdown()
 
@@ -172,6 +194,90 @@ def create_app(
         NoteParsingError,
         TranscriptionError,
     )
+
+    # Analytics attribution for async uploads, captured from the upload request
+    # (the worker has no request to read it from). In memory: after a restart a
+    # resumed job is attributed to the default id.
+    job_clients: dict[str, dict] = {}
+
+    def _job_outcome(appointment_id: str, outcome: str, info: dict) -> None:
+        client = job_clients.pop(appointment_id, {})
+        distinct_id = client.pop("distinct_id", default_user_id)
+        info = dict(info)
+        if "error" in info:
+            info["error_type"] = info.pop("error")
+        props = {
+            "source_app": client.pop("source_app", "unknown"),
+            "mode": "async",
+            "outcome": outcome,
+            "appointment_id": appointment_id,
+            "transcription_provider": config.transcription_provider,
+            "note_provider": config.note_provider,
+            **client,
+            **info,
+        }
+        analytics.capture("soap_generated", distinct_id, props)
+        logger.info(
+            "recording processed: mode=async outcome=%s %s",
+            outcome,
+            " ".join(f"{k}={v}" for k, v in info.items()),
+        )
+
+    worker = AppointmentWorker(
+        store=store,
+        hub=events,
+        audio_dir=audio_dir,
+        transcribe=_transcribe,
+        generate=_generate,
+        provider_errors=_PROVIDER_ERRORS,
+        on_outcome=_job_outcome,
+    )
+    app.state.worker = worker
+    app.state.events = events
+
+    def _wants_async(request: Request) -> bool:
+        prefer = request.headers.get("prefer", "")
+        return "respond-async" in (token.strip().lower() for token in prefer.split(","))
+
+    def _no_transcript_yet(appointment: Appointment) -> JSONResponse | None:
+        if appointment.stage is None:
+            return None
+        return JSONResponse({"error": "recording has no transcript yet"}, status_code=409)
+
+    async def _create_appointment_async(request: Request) -> JSONResponse:
+        """Save the upload and reply at once; AppointmentWorker does the rest.
+        A repeat with the same Idempotency-Key gets that appointment back --
+        whatever state it's in -- so a reply lost in transit never makes a
+        duplicate or pays for transcription twice."""
+        key = request.headers.get("idempotency-key", "").strip() or None
+        if key is not None and len(key) > _MAX_IDEMPOTENCY_KEY_LEN:
+            return JSONResponse({"error": "Idempotency-Key is too long"}, status_code=400)
+        audio_bytes = await request.body()
+        if not audio_bytes:
+            return JSONResponse({"error": "empty request body"}, status_code=400)
+        sha = await run_in_threadpool(lambda: hashlib.sha256(audio_bytes).hexdigest())
+        mime = transcription_mime(request.headers.get("content-type"))
+
+        appointment, created = store.create_processing(key, sha, mime)
+        if not created:
+            if appointment.audio_sha256 != sha:
+                return JSONResponse(
+                    {"error": "key already used for a different recording"}, status_code=409
+                )
+            logger.info("recording upload repeated: status=%s", appointment.status)
+            still_going = appointment.status in ("processing", "note_pending")
+            return JSONResponse(appointment.to_dict(), status_code=202 if still_going else 200)
+
+        await worker.save_audio(appointment, audio_bytes)
+        job_clients[appointment.id] = {
+            "distinct_id": _header(request, "x-posthog-distinct-id") or default_user_id,
+            "source_app": _header(request, "x-vsn-client") or "unknown",
+            "audio_bytes": len(audio_bytes),
+            "audio_duration_ms": _audio_duration_ms(request),
+            "audio_mime": mime,
+        }
+        worker.submit(appointment.id)
+        return JSONResponse(appointment.to_dict(), status_code=202)
 
     def _log_recording(outcome: str, started: float, timing: dict, **extra) -> None:
         # One line per recording so a slow step shows in the console without
@@ -391,6 +497,8 @@ def create_app(
         unauthorized = _unauthorized(request)
         if unauthorized is not None:
             return unauthorized
+        if _wants_async(request):
+            return await _create_appointment_async(request)
         created = await _create_appointment(request)
         if isinstance(created, JSONResponse):
             return created
@@ -436,6 +544,9 @@ def create_app(
         appointment = store.get_appointment(appointment_id)
         if appointment is None:
             return JSONResponse({"error": "appointment not found"}, status_code=404)
+        refused = _no_transcript_yet(appointment)
+        if refused is not None:
+            return refused
         pending = next((exam for exam in appointment.exams if exam.note_pending), None)
         if pending is None:
             _track(
@@ -453,6 +564,49 @@ def create_app(
         if appointment is None:
             return JSONResponse({"error": "appointment not found"}, status_code=404)
         return JSONResponse(appointment.to_dict())
+
+    @app.post("/api/appointments/{appointment_id}/retry")
+    async def retry_appointment(appointment_id: str, request: Request):
+        # Process a failed async upload again from its saved audio.
+        unauthorized = _unauthorized(request)
+        if unauthorized is not None:
+            return unauthorized
+        appointment = store.get_appointment(appointment_id)
+        if appointment is None:
+            return JSONResponse({"error": "appointment not found"}, status_code=404)
+        if appointment.stage != "failed":
+            return JSONResponse(
+                {"error": "only a failed recording can be retried"}, status_code=409
+            )
+        restarted = store.restart_processing(appointment_id)
+        if restarted is None:
+            return JSONResponse({"error": "appointment not found"}, status_code=404)
+        worker.submit(appointment_id)
+        return JSONResponse(restarted.to_dict(), status_code=202)
+
+    @app.get("/api/events")
+    async def appointment_events(request: Request):
+        # The phone keeps this open while it's waiting on async uploads: one
+        # "appointment" event per recording that finishes processing. It starts
+        # with "ready" once subscribed, so the phone re-reads what it's waiting
+        # on only then and can't miss an event in between. Keepalive comments
+        # let both ends notice a dead connection.
+        unauthorized = _unauthorized(request)
+        if unauthorized is not None:
+            return unauthorized
+
+        async def stream():
+            async with events.subscribe() as queue:
+                yield format_sse_event(event="ready", data_str="{}")
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), events_keepalive_seconds)
+                    except asyncio.TimeoutError:
+                        yield KEEPALIVE_COMMENT
+                        continue
+                    yield format_sse_event(event="appointment", data_str=json.dumps(event))
+
+        return EventSourceResponse(stream(), headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/appointments")
     async def list_appointments(request: Request):
@@ -489,6 +643,9 @@ def create_app(
             return JSONResponse({"error": edits}, status_code=400)
 
         before = store.get_appointment(appointment_id)
+        if before is not None and before.stage == "processing":
+            # The worker is about to replace the placeholder with the real notes.
+            return JSONResponse({"error": "recording still processing"}, status_code=409)
         try:
             after = store.update_appointment(
                 appointment_id, transcript=body["transcript"], exams=edits
@@ -579,6 +736,10 @@ def create_app(
         exam = store.get(exam_id)
         if exam is None:
             return JSONResponse({"error": "exam not found"}, status_code=404)
+        owner = store.get_appointment(exam.appointment_id)
+        refused = _no_transcript_yet(owner) if owner is not None else None
+        if refused is not None:
+            return refused
         # Idempotent: clients retry this from offline queues, possibly long
         # after the vet filled the note in by hand. An exam that's no longer
         # pending is returned as-is -- never regenerated over the vet's edits.

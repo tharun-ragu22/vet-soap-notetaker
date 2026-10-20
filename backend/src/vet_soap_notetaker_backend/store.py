@@ -69,10 +69,26 @@ class Appointment:
     created_at: str
     transcript: str
     exams: tuple[Exam, ...]
+    # Uploaded with ``Prefer: respond-async``: the audio is processed in the
+    # background (jobs.py). "processing" until then; "failed" (transcription
+    # failed, audio kept for a retry) and "no_speech" are terminal. None once it
+    # has a transcript -- the usual note_pending / complete appointment.
+    stage: str | None = None
+    # The client's Idempotency-Key and the uploaded audio's hash: a repeat of
+    # the same upload gets this appointment back instead of a duplicate.
+    recording_key: str | None = None
+    audio_sha256: str | None = None
+    audio_mime: str | None = None
 
     @property
     def note_pending(self) -> bool:
         return any(exam.note_pending for exam in self.exams)
+
+    @property
+    def status(self) -> str:
+        if self.stage is not None:
+            return self.stage
+        return "note_pending" if self.note_pending else "complete"
 
     def to_dict(self) -> dict:
         return {
@@ -80,6 +96,7 @@ class Appointment:
             "created_at": self.created_at,
             "transcript": self.transcript,
             "note_pending": self.note_pending,
+            "status": self.status,
             "exams": [exam.to_dict(include_transcript=False) for exam in self.exams],
         }
 
@@ -138,6 +155,86 @@ class ExamStore:
         with self._lock:
             return self._appointments.get(appointment_id)
 
+    # --- background processing (Prefer: respond-async) -------------------------
+
+    def create_processing(
+        self, recording_key: str | None, audio_sha256: str, audio_mime: str
+    ) -> tuple[Appointment, bool]:
+        """A new appointment whose audio is still to be processed, or -- for a
+        ``recording_key`` seen before -- that earlier appointment, whatever state
+        it's in now. Returns ``(appointment, created)``. Find and create happen
+        under one lock hold, so two uploads of one recording make one appointment."""
+        with self._lock:
+            if recording_key is not None:
+                for existing in self._appointments.values():
+                    if existing.recording_key == recording_key:
+                        return existing, False
+            appointment = replace(
+                self._create_locked("", [_EMPTY_NOTE], note_pending=True),
+                stage="processing",
+                recording_key=recording_key,
+                audio_sha256=audio_sha256,
+                audio_mime=audio_mime,
+            )
+            self._appointments[appointment.id] = appointment
+            self._persist()
+            return appointment, True
+
+    def list_processing(self) -> list[Appointment]:
+        """Appointments whose audio is still to be processed, oldest first."""
+        with self._lock:
+            return [a for a in self._appointments.values() if a.stage == "processing"]
+
+    def finish_processing(
+        self, appointment_id: str, transcript: str, notes: list[SoapNote]
+    ) -> Appointment | None:
+        """Replace the placeholder with the transcript and one exam per animal.
+        None if the appointment was deleted meanwhile."""
+        with self._lock:
+            existing = self._appointments.get(appointment_id)
+            if existing is None:
+                return None
+            exams = tuple(
+                self._new_exam(existing.id, transcript, existing.created_at, _note_fields(n))
+                for n in notes
+            )
+            appointment = replace(existing, transcript=transcript, exams=exams, stage=None)
+            self._appointments[appointment_id] = appointment
+            self._persist()
+            return appointment
+
+    def mark_note_pending(self, appointment_id: str, transcript: str) -> Appointment | None:
+        """Transcribed, but note generation failed: keep the transcript, leaving
+        the pending placeholder for /notes to fill in."""
+        with self._lock:
+            existing = self._appointments.get(appointment_id)
+            if existing is None:
+                return None
+            appointment = replace(
+                self._with_transcript(existing, transcript), stage=None
+            )
+            self._appointments[appointment_id] = appointment
+            self._persist()
+            return appointment
+
+    def mark_failed(self, appointment_id: str, stage: str) -> Appointment | None:
+        """A terminal processing outcome: "failed" or "no_speech"."""
+        return self._set_stage(appointment_id, stage)
+
+    def restart_processing(self, appointment_id: str) -> Appointment | None:
+        """Queue a failed appointment's audio to be processed again."""
+        return self._set_stage(appointment_id, "processing")
+
+    def _set_stage(self, appointment_id: str, stage: str) -> Appointment | None:
+        with self._lock:
+            existing = self._appointments.get(appointment_id)
+            if existing is None:
+                return None
+            appointment = replace(existing, stage=stage)
+            self._appointments[appointment_id] = appointment
+            self._persist()
+            return appointment
+
     def list_appointments(self) -> list[Appointment]:
         # Newest first.
         with self._lock:
@@ -177,7 +274,11 @@ class ExamStore:
                     updated.append(self._new_exam(existing.id, transcript, self._clock(), fields))
                 else:
                     updated.append(replace(current[edit.id], transcript=transcript, **fields))
-            appointment = replace(existing, transcript=transcript, exams=tuple(updated))
+            # A note written by hand for a failed recording makes it a normal
+            # appointment.
+            appointment = replace(
+                existing, transcript=transcript, exams=tuple(updated), stage=None
+            )
             self._appointments[appointment_id] = appointment
             self._persist()
             return appointment
@@ -211,11 +312,14 @@ class ExamStore:
             return found[0].exams[found[1]] if found else None
 
     def list(self) -> list[Exam]:
-        """Every exam: newest appointment first, its animals in recorded order."""
+        """Every exam: newest appointment first, its animals in recorded order.
+        Appointments with no transcript yet (still processing, or failed) are
+        left out: the desktop has nothing to show or regenerate for them."""
         with self._lock:
             return [
                 exam
                 for appointment in reversed(self._appointments.values())
+                if appointment.stage is None
                 for exam in appointment.exams
             ]
 
@@ -404,6 +508,7 @@ class JsonFileExamStore(ExamStore):
                 created_at=item["created_at"],
                 transcript=item["transcript"],
                 exams=exams,
+                **{field: item.get(field) for field in _PROCESSING_FIELDS},
             )
             self._appointments[appointment.id] = appointment
 
@@ -416,6 +521,12 @@ class JsonFileExamStore(ExamStore):
                     "created_at": appointment.created_at,
                     "transcript": appointment.transcript,
                     "exams": [_stored_exam(exam) for exam in appointment.exams],
+                    # Only when set, so a synchronous appointment's record is unchanged.
+                    **{
+                        field: getattr(appointment, field)
+                        for field in _PROCESSING_FIELDS
+                        if getattr(appointment, field) is not None
+                    },
                 }
                 for appointment in self._appointments.values()
             ]
@@ -423,6 +534,9 @@ class JsonFileExamStore(ExamStore):
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2))
         tmp.replace(self._path)
+
+
+_PROCESSING_FIELDS = ("stage", "recording_key", "audio_sha256", "audio_mime")
 
 
 def _stored_exam(exam: Exam) -> dict:

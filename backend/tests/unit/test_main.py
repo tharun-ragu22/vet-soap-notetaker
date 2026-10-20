@@ -30,3 +30,10 @@ def test_run_shows_the_backends_info_logs(monkeypatch):
 
     assert package_logger.getEffectiveLevel() == logging.INFO
     assert package_logger.handlers
+
+
+def test_async_uploads_wait_next_to_the_exams_file():
+    from vet_soap_notetaker_backend import main
+
+    assert main._INCOMING_AUDIO_DIR == main._EXAMS_PATH.parent / "incoming"
+    assert main.app.state.worker.audio_dir == main._INCOMING_AUDIO_DIR

@@ -119,3 +119,28 @@ async def test_other_requests_are_served_while_a_provider_call_is_in_flight(
             response = await slow
 
     assert response.status_code == 200
+
+
+def test_requests_are_served_while_the_worker_processes_an_async_upload(make_config, tmp_path):
+    # The worker runs on the event loop too; its provider calls must not stall it.
+    pipeline = BlockingPipeline("transcribe")
+    app = create_app(
+        config=make_config(), pipeline=pipeline, store=ExamStore(), audio_dir=tmp_path
+    )
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        upload = client.post(
+            "/api/appointments", content=b"m4a", headers={"Prefer": "respond-async"}
+        )
+        try:
+            assert upload.status_code == 202
+            assert pipeline.entered.wait(5)
+            assert client.get("/api/history").status_code == 200
+            assert client.get(f"/api/appointments/{upload.json()['id']}").json()["status"] == (
+                "processing"
+            )
+            assert pipeline.finished is False
+        finally:
+            pipeline.release.set()
+            client.portal.call(app.state.worker.drain)

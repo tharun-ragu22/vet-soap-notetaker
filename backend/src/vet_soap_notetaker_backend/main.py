@@ -16,7 +16,11 @@ _EXAMS_PATH = Path(
     os.environ.get("VETSCRIBE_EXAMS_PATH", Path.home() / ".vetscribe" / "exams.json")
 )
 
-app = create_app(store=JsonFileExamStore(_EXAMS_PATH))
+# Uploads sent with Prefer: respond-async wait here until processed, so a
+# restart resumes them instead of losing the recording.
+_INCOMING_AUDIO_DIR = _EXAMS_PATH.parent / "incoming"
+
+app = create_app(store=JsonFileExamStore(_EXAMS_PATH), audio_dir=_INCOMING_AUDIO_DIR)
 
 
 def _frozen_log_path(env=os.environ) -> Path:

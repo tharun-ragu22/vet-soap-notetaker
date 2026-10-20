@@ -499,6 +499,45 @@ def test_no_appointment_event_ever_carries_patient_data(setup):
     assert SENTINEL not in json.dumps(tracker.events)
 
 
+def test_async_upload_reports_soap_generated_from_the_worker(setup):
+    named = _note("x", patient_name="Bella")
+    client, tracker, _ = setup(pipeline=FakePipeline(notes=[named, named], transcript="two dogs"))
+    with client:
+        appointment = client.post(
+            "/api/appointments",
+            content=b"m4a",
+            headers={**CLIENT_HEADERS, "Prefer": "respond-async", "X-Audio-Duration-Ms": "4000"},
+        ).json()
+        client.portal.call(client.app.state.worker.drain)
+
+    [event] = [e for e in tracker.events if e["event"] == "soap_generated"]
+    assert event["distinct_id"] == "demo-vet-1"
+    props = event["properties"]
+    assert props["mode"] == "async"
+    assert props["outcome"] == "complete"
+    assert props["appointment_id"] == appointment["id"]
+    assert props["patient_count"] == 2
+    assert props["source_app"] == "mobile"
+    assert props["audio_duration_ms"] == 4000
+    assert {"transcribe_ms", "note_gen_ms"} <= props.keys()
+
+
+def test_no_async_upload_event_ever_carries_patient_data(setup):
+    named = _note(SENTINEL, patient_name=SENTINEL)
+    pipeline = FakePipeline(notes=[named], transcript=f"{SENTINEL} vomiting")
+    client, tracker, _ = setup(pipeline=pipeline)
+    headers = {**CLIENT_HEADERS, "Prefer": "respond-async"}
+    with client:
+        client.post("/api/appointments", content=SENTINEL.encode(), headers=headers)
+        client.portal.call(client.app.state.worker.drain)
+        pipeline.note_error = NoteParsingError(f"model did not return valid JSON: {SENTINEL}")
+        client.post("/api/appointments", content=b"other", headers=headers)
+        client.portal.call(client.app.state.worker.drain)
+
+    assert len([e for e in tracker.events if e["event"] == "soap_generated"]) == 2
+    assert SENTINEL not in json.dumps(tracker.events)
+
+
 def test_create_app_without_analytics_still_serves_requests(make_config):
     # No analytics passed and no key configured -> the no-op tracker.
     client = TestClient(
