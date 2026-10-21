@@ -125,6 +125,66 @@ describe('RecorderScreen', () => {
     await waitFor(() => expect(screen.queryByText(/^Uploaded/)).toBeNull());
   });
 
+  describe('the uploaded notice clears once the vet has seen the note', () => {
+    const processing: Appointment = { ...appointment, status: 'processing', notePending: true };
+    const UPLOADED_TEXT = "Uploaded — you'll see a notice here when the note is ready.";
+    const view = (
+      audioService: AudioService,
+      seen: ReadonlySet<string>,
+      enqueueRecording: (r: RecordingResult) => Promise<Appointment | null> = async () => processing,
+    ) => (
+      <RecorderScreen
+        audioService={audioService}
+        enqueueRecording={enqueueRecording}
+        hasPendingUploads={false}
+        seenAppointmentIds={seen}
+      />
+    );
+
+    async function recordAndStop() {
+      fireEvent.press(screen.getByText(/start/i));
+      await waitFor(() => expect(screen.getByText(/stop/i)).toBeTruthy());
+      fireEvent.press(screen.getByText(/stop/i));
+      await waitFor(() => expect(screen.getByText(/start/i)).toBeTruthy());
+    }
+
+    it('goes away when its note is seen (toast tapped, or Notes opened)', async () => {
+      const audioService = new AudioService(makeRecorder());
+      const { rerender } = render(view(audioService, new Set()));
+
+      await recordAndStop();
+      expect(screen.getByText(UPLOADED_TEXT)).toBeTruthy();
+
+      rerender(view(audioService, new Set(['appt-9'])));
+      expect(screen.queryByText(UPLOADED_TEXT)).toBeNull();
+    });
+
+    it('stays while only other notes have been seen', async () => {
+      const audioService = new AudioService(makeRecorder());
+      const { rerender } = render(view(audioService, new Set()));
+
+      await recordAndStop();
+      rerender(view(audioService, new Set(['someone-else'])));
+      expect(screen.getByText(UPLOADED_TEXT)).toBeTruthy();
+    });
+
+    it('a note seen before this upload does not hide a later queued notice', async () => {
+      const audioService = new AudioService(makeRecorder());
+      const queued = jest.fn(async () => null);
+      render(
+        <RecorderScreen
+          audioService={audioService}
+          enqueueRecording={queued}
+          hasPendingUploads
+          seenAppointmentIds={new Set(['appt-9'])}
+        />,
+      );
+
+      await recordAndStop();
+      expect(screen.getByText(/uploading in the background/i)).toBeTruthy();
+    });
+  });
+
   describe('the background-upload notice follows the queue', () => {
     const view = (audioService: AudioService, hasPendingUploads: boolean) => (
       <RecorderScreen

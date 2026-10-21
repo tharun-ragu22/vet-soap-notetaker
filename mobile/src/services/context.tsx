@@ -59,10 +59,21 @@ export interface Services {
   readyNotes: ReadyNote[];
   /** Hide the toast (it timed out, or the vet tapped it). */
   dismissReady: () => void;
+  /** Every recording announced as finished this session (kept after the toast hides). */
+  finishedNotes: ReadonlySet<string>;
+  /** Finished recordings the vet has since looked at (Notes, or the appointment itself). */
+  seenNotes: ReadonlySet<string>;
+  markNotesSeen: (appointmentIds: string[]) => void;
   /** The backend connection currently in effect (editable via the Settings screen). */
   settings: AppSettings;
   /** Persists new settings and rebuilds the ApiClient against them, no restart needed. */
   updateSettings: (next: AppSettings) => Promise<void>;
+}
+
+/** `set` plus `ids`, or `set` itself when it already has them all (no re-render). */
+function withAll(set: ReadonlySet<string>, ids: string[]): ReadonlySet<string> {
+  if (ids.every((id) => set.has(id))) return set;
+  return new Set([...set, ...ids]);
 }
 
 const ServicesContext = createContext<Services | null>(null);
@@ -85,11 +96,17 @@ export function ServicesProvider({
   const [uploads, setUploads] = useState<QueueEntry[]>([]);
   const [activeUploadId, setActiveUploadId] = useState<string | null>(null);
   const [readyNotes, setReadyNotes] = useState<ReadyNote[]>([]);
+  const [finishedNotes, setFinishedNotes] = useState<ReadonlySet<string>>(() => new Set());
+  const [seenNotes, setSeenNotes] = useState<ReadonlySet<string>>(() => new Set());
 
   const announce = useCallback((note: ReadyNote) => {
     setReadyNotes((current) => [...current.filter((n) => n.appointmentId !== note.appointmentId), note]);
+    setFinishedNotes((current) => withAll(current, [note.appointmentId]));
   }, []);
   const dismissReady = useCallback(() => setReadyNotes([]), []);
+  const markNotesSeen = useCallback((ids: string[]) => {
+    setSeenNotes((current) => withAll(current, ids));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -228,6 +245,9 @@ export function ServicesProvider({
       discardUpload,
       readyNotes,
       dismissReady,
+      finishedNotes,
+      seenNotes,
+      markNotesSeen,
       settings,
       updateSettings,
     };
@@ -241,6 +261,9 @@ export function ServicesProvider({
     discardUpload,
     readyNotes,
     dismissReady,
+    finishedNotes,
+    seenNotes,
+    markNotesSeen,
     settings,
     updateSettings,
   ]);

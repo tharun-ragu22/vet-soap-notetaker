@@ -31,12 +31,22 @@ export interface RecorderScreenProps {
    * background" notice only shows while one is. Defaults to true.
    */
   hasPendingUploads?: boolean;
+  /**
+   * Finished notes the vet has since seen (tapped the toast, or opened Notes): the
+   * "Uploaded" notice for one of them is done and goes away.
+   */
+  seenAppointmentIds?: ReadonlySet<string>;
 }
 
 type Phase = 'idle' | 'recording' | 'processing';
 
-/** `queued`: still on the phone, cleared once nothing is; `uploaded`: on the backend. */
-type Notice = { kind: 'queued' | 'uploaded'; text: string };
+/**
+ * `queued`: still on the phone, cleared once nothing is; `uploaded`: on the backend,
+ * cleared once the vet has seen its note.
+ */
+type Notice = { kind: 'queued'; text: string } | { kind: 'uploaded'; text: string; appointmentId: string };
+
+const NONE_SEEN: ReadonlySet<string> = new Set();
 
 const UPLOADED = "Uploaded — you'll see a notice here when the note is ready.";
 
@@ -56,6 +66,7 @@ export function RecorderScreen({
   onRecorded,
   keepAwake = expoKeepAwake,
   hasPendingUploads = true,
+  seenAppointmentIds = NONE_SEEN,
 }: RecorderScreenProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +76,7 @@ export function RecorderScreen({
   // or the vet discarded it, even mid-upload before this Stop returned), clear it.
   // Done during render, React's pattern for state that follows a prop.
   if (notice?.kind === 'queued' && !hasPendingUploads) setNotice(null);
+  if (notice?.kind === 'uploaded' && seenAppointmentIds.has(notice.appointmentId)) setNotice(null);
 
   // Keep the display on only while actively recording (not idle, and not during the
   // brief upload — the durable queue survives a sleep/lock, so there's no reason to
@@ -106,7 +118,7 @@ export function RecorderScreen({
         onRecorded?.(appointment);
       } else if (appointment) {
         // The backend has it and is processing it; the toast says when it's done.
-        setNotice({ kind: 'uploaded', text: UPLOADED });
+        setNotice({ kind: 'uploaded', text: UPLOADED, appointmentId: appointment.id });
       } else {
         // Saved durably but not uploaded yet — the queue will keep retrying.
         setNotice({ kind: 'queued', text: 'Saved — uploading in the background.' });

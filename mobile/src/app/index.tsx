@@ -8,7 +8,7 @@ import { uploadBanner } from '../services/upload/uploadBanner';
 
 /** Home route: one-tap exam capture, with Notes, Outbox and Settings in the ☰ menu. */
 export default function RecorderRoute() {
-  const { audioService, enqueueRecording, uploads, settings } = useServices();
+  const { audioService, enqueueRecording, uploads, settings, seenNotes } = useServices();
   const banner = uploadBanner(uploads);
 
   return (
@@ -25,6 +25,7 @@ export default function RecorderRoute() {
         audioService={audioService}
         enqueueRecording={enqueueRecording}
         hasPendingUploads={uploads.length > 0}
+        seenAppointmentIds={seenNotes}
         onRecorded={(appointment) => router.push(`/appointment/${appointment.id}`)}
       />
       {/* Floated at the top as an overlay so it never shifts the recorder, which
