@@ -18,7 +18,8 @@
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         }
-      }
+      },
+      "buildNumber": "5"
     },
     "android": {
       "package": "com.vetsoapnotetaker.mobile",
