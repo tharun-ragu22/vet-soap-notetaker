@@ -11,6 +11,10 @@ HISTORY_WINDOW_TITLE = "Vet Soap Notetaker History"
 SETTINGS_WINDOW_TITLE = "Vet Soap Notetaker Settings"
 CALIBRATION_TITLE = "Calibrate AVImark Boxes"
 
+# Splash shown while the History window loads (launch, icon click, tray click)
+SPLASH_TITLE = "Vet Soap Notetaker"
+SPLASH_LOADING_MESSAGE = "Opening History…"
+
 # Human-readable name per SOAP section, for the calibration prompt.
 _SECTION_LABELS = {
     "subjective": "Subjective",

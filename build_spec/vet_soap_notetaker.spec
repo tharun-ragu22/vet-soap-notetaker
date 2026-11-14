@@ -18,13 +18,15 @@ assets_dir = src_dir / "vet_soap_notetaker" / "assets"
 block_cipher = None
 
 a = Analysis(
-    [str(src_dir / "vet_soap_notetaker" / "main.py")],
+    # launcher.py, not main.py: it shows the splash before main's heavy imports.
+    [str(src_dir / "vet_soap_notetaker" / "launcher.py")],
     pathex=[str(src_dir)],
     binaries=[],
     # Ship the logo so Tk can set window icons at runtime; it lands under
     # sys._MEIPASS/vet_soap_notetaker/assets/ (see paths.get_asset_path).
     datas=[(str(assets_dir), "vet_soap_notetaker/assets")],
-    hiddenimports=[],
+    # launcher imports main lazily (inside run()), so name it explicitly.
+    hiddenimports=["vet_soap_notetaker.main"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

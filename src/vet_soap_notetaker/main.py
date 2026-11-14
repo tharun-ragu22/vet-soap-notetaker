@@ -9,11 +9,7 @@ from pathlib import Path
 import pyperclip
 
 from vet_soap_notetaker import autostart, dpi
-from vet_soap_notetaker.activation import (
-    ACTIVATION_FILE_NAME,
-    ActivationWatcher,
-    request_activation,
-)
+from vet_soap_notetaker.activation import ACTIVATION_FILE_NAME, ActivationWatcher
 from vet_soap_notetaker.analytics import DesktopAnalytics, NullAnalytics, injection_properties
 from vet_soap_notetaker.api_client import ApiClient, SoapNote
 from vet_soap_notetaker.audio_recorder import AudioRecorder
@@ -31,12 +27,11 @@ from vet_soap_notetaker.backend_supervisor import (
     find_bundled_backend,
 )
 from vet_soap_notetaker.injection_poller import InjectionPoller
-from vet_soap_notetaker.logger import build_logger
+from vet_soap_notetaker.loading_ui import LoadingWindow
 from vet_soap_notetaker.offline_queue import OfflineQueue
 from vet_soap_notetaker.paths import get_appdata_base_dir
 from vet_soap_notetaker.pipeline import Pipeline, format_soap_text
 from vet_soap_notetaker.settings_ui import SettingsWindow
-from vet_soap_notetaker.single_instance import SingleInstance
 from vet_soap_notetaker import ui_strings
 from vet_soap_notetaker.tray_app import TrayApp
 from vet_soap_notetaker.window_icon import apply_window_icon
@@ -314,15 +309,35 @@ def build_app(config=None, tk_root=None, analytics=None):
     # The open History window, if any: opening it again (tray click, desktop
     # icon) raises that window rather than stacking a second one.
     history_window = {"value": None}
+    # The splash of an open still under way: its update() can run queued Tk
+    # callbacks (a second-launch request, a tray click) that open History again.
+    history_loading = {"value": None}
 
-    def open_history(opened_from="tray"):
+    def open_history(opened_from="tray", loading=None):
         analytics.capture("history_opened", {"opened_from": opened_from})
         window = history_window["value"]
         if window is not None and window.winfo_exists():
+            if loading is not None:
+                loading.close()
             window.deiconify()
             window.lift()
             window.focus_force()
             return
+        if history_loading["value"] is not None:
+            history_loading["value"].lift()
+            return
+        # The splash covers the blocking backend history fetch in HistoryWindow.
+        if loading is None:
+            loading = LoadingWindow(tk_root)
+        history_loading["value"] = loading
+        try:
+            loading.show()
+            _build_history_window()
+        finally:
+            history_loading["value"] = None
+            loading.close()
+
+    def _build_history_window():
         history_window["value"] = show_history(
             tk_root,
             injector,
@@ -667,46 +682,41 @@ def build_app(config=None, tk_root=None, analytics=None):
     return tray_app, hotkey_listener, tk_root
 
 
-def run(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
-    # Login autostart passes the flag and stays quiet in the tray; a launch from
-    # the desktop icon or Start menu opens History.
-    autostarted = autostart.AUTOSTART_FLAG in argv
-    build_logger()
-    activation_path = get_appdata_base_dir() / ACTIVATION_FILE_NAME
-    # Single-instance guard: if another copy is already running (autostart put one
-    # up at login and the vet then double-clicked the icon), bow out rather than
-    # start a second backend supervisor that would crash-loop fighting for the
-    # backend port. The lock is released by the OS when this process exits.
-    instance_lock = SingleInstance(get_appdata_base_dir() / "vet_soap_notetaker.lock")
-    if not instance_lock.acquire():
-        logger.info("another instance is already running; exiting this one")
-        if not autostarted:
-            # The vet clicked the icon to get at the app: the running one opens History.
-            request_activation(activation_path)
-        return
+def start(tk_root, autostarted, splash=None, instance_lock=None):
+    """Build and run the app; called by ``launcher.run()`` once it holds the lock.
+
+    ``splash`` is the launcher's "Vet Soap Notetaker" window (None for a quiet
+    autostart), shown before this module's heavy imports; History's first open
+    takes it over and closes it. ``instance_lock`` is only held here so the
+    single-instance lock lives as long as the app.
+    """
     # A request left from before this start (a crash) would pop History up later.
     activation = ActivationWatcher(
-        activation_path,
+        get_appdata_base_dir() / ACTIVATION_FILE_NAME,
         on_activate=lambda: tray_app.open_history(opened_from="second_launch"),
     )
     activation.clear()
     logger.info("Vet Soap Notetaker starting up")
-    tray_app, hotkey_listener, tk_root = build_app()
-    # Report uncaught errors (type + stack only) to PostHog's Error Tracking.
-    tray_app.analytics.install_crash_capture(tk_root)
-    # Bring the backend up first (no-op in dev) so it's listening before the
-    # pollers below start reaching for it.
-    tray_app.backend_supervisor.start()
-    hotkey_listener.start()
-    tray_app.offline_queue.start()
-    tray_app.injection_poller.start()
-    logger.info("offline retry queue and remote-injection poller started, ready for hotkey")
-    # Run the tray icon on its own thread so the main thread is free to run
-    # the Tk mainloop, which is required for flyout/settings windows to be
-    # created safely (Tk calls from other threads must go through the
-    # mainloop, see run_on_main_thread above).
-    tray_app.icon.run_detached()
+    try:
+        tray_app, hotkey_listener, tk_root = build_app(tk_root=tk_root)
+        # Report uncaught errors (type + stack only) to PostHog's Error Tracking.
+        tray_app.analytics.install_crash_capture(tk_root)
+        # Bring the backend up first (no-op in dev) so it's listening before the
+        # pollers below start reaching for it.
+        tray_app.backend_supervisor.start()
+        hotkey_listener.start()
+        tray_app.offline_queue.start()
+        tray_app.injection_poller.start()
+        logger.info("offline retry queue and remote-injection poller started, ready for hotkey")
+        # Run the tray icon on its own thread so the main thread is free to run
+        # the Tk mainloop, which is required for flyout/settings windows to be
+        # created safely (Tk calls from other threads must go through the
+        # mainloop, see run_on_main_thread above).
+        tray_app.icon.run_detached()
+    except BaseException:
+        if splash is not None:
+            splash.close()
+        raise
     if sys.platform == "win32":
         try:
             # Entries written before AUTOSTART_FLAG existed would open History at login.
@@ -715,8 +725,16 @@ def run(argv=None):
             logger.warning("could not update the autostart entry", exc_info=True)
     activation.watch(tk_root)
     if not autostarted:
-        tk_root.after(0, lambda: tray_app.open_history(opened_from="launch"))
+        tk_root.after(0, lambda: tray_app.open_history(opened_from="launch", loading=splash))
     tk_root.mainloop()
+
+
+def run(argv=None):
+    # The real entrypoint is launcher.run() (the exe's script); kept so
+    # `python -m vet_soap_notetaker.main` and older autostart entries still work.
+    from vet_soap_notetaker import launcher
+
+    launcher.run(argv=argv)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,10 @@ while the app is already running asks the running copy to open (or raise) its
 History window. The login autostart entry passes `--autostart`, so the app starts
 quietly in the tray at login.
 
+While History loads, a small "Vet Soap Notetaker" splash shows. The exe starts in
+`launcher.py`, which puts the splash up (and lets a second launch exit) before
+importing the rest of the app, so the window appears straight away.
+
 ### Exam history, the mobile app, and remote injection
 
 Every generated note is saved on the backend, so the same exam history is
@@ -278,11 +282,13 @@ src/vet_soap_notetaker/              The Windows desktop tray app (this package)
   injection_poller.py    InjectionPoller — polls the backend for mobile "Inject into AVImark" requests
   single_instance.py     Guards against a second copy of the app running at once
   activation.py          Lets a second launch ask the running app to open History
+  launcher.py            The exe's entrypoint: single-instance lock + splash before main's heavy imports
+  loading_ui.py          LoadingWindow — the "Vet Soap Notetaker / Opening History…" splash
   autostart.py           winreg-based Windows "launch on startup" registration
   window_icon.py / icon_art.py / ui_strings.py   Window icon, tray icon art, and shared UI strings
   logger.py              Rotating file logger setup
   paths.py               Shared %APPDATA%/home-dir resolution helper
-  main.py                build_app() wires everything together; run() is the entry point
+  main.py                build_app() wires everything together; start() runs it (called by launcher.run())
 
 backend/                 Reference AI backend (own uv project) — see backend/README.md
 mobile/                  Expo/React Native companion app (iOS + Android) — see mobile/README.md
