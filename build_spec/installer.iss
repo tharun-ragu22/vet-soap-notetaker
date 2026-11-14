@@ -80,9 +80,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 ; Autostart the desktop app on login. Same HKCU Run key + value name the in-app
 ; autostart module manages (src/vet_soap_notetaker/autostart.py: RUN_KEY_PATH / APP_NAME),
 ; so the app's Settings toggle stays consistent with what the installer wrote.
-; The frozen exe takes no args (unlike the dev `-m vet_soap_notetaker.main` form).
+; The frozen exe takes no `-m vet_soap_notetaker.main` (unlike the dev form), only
+; --autostart (autostart.AUTOSTART_FLAG), which keeps a login launch from opening History.
 ; uninsdeletevalue removes it on uninstall so nothing relaunches afterwards.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VetSoapNotetakerAssistant"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VetSoapNotetakerAssistant"; ValueData: """{app}\{#MyAppExeName}"" --autostart"; Flags: uninsdeletevalue
 
 [Run]
 ; Open the backend's port so the phone on the clinic Wi-Fi can reach it.

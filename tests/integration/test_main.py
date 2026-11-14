@@ -400,7 +400,7 @@ def test_open_settings_from_tray_thread_is_marshalled_onto_main_thread(mocker):
 
 def test_saving_settings_persists_config_and_updates_live_components(mocker, tmp_path):
     mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
-    mocker.patch("vet_soap_notetaker.main.autostart")
+    mocker.patch("vet_soap_notetaker.main.autostart", AUTOSTART_FLAG="--autostart")
     mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
     config_path = tmp_path / "config.json"
     mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", config_path)
@@ -824,13 +824,122 @@ def test_run_bails_out_when_another_instance_already_holds_the_lock(mocker):
     guard.acquire.return_value = False
     mocker.patch("vet_soap_notetaker.main.SingleInstance", return_value=guard)
     mock_build_app = mocker.patch("vet_soap_notetaker.main.build_app")
+    mocker.patch("vet_soap_notetaker.main.request_activation")
 
     from vet_soap_notetaker.main import run
 
-    run()
+    run(argv=[])
 
     guard.acquire.assert_called_once()
     mock_build_app.assert_not_called()
+
+
+def _bail_out_run(mocker):
+    mocker.patch("vet_soap_notetaker.main.build_logger")
+    guard = mocker.MagicMock()
+    guard.acquire.return_value = False
+    mocker.patch("vet_soap_notetaker.main.SingleInstance", return_value=guard)
+    mocker.patch("vet_soap_notetaker.main.build_app")
+    return mocker.patch("vet_soap_notetaker.main.request_activation")
+
+
+def test_a_manual_second_launch_asks_the_running_instance_to_open_history(mocker):
+    # The vet double-clicks the desktop icon while the app already runs in the tray.
+    request = _bail_out_run(mocker)
+
+    from vet_soap_notetaker.main import run
+
+    run(argv=[])
+
+    request.assert_called_once()
+
+
+def test_a_second_autostart_launch_exits_without_opening_history(mocker):
+    request = _bail_out_run(mocker)
+
+    from vet_soap_notetaker.main import run
+
+    run(argv=["--autostart"])
+
+    request.assert_not_called()
+
+
+def _started_run(mocker):
+    mocker.patch("vet_soap_notetaker.main.build_logger")
+    guard = mocker.MagicMock()
+    guard.acquire.return_value = True
+    mocker.patch("vet_soap_notetaker.main.SingleInstance", return_value=guard)
+    mocker.patch("vet_soap_notetaker.main.autostart", AUTOSTART_FLAG="--autostart")
+    watcher = mocker.patch("vet_soap_notetaker.main.ActivationWatcher").return_value
+    tray_app, tk_root = MagicMock(), MagicMock()
+    mocker.patch("vet_soap_notetaker.main.build_app", return_value=(tray_app, MagicMock(), tk_root))
+    return tray_app, tk_root, watcher
+
+
+def _run_scheduled(tk_root):
+    for call in tk_root.after.call_args_list:
+        call.args[1]()
+
+
+def test_a_manual_launch_opens_history_once_the_app_is_up(mocker):
+    tray_app, tk_root, watcher = _started_run(mocker)
+
+    from vet_soap_notetaker.main import run
+
+    run(argv=[])
+    _run_scheduled(tk_root)
+
+    tray_app.open_history.assert_called_once_with(opened_from="launch")
+    watcher.clear.assert_called_once()
+    watcher.watch.assert_called_once_with(tk_root)
+
+
+def test_an_autostart_launch_stays_quiet_in_the_tray(mocker):
+    tray_app, tk_root, watcher = _started_run(mocker)
+
+    from vet_soap_notetaker.main import run
+
+    run(argv=["--autostart"])
+    _run_scheduled(tk_root)
+
+    tray_app.open_history.assert_not_called()
+    watcher.watch.assert_called_once_with(tk_root)
+
+
+def test_a_second_launch_request_opens_history_in_the_running_instance(mocker):
+    tray_app, _tk_root, _watcher = _started_run(mocker)
+    watcher_cls = mocker.patch("vet_soap_notetaker.main.ActivationWatcher")
+
+    from vet_soap_notetaker.main import run
+
+    run(argv=["--autostart"])
+    watcher_cls.call_args.kwargs["on_activate"]()
+
+    tray_app.open_history.assert_called_once_with(opened_from="second_launch")
+
+
+def test_opening_history_again_raises_the_open_window_instead_of_stacking_another(mocker):
+    mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
+    mocker.patch("vet_soap_notetaker.main.follow_active_avimark")
+    window = mock_history_window.return_value
+    window.winfo_exists.return_value = True
+    tray_app, _, _ = build_app(
+        config=Config(api_endpoint="https://example.test/soap", api_timeout_seconds=15,
+                      hotkey="<ctrl>+<shift>+r"),
+        tk_root=MagicMock(),
+    )
+
+    tray_app.open_history(opened_from="tray")
+    tray_app.open_history(opened_from="launch")
+
+    mock_history_window.assert_called_once()
+    window.deiconify.assert_called_once()
+    window.lift.assert_called_once()
+
+    # Once the vet closes it, the next open builds a fresh window.
+    window.winfo_exists.return_value = False
+    tray_app.open_history(opened_from="tray")
+    assert mock_history_window.call_count == 2
 
 
 def test_build_app_wires_the_generate_timeout_from_config():
@@ -849,7 +958,7 @@ def test_build_app_wires_the_generate_timeout_from_config():
 
 def test_saving_settings_applies_the_generate_timeout_live(mocker, tmp_path):
     mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
-    mocker.patch("vet_soap_notetaker.main.autostart")
+    mocker.patch("vet_soap_notetaker.main.autostart", AUTOSTART_FLAG="--autostart")
     mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", tmp_path / "config.json")
     config = Config(
         api_endpoint="https://example.test/soap",
@@ -958,7 +1067,7 @@ def test_saving_settings_reconfigures_analytics_and_reports_which_fields_changed
     mocker, tmp_path
 ):
     mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
-    mocker.patch("vet_soap_notetaker.main.autostart")
+    mocker.patch("vet_soap_notetaker.main.autostart", AUTOSTART_FLAG="--autostart")
     mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
     mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", tmp_path / "config.json")
     tracker = RecordingAnalytics()
@@ -1219,7 +1328,7 @@ def test_no_desktop_event_ever_carries_patient_data(mocker, tmp_path):
     mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
     mock_settings_cls = mocker.patch("vet_soap_notetaker.main.SettingsWindow")
     mocker.patch("vet_soap_notetaker.main.pyperclip")
-    mocker.patch("vet_soap_notetaker.main.autostart")
+    mocker.patch("vet_soap_notetaker.main.autostart", AUTOSTART_FLAG="--autostart")
     mocker.patch("vet_soap_notetaker.hotkey_listener.keyboard.Listener")
     mocker.patch("vet_soap_notetaker.main.CONFIG_PATH", tmp_path / "config.json")
     tracker = RecordingAnalytics()

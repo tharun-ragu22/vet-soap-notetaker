@@ -51,6 +51,12 @@ window, a way to **Calibrate AVImark Boxes…**, a Settings window, and Quit
 retry-queue worker, the remote-injection poller, and the bundled backend it
 supervises before exiting).
 
+Left-clicking the tray icon opens History, and so does launching the app from the
+desktop or Start-menu icon: a cold launch opens it once the app is up, and a launch
+while the app is already running asks the running copy to open (or raise) its
+History window. The login autostart entry passes `--autostart`, so the app starts
+quietly in the tray at login.
+
 ### Exam history, the mobile app, and remote injection
 
 Every generated note is saved on the backend, so the same exam history is
@@ -271,6 +277,7 @@ src/vet_soap_notetaker/              The Windows desktop tray app (this package)
   backend_supervisor.py  BackendSupervisor — launches/relaunches the bundled backend exe (packaged install)
   injection_poller.py    InjectionPoller — polls the backend for mobile "Inject into AVImark" requests
   single_instance.py     Guards against a second copy of the app running at once
+  activation.py          Lets a second launch ask the running app to open History
   autostart.py           winreg-based Windows "launch on startup" registration
   window_icon.py / icon_art.py / ui_strings.py   Window icon, tray icon art, and shared UI strings
   logger.py              Rotating file logger setup

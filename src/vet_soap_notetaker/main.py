@@ -1,4 +1,5 @@
 import logging
+import sys
 import threading
 import time
 import tkinter as tk
@@ -8,6 +9,11 @@ from pathlib import Path
 import pyperclip
 
 from vet_soap_notetaker import autostart, dpi
+from vet_soap_notetaker.activation import (
+    ACTIVATION_FILE_NAME,
+    ActivationWatcher,
+    request_activation,
+)
 from vet_soap_notetaker.analytics import DesktopAnalytics, NullAnalytics, injection_properties
 from vet_soap_notetaker.api_client import ApiClient, SoapNote
 from vet_soap_notetaker.audio_recorder import AudioRecorder
@@ -305,9 +311,19 @@ def build_app(config=None, tk_root=None, analytics=None):
         pyperclip.copy(soap_text)
         analytics.capture("note_copied", {"source": "history"})
 
+    # The open History window, if any: opening it again (tray click, desktop
+    # icon) raises that window rather than stacking a second one.
+    history_window = {"value": None}
+
     def open_history(opened_from="tray"):
         analytics.capture("history_opened", {"opened_from": opened_from})
-        show_history(
+        window = history_window["value"]
+        if window is not None and window.winfo_exists():
+            window.deiconify()
+            window.lift()
+            window.focus_force()
+            return
+        history_window["value"] = show_history(
             tk_root,
             injector,
             history_store,
@@ -438,6 +454,8 @@ def build_app(config=None, tk_root=None, analytics=None):
         on_show_history=lambda: run_on_main_thread(tk_root, open_history),
     )
     pipeline.on_state_change = lambda state: tray_app.update_icon_for_state()
+    # Main-thread only (run() calls it from the Tk loop for a desktop-icon launch).
+    tray_app.open_history = open_history
     tray_app.attach_offline_queue(offline_queue)
     tray_app.attach_injection_poller(injection_poller)
 
@@ -649,8 +667,13 @@ def build_app(config=None, tk_root=None, analytics=None):
     return tray_app, hotkey_listener, tk_root
 
 
-def run():
+def run(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    # Login autostart passes the flag and stays quiet in the tray; a launch from
+    # the desktop icon or Start menu opens History.
+    autostarted = autostart.AUTOSTART_FLAG in argv
     build_logger()
+    activation_path = get_appdata_base_dir() / ACTIVATION_FILE_NAME
     # Single-instance guard: if another copy is already running (autostart put one
     # up at login and the vet then double-clicked the icon), bow out rather than
     # start a second backend supervisor that would crash-loop fighting for the
@@ -658,7 +681,16 @@ def run():
     instance_lock = SingleInstance(get_appdata_base_dir() / "vet_soap_notetaker.lock")
     if not instance_lock.acquire():
         logger.info("another instance is already running; exiting this one")
+        if not autostarted:
+            # The vet clicked the icon to get at the app: the running one opens History.
+            request_activation(activation_path)
         return
+    # A request left from before this start (a crash) would pop History up later.
+    activation = ActivationWatcher(
+        activation_path,
+        on_activate=lambda: tray_app.open_history(opened_from="second_launch"),
+    )
+    activation.clear()
     logger.info("Vet Soap Notetaker starting up")
     tray_app, hotkey_listener, tk_root = build_app()
     # Report uncaught errors (type + stack only) to PostHog's Error Tracking.
@@ -675,6 +707,15 @@ def run():
     # created safely (Tk calls from other threads must go through the
     # mainloop, see run_on_main_thread above).
     tray_app.icon.run_detached()
+    if sys.platform == "win32":
+        try:
+            # Entries written before AUTOSTART_FLAG existed would open History at login.
+            autostart.add_autostart_flag()
+        except OSError:
+            logger.warning("could not update the autostart entry", exc_info=True)
+    activation.watch(tk_root)
+    if not autostarted:
+        tk_root.after(0, lambda: tray_app.open_history(opened_from="launch"))
     tk_root.mainloop()
 
 

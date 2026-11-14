@@ -60,8 +60,11 @@ class TrayApp:
                 lambda icon, item: self.open_last_note(),
                 enabled=lambda item: self.pipeline.last_soap_text is not None,
             ),
+            # The default item is what a left-click on the tray icon runs.
             pystray.MenuItem(
-                ui_strings.MENU_VIEW_HISTORY, lambda icon, item: self.show_history()
+                ui_strings.MENU_VIEW_HISTORY,
+                lambda icon, item: self.show_history(),
+                default=True,
             ),
             pystray.MenuItem(
                 ui_strings.MENU_SETTINGS, lambda icon, item: self.open_settings()

@@ -105,6 +105,19 @@ def test_view_history_menu_item_invokes_on_show_history():
     assert calls == ["history"]
 
 
+def test_view_history_is_the_default_item_so_a_left_click_opens_history():
+    # pystray's win32 backend runs the menu's default item on a left-click.
+    calls = []
+    tray_app, _pipeline = make_tray_app(state=PipelineState.IDLE)
+    tray_app.on_show_history = lambda: calls.append("history")
+
+    [default] = [item for item in tray_app.icon.menu.items if item.default]
+    tray_app.icon.menu(tray_app.icon)
+
+    assert str(default) == ui_strings.MENU_VIEW_HISTORY
+    assert calls == ["history"]
+
+
 def test_status_menu_item_reflects_current_pipeline_state():
     tray_app, pipeline = make_tray_app(state=PipelineState.RECORDING)
 

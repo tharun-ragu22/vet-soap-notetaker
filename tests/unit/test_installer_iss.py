@@ -22,7 +22,7 @@ line-for-line mirror of it.
 import json
 from pathlib import Path
 
-from vet_soap_notetaker.autostart import APP_NAME, RUN_KEY_PATH
+from vet_soap_notetaker.autostart import APP_NAME, AUTOSTART_FLAG, RUN_KEY_PATH
 from vet_soap_notetaker.backend_supervisor import BACKEND_EXE_NAME, BACKEND_SUBDIR
 
 ISS_PATH = Path(__file__).resolve().parents[2] / "build_spec" / "installer.iss"
@@ -56,8 +56,10 @@ def test_installer_registers_autostart_matching_the_autostart_module():
     assert "HKCU" in text
     assert RUN_KEY_PATH in text
     assert f'ValueName: "{APP_NAME}"' in text
-    # the frozen exe launches with no args (no `-m vet_soap_notetaker.main`)
-    assert r"{app}\VetSoapNotetaker.exe" in text
+    # the frozen exe launches with no `-m vet_soap_notetaker.main`, only the flag
+    # that keeps a login launch from opening History
+    assert '#define MyAppExeName "VetSoapNotetaker.exe"' in text
+    assert rf'ValueData: """{{app}}\{{#MyAppExeName}}"" {AUTOSTART_FLAG}"' in text
     # torn down on uninstall
     assert "uninsdeletevalue" in text
 
