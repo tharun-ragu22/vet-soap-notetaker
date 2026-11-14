@@ -522,6 +522,31 @@ def test_async_upload_reports_soap_generated_from_the_worker(setup):
     assert {"transcribe_ms", "note_gen_ms"} <= props.keys()
 
 
+def _provider_400(message="API key not valid."):
+    request = httpx.Request("POST", "https://provider.example/upload?key=SECRET_KEY")
+    body = json.dumps({"error": {"code": 400, "message": message, "status": "INVALID_ARGUMENT",
+                                 "details": [{"reason": "API_KEY_INVALID"}]}})
+    response = httpx.Response(400, request=request, content=body.encode())
+    return httpx.HTTPStatusError(f"400 for {request.url}", request=request, response=response)
+
+
+def test_async_upload_reports_what_the_provider_said_when_transcription_fails(setup):
+    client, tracker, _ = setup(pipeline=FakePipeline(transcribe_error=_provider_400()))
+    with client:
+        client.post("/api/appointments", content=b"m4a",
+                    headers={**CLIENT_HEADERS, "Prefer": "respond-async"})
+        client.portal.call(client.app.state.worker.drain)
+
+    [event] = [e for e in tracker.events if e["event"] == "soap_generated"]
+    props = event["properties"]
+    assert props["outcome"] == "failed"
+    assert props["error_type"] == "HTTPStatusError"
+    assert props["upstream_status"] == 400
+    assert props["upstream_error_status"] == "INVALID_ARGUMENT"
+    assert props["upstream_error_reason"] == "API_KEY_INVALID"
+    assert "SECRET_KEY" not in json.dumps(props)
+
+
 def test_no_async_upload_event_ever_carries_patient_data(setup):
     named = _note(SENTINEL, patient_name=SENTINEL)
     pipeline = FakePipeline(notes=[named], transcript=f"{SENTINEL} vomiting")
@@ -533,8 +558,12 @@ def test_no_async_upload_event_ever_carries_patient_data(setup):
         pipeline.note_error = NoteParsingError(f"model did not return valid JSON: {SENTINEL}")
         client.post("/api/appointments", content=b"other", headers=headers)
         client.portal.call(client.app.state.worker.drain)
+        # A provider error body quoting the recording must not leak either.
+        pipeline.transcribe_error = _provider_400(message=f"bad audio: {SENTINEL}")
+        client.post("/api/appointments", content=b"third", headers=headers)
+        client.portal.call(client.app.state.worker.drain)
 
-    assert len([e for e in tracker.events if e["event"] == "soap_generated"]) == 2
+    assert len([e for e in tracker.events if e["event"] == "soap_generated"]) == 3
     assert SENTINEL not in json.dumps(tracker.events)
 
 

@@ -12,6 +12,7 @@ the default for tests, CI and any clinic that opts out.
 
 import difflib
 import logging
+import re
 from importlib import metadata
 from typing import Protocol
 
@@ -83,12 +84,46 @@ def make_analytics(config: BackendConfig) -> Analytics:
     )
 
 
+# A provider error code ("INVALID_ARGUMENT", "API_KEY_INVALID", "invalid_api_key"):
+# an identifier, so free text (which could quote the request) never matches.
+_ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
+def _error_code(value) -> str | None:
+    return value if isinstance(value, str) and _ERROR_CODE.fullmatch(value) else None
+
+
+def _upstream_error_codes(response: httpx.Response) -> dict:
+    """The codes in a provider's JSON error body -- Google's ``error.status`` and
+    ``error.details[].reason``, or OpenAI/Anthropic's ``error.type`` and
+    ``error.code`` -- never its ``message``."""
+    try:
+        error = response.json().get("error")
+    except (ValueError, AttributeError):
+        return {}
+    if not isinstance(error, dict):
+        return {}
+    status = _error_code(error.get("status")) or _error_code(error.get("type"))
+    reason = _error_code(error.get("code"))
+    details = error.get("details")
+    if isinstance(details, list):
+        reasons = (_error_code(d.get("reason")) for d in details if isinstance(d, dict))
+        reason = next((r for r in reasons if r), None) or reason
+    codes = {}
+    if status:
+        codes["upstream_error_status"] = status
+    if reason:
+        codes["upstream_error_reason"] = reason
+    return codes
+
+
 def error_properties(exc: Exception) -> dict:
     """Describe a failure without its message: the type, plus the upstream
-    provider's HTTP status when there is one."""
+    provider's HTTP status and error codes when there are some."""
     props: dict = {"error_type": type(exc).__name__}
     if isinstance(exc, httpx.HTTPStatusError):
         props["upstream_status"] = exc.response.status_code
+        props.update(_upstream_error_codes(exc.response))
     return props
 
 

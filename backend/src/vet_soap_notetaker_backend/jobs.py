@@ -20,6 +20,7 @@ from pathlib import Path
 
 from starlette.concurrency import run_in_threadpool
 
+from vet_soap_notetaker_backend.analytics import error_properties
 from vet_soap_notetaker_backend.events import EventHub
 from vet_soap_notetaker_backend.llm.transcription import NoSpeechError
 from vet_soap_notetaker_backend.schemas import SoapResult
@@ -152,7 +153,7 @@ class AppointmentWorker:
             return self._finish(self._store.mark_failed(appointment_id, "no_speech"), info)
         except Exception as exc:  # noqa: BLE001 - provider error, lost file, or a bug
             # The audio is kept: Retry (POST .../retry) runs it again.
-            info.update(transcribe_ms=_elapsed_ms(started), error=type(exc).__name__)
+            info.update(transcribe_ms=_elapsed_ms(started), **error_properties(exc))
             if not isinstance(exc, self._provider_errors):
                 logger.warning("transcription crashed: %s", type(exc).__name__)
             return self._finish(self._store.mark_failed(appointment_id, "failed"), info)
@@ -162,7 +163,7 @@ class AppointmentWorker:
         try:
             result = await self._generate(transcript)
         except Exception as exc:  # noqa: BLE001 - as above
-            info.update(note_gen_ms=_elapsed_ms(note_started), error=type(exc).__name__)
+            info.update(note_gen_ms=_elapsed_ms(note_started), **error_properties(exc))
             self._delete_audio(appointment)
             return self._finish(self._store.mark_note_pending(appointment_id, transcript), info)
         info["note_gen_ms"] = _elapsed_ms(note_started)

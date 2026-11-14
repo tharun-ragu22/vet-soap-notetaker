@@ -203,9 +203,6 @@ def create_app(
     def _job_outcome(appointment_id: str, outcome: str, info: dict) -> None:
         client = job_clients.pop(appointment_id, {})
         distinct_id = client.pop("distinct_id", default_user_id)
-        info = dict(info)
-        if "error" in info:
-            info["error_type"] = info.pop("error")
         props = {
             "source_app": client.pop("source_app", "unknown"),
             "mode": "async",

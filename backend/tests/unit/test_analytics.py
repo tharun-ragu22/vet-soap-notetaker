@@ -149,3 +149,53 @@ def test_error_properties_give_the_type_and_upstream_status_but_not_the_message(
 def test_error_properties_for_other_errors_are_just_the_type(exc):
     props = error_properties(exc)
     assert props == {"error_type": type(exc).__name__}
+
+
+def _status_error(status, body, url="https://provider.example/v1/models/m:gen?key=SECRET_KEY"):
+    request = httpx.Request("POST", url)
+    response = httpx.Response(status, request=request, content=body)
+    return httpx.HTTPStatusError(f"{status} for url {url}", request=request, response=response)
+
+
+GEMINI_BAD_KEY = (
+    b'{"error": {"code": 400, "message": "API key not valid. ZZ_PATIENT_SENTINEL", '
+    b'"status": "INVALID_ARGUMENT", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", '
+    b'"reason": "API_KEY_INVALID", "domain": "googleapis.com"}]}}'
+)
+
+
+def test_error_properties_name_the_providers_error_codes_but_not_its_message():
+    props = error_properties(_status_error(400, GEMINI_BAD_KEY))
+
+    assert props == {
+        "error_type": "HTTPStatusError",
+        "upstream_status": 400,
+        "upstream_error_status": "INVALID_ARGUMENT",
+        "upstream_error_reason": "API_KEY_INVALID",
+    }
+
+
+def test_error_properties_read_openai_style_error_codes():
+    body = b'{"error": {"message": "Incorrect API key ZZ", "type": "invalid_request_error", "code": "invalid_api_key"}}'
+
+    props = error_properties(_status_error(401, body))
+
+    assert props["upstream_error_status"] == "invalid_request_error"
+    assert props["upstream_error_reason"] == "invalid_api_key"
+
+
+@pytest.mark.parametrize("body", [b"", b"<html>Bad Gateway</html>", b'["not", "an", "object"]',
+                                  b'{"error": "plain text error ZZ_PATIENT_SENTINEL"}'])
+def test_error_properties_fall_back_to_the_status_for_an_unrecognised_body(body):
+    props = error_properties(_status_error(502, body))
+
+    assert props == {"error_type": "HTTPStatusError", "upstream_status": 502}
+
+
+def test_error_properties_drop_codes_that_are_not_code_shaped():
+    # Only short identifier-like codes are sent: free text could carry anything.
+    body = b'{"error": {"status": "the audio said ZZ_PATIENT_SENTINEL", "details": [{"reason": "a b c"}]}}'
+
+    props = error_properties(_status_error(400, body))
+
+    assert props == {"error_type": "HTTPStatusError", "upstream_status": 400}

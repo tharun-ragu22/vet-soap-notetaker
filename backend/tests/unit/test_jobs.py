@@ -222,3 +222,45 @@ async def test_each_outcome_is_reported_with_timings_and_never_a_message(tmp_pat
     assert "transcribe_ms" in info
     assert all(not isinstance(v, str) or v in ("ConnectError", "NoteParsingError")
                for v in info.values())
+
+
+def _gemini_400():
+    request = httpx.Request("POST", "https://provider.example/upload")
+    response = httpx.Response(
+        400, request=request,
+        content=b'{"error": {"status": "INVALID_ARGUMENT", "details": [{"reason": "API_KEY_INVALID"}]}}',
+    )
+    return httpx.HTTPStatusError("400", request=request, response=response)
+
+
+async def test_a_failed_transcription_reports_what_the_provider_said(tmp_path):
+    outcomes = []
+    worker, store, hub, _ = make_worker(tmp_path, FakeSteps(transcribe_error=_gemini_400()), outcomes=outcomes)
+    worker.start()
+    try:
+        await process(worker, hub, store)
+    finally:
+        await worker.stop()
+
+    [(_id, status, info)] = outcomes
+    assert status == "failed"
+    assert info["error_type"] == "HTTPStatusError"
+    assert info["upstream_status"] == 400
+    assert info["upstream_error_reason"] == "API_KEY_INVALID"
+    assert "error" not in info
+
+
+async def test_a_failed_note_reports_the_error_type(tmp_path):
+    outcomes = []
+    worker, store, hub, _ = make_worker(
+        tmp_path, FakeSteps(note_error=NoteParsingError("x")), outcomes=outcomes
+    )
+    worker.start()
+    try:
+        await process(worker, hub, store)
+    finally:
+        await worker.stop()
+
+    [(_id, status, info)] = outcomes
+    assert status == "note_pending"
+    assert info["error_type"] == "NoteParsingError"
