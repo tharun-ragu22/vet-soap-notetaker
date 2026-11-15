@@ -69,8 +69,11 @@ Source: "..\backend\.env"; DestDir: "{app}\backend"; Flags: skipifsourcedoesntex
 ; Seed the desktop app's config at ~\.vetscribe\config.json pointing at the LOCAL
 ; backend over plain http (the bundled backend serves http; config.DEFAULT_CONFIG
 ; defaults to https). onlyifdoesntexist so we never clobber a config already tuned
-; on this PC.
-Source: "clinic_config.json"; DestDir: "{%USERPROFILE}\.vetscribe"; DestName: "config.json"; Flags: onlyifdoesntexist
+; on this PC. uninsneveruninstall because it's user data once the vet saves
+; Settings: Inno otherwise deletes every [Files] entry on uninstall, before the
+; "delete data?" prompt, so a No answer still lost every setting. Only that
+; prompt's DelTree removes it.
+Source: "clinic_config.json"; DestDir: "{%USERPROFILE}\.vetscribe"; DestName: "config.json"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -81,6 +81,20 @@ def test_installer_seeds_config_pointing_at_the_local_backend():
     assert "onlyifdoesntexist" in text
 
 
+def test_uninstall_never_deletes_the_seeded_config():
+    # Inno deletes every [Files] entry on uninstall -- before the "delete data?"
+    # prompt -- so without uninsneveruninstall the vet's saved settings are lost
+    # even when they answer No. Only that prompt's DelTree may remove config.json.
+    seed_lines = [
+        line for line in _iss_text().splitlines()
+        if line.startswith("Source:") and "clinic_config.json" in line
+    ]
+    assert len(seed_lines) == 1
+    flags = seed_lines[0].split("Flags:", 1)[1].split()
+    assert "onlyifdoesntexist" in flags
+    assert "uninsneveruninstall" in flags
+
+
 def test_seeded_clinic_config_targets_the_local_http_backend():
     cfg = json.loads(CLINIC_CONFIG_PATH.read_text())
     # bundled backend is plain http on 8443, unlike config.DEFAULT_CONFIG's https
