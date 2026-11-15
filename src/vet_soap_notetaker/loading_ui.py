@@ -21,8 +21,8 @@ class LoadingWindow(tk.Toplevel):
         self.withdraw()
         self.title(ui_strings.SPLASH_TITLE)
         apply_window_icon(self)
-        # Borderless (no close button to dismiss it half-way) and on top of
-        # AVImark while History loads.
+        # Borderless, so there's no close button to dismiss it half-way. It opens
+        # in front but isn't topmost: the vet can bring other windows over it.
         self.overrideredirect(True)
         self.configure(borderwidth=1, relief="solid")
         tk.Label(self, text=ui_strings.SPLASH_TITLE, font=("Segoe UI", 16, "bold")).pack(
@@ -35,8 +35,6 @@ class LoadingWindow(tk.Toplevel):
 
     def show(self):
         self.deiconify()
-        # Set once mapped: X11 window managers drop -topmost on a withdrawn window.
-        self.attributes("-topmost", True)
         self.lift()
         # Paint now: the caller goes straight into blocking work (imports, the
         # history fetch) that keeps the Tk loop from drawing it otherwise.

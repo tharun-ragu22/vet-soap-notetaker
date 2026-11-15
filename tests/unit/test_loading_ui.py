@@ -28,14 +28,21 @@ def test_splash_names_the_app_and_says_history_is_opening(tk_root):
     assert ui_strings.SPLASH_LOADING_MESSAGE in texts
 
 
-def test_splash_is_borderless_and_on_top(tk_root):
+def test_splash_is_borderless(tk_root):
     splash = LoadingWindow(tk_root)
     splash.show()
 
-    # No title bar, so the vet can't close it half-way; topmost so it isn't
-    # hidden behind AVImark while History loads.
+    # No title bar, so the vet can't close it half-way.
     assert splash.overrideredirect()
-    assert splash.attributes("-topmost")
+
+
+def test_splash_is_not_topmost_so_other_windows_can_cover_it(tk_root):
+    splash = LoadingWindow(tk_root)
+    splash.show()
+
+    # It opens in front, but the vet can still bring AVImark (or anything else)
+    # over it while History loads.
+    assert not splash.attributes("-topmost")
 
 
 def test_show_maps_the_splash_straight_away(tk_root):
