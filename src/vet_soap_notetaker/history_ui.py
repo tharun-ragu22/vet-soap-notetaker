@@ -38,6 +38,7 @@ class HistoryWindow(tk.Toplevel):
         on_regenerate=None,
         confirm_delete=None,
         poll_interval_ms=DEFAULT_POLL_INTERVAL_MS,
+        initial_entries=None,
     ):
         super().__init__(master)
         self.title(ui_strings.HISTORY_WINDOW_TITLE)
@@ -55,7 +56,8 @@ class HistoryWindow(tk.Toplevel):
         self.on_regenerate = on_regenerate
         self._regenerating = False
         self._confirm_delete = confirm_delete or self._default_confirm_delete
-        self.entries = list(load_entries())
+        # main.py prefetches behind the splash, off the Tk thread.
+        self.entries = list(load_entries() if initial_entries is None else initial_entries)
         self._selected_index = None
 
         # Left: scrollable list of past notes, newest first.

@@ -28,12 +28,35 @@ def test_splash_names_the_app_and_says_history_is_opening(tk_root):
     assert ui_strings.SPLASH_LOADING_MESSAGE in texts
 
 
-def test_splash_is_borderless(tk_root):
+def test_splash_has_a_title_bar_with_a_close_button(tk_root):
     splash = LoadingWindow(tk_root)
     splash.show()
 
-    # No title bar, so the vet can't close it half-way.
-    assert splash.overrideredirect()
+    # A regular window frame, so the vet gets the usual X to back out.
+    assert not splash.overrideredirect()
+    assert splash.protocol("WM_DELETE_WINDOW")
+
+
+def test_closing_the_splash_with_its_x_cancels_it(tk_root):
+    splash = LoadingWindow(tk_root)
+    cancels = []
+    splash.on_cancel = lambda: cancels.append(True)
+    splash.show()
+
+    splash.tk.call(splash.protocol("WM_DELETE_WINDOW"))
+
+    assert splash.cancelled
+    assert cancels == [True]
+    assert not _exists(splash)
+
+
+def test_closing_the_splash_programmatically_is_not_a_cancel(tk_root):
+    splash = LoadingWindow(tk_root)
+    splash.show()
+
+    splash.close()
+
+    assert not splash.cancelled
 
 
 def test_splash_is_not_topmost_so_other_windows_can_cover_it(tk_root):

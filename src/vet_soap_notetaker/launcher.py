@@ -56,6 +56,12 @@ def run(argv=None):
         if splash is not None:
             splash.close()
         raise
+    if splash is not None:
+        # An X click made during the imports has been waiting in the Tk queue.
+        splash.update()
+        if splash.cancelled:
+            logger.info("splash closed while loading; exiting before startup")
+            return
     main.start(tk_root, autostarted=autostarted, splash=splash, instance_lock=instance_lock)
 
 

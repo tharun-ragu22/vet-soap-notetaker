@@ -153,6 +153,20 @@ def run_on_main_thread(tk_root, fn):
         tk_root.after(0, fn)
 
 
+def _load_in_background(tk_root, load, on_loaded, on_failed):
+    # Run a blocking read (History's backend fetch) on a worker thread so the Tk
+    # loop -- and the splash's X -- stays live, then hand the result back on it.
+    def work():
+        try:
+            result = load()
+        except Exception as exc:
+            tk_root.after(0, lambda: on_failed(exc))
+            return
+        tk_root.after(0, lambda: on_loaded(result))
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 FOLLOW_ACTIVE_INTERVAL_MS = 250
 
 
@@ -242,7 +256,13 @@ def show_flyout(tk_root, injector, soap_text, on_open_history=None, analytics=No
 
 
 def show_history(
-    tk_root, injector, history_store, on_regenerate=None, on_inject=None, on_copy=None
+    tk_root,
+    injector,
+    history_store,
+    on_regenerate=None,
+    on_inject=None,
+    on_copy=None,
+    initial_entries=None,
 ):
     injector.remember_active_window()
     # Inject the (already-persisted) current note; the window hands over the
@@ -257,6 +277,7 @@ def show_history(
         on_save_edit=lambda entry_id, **fields: history_store.update(entry_id, **fields),
         on_delete=lambda entry_id: history_store.delete(entry_id),
         on_regenerate=on_regenerate,
+        initial_entries=initial_entries,
     )
     follow_active_avimark(tk_root, injector, window)
     return window
@@ -313,7 +334,10 @@ def build_app(config=None, tk_root=None, analytics=None):
     # callbacks (a second-launch request, a tray click) that open History again.
     history_loading = {"value": None}
 
-    def open_history(opened_from="tray", loading=None):
+    def open_history(opened_from="tray", loading=None, quit_on_cancel=False):
+        # ``quit_on_cancel``: this open is the one a launch started the app for,
+        # so closing its splash means "never mind" -- quit (and stop the backend)
+        # rather than leave the app running in the tray.
         analytics.capture("history_opened", {"opened_from": opened_from})
         window = history_window["value"]
         if window is not None and window.winfo_exists():
@@ -326,18 +350,39 @@ def build_app(config=None, tk_root=None, analytics=None):
         if history_loading["value"] is not None:
             history_loading["value"].lift()
             return
-        # The splash covers the blocking backend history fetch in HistoryWindow.
+        # The splash covers the backend history fetch, which runs off the Tk
+        # thread so the splash's X works while it's under way.
         if loading is None:
             loading = LoadingWindow(tk_root)
         history_loading["value"] = loading
-        try:
-            loading.show()
-            _build_history_window()
-        finally:
+
+        def cancelled():
+            history_loading["value"] = None
+            logger.info("History open cancelled from the splash")
+            if quit_on_cancel:
+                tray_app.quit()
+
+        def loaded(entries):
+            if loading.cancelled:
+                return
+            try:
+                _build_history_window(entries)
+            finally:
+                history_loading["value"] = None
+                loading.close()
+
+        def failed(exc):
             history_loading["value"] = None
             loading.close()
+            logger.error("could not load History (%s)", type(exc).__name__)
 
-    def _build_history_window():
+        loading.on_cancel = cancelled
+        loading.show()
+        if loading.cancelled:  # its update() ran an X click already queued
+            return
+        _load_in_background(tk_root, history_store.list_entries, loaded, failed)
+
+    def _build_history_window(entries):
         history_window["value"] = show_history(
             tk_root,
             injector,
@@ -356,6 +401,7 @@ def build_app(config=None, tk_root=None, analytics=None):
                 exam_id=getattr(note, "id", None),
             ),
             on_copy=copy_from_history,
+            initial_entries=entries,
         )
 
     # A note flyout also offers an "Open History" button. Errors and status
@@ -701,6 +747,13 @@ def start(tk_root, autostarted, splash=None, instance_lock=None):
         tray_app, hotkey_listener, tk_root = build_app(tk_root=tk_root)
         # Report uncaught errors (type + stack only) to PostHog's Error Tracking.
         tray_app.analytics.install_crash_capture(tk_root)
+        if splash is not None:
+            # The vet may have closed the splash while the app was being built:
+            # stop here, before the backend or any listener is started.
+            splash.update()
+            if splash.cancelled:
+                logger.info("splash closed during startup; not starting")
+                return
         # Bring the backend up first (no-op in dev) so it's listening before the
         # pollers below start reaching for it.
         tray_app.backend_supervisor.start()
@@ -725,7 +778,12 @@ def start(tk_root, autostarted, splash=None, instance_lock=None):
             logger.warning("could not update the autostart entry", exc_info=True)
     activation.watch(tk_root)
     if not autostarted:
-        tk_root.after(0, lambda: tray_app.open_history(opened_from="launch", loading=splash))
+        tk_root.after(
+            0,
+            lambda: tray_app.open_history(
+                opened_from="launch", loading=splash, quit_on_cancel=True
+            ),
+        )
     tk_root.mainloop()
 
 

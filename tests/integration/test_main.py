@@ -19,7 +19,12 @@ import pytest
 def _no_real_splash(mocker):
     # Opening History shows a real Tk splash; these tests drive build_app with a
     # MagicMock root, so keep it a mock unless a test patches it itself.
-    mocker.patch("vet_soap_notetaker.main.LoadingWindow")
+    mocker.patch("vet_soap_notetaker.main.LoadingWindow").return_value.cancelled = False
+    # History's fetch runs on a worker thread in the app; run it inline here.
+    mocker.patch(
+        "vet_soap_notetaker.main._load_in_background",
+        side_effect=lambda tk_root, load, on_loaded, on_failed: on_loaded(load()),
+    )
 
 
 def test_follow_active_avimark_tracks_until_window_closes():
@@ -852,14 +857,17 @@ def test_start_builds_the_app_on_the_launchers_tk_root(mocker):
 
 def test_a_manual_launch_opens_history_behind_the_launchers_splash(mocker):
     tray_app, tk_root, watcher, _build = _started_app(mocker)
-    splash = MagicMock()
+    splash = MagicMock(cancelled=False)
 
     from vet_soap_notetaker.main import start
 
     start(tk_root, autostarted=False, splash=splash, instance_lock=MagicMock())
     _run_scheduled(tk_root)
 
-    tray_app.open_history.assert_called_once_with(opened_from="launch", loading=splash)
+    # Closing this splash means "never mind": the launch started the app, so it quits.
+    tray_app.open_history.assert_called_once_with(
+        opened_from="launch", loading=splash, quit_on_cancel=True
+    )
     watcher.clear.assert_called_once()
     watcher.watch.assert_called_once_with(tk_root)
 
@@ -893,6 +901,21 @@ def test_the_splash_closes_if_startup_fails(mocker):
     splash.close.assert_called_once()
 
 
+def test_a_splash_closed_during_startup_starts_nothing(mocker):
+    tray_app, tk_root, watcher, _build = _started_app(mocker)
+    splash = MagicMock(cancelled=False)
+    splash.update.side_effect = lambda: setattr(splash, "cancelled", True)
+
+    from vet_soap_notetaker.main import start
+
+    start(tk_root, autostarted=False, splash=splash, instance_lock=MagicMock())
+
+    tray_app.backend_supervisor.start.assert_not_called()
+    tray_app.icon.run_detached.assert_not_called()
+    tray_app.open_history.assert_not_called()
+    tk_root.mainloop.assert_not_called()
+
+
 def test_a_second_launch_request_opens_history_in_the_running_instance(mocker):
     tray_app, tk_root, _watcher, _build = _started_app(mocker)
     watcher_cls = mocker.patch("vet_soap_notetaker.main.ActivationWatcher")
@@ -919,6 +942,7 @@ def _history_app(mocker):
     history_cls = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
     mocker.patch("vet_soap_notetaker.main.follow_active_avimark")
     loading_cls = mocker.patch("vet_soap_notetaker.main.LoadingWindow")
+    loading_cls.return_value.cancelled = False
     tray_app, _, _ = build_app(
         config=Config(api_endpoint="https://example.test/soap", api_timeout_seconds=15,
                       hotkey="<ctrl>+<shift>+r"),
@@ -942,7 +966,7 @@ def test_a_fresh_history_open_shows_the_splash_until_the_window_is_built(mocker)
 
 def test_the_launch_open_reuses_the_launchers_splash(mocker):
     tray_app, history_cls, loading_cls = _history_app(mocker)
-    splash = MagicMock()
+    splash = MagicMock(cancelled=False)
 
     tray_app.open_history(opened_from="launch", loading=splash)
 
@@ -961,6 +985,79 @@ def test_the_splash_closes_even_if_history_fails_to_open(mocker):
         pass
 
     loading_cls.return_value.close.assert_called_once()
+
+
+def test_history_is_built_from_the_entries_fetched_behind_the_splash(mocker):
+    tray_app, history_cls, _loading_cls = _history_app(mocker)
+    entries = [MagicMock()]
+    mocker.patch(
+        "vet_soap_notetaker.main.BackendHistoryStore.list_entries", return_value=entries
+    )
+
+    tray_app.open_history(opened_from="tray")
+
+    assert history_cls.call_args.kwargs["initial_entries"] == entries
+
+
+def _cancelling_load(mocker, splash):
+    # The vet clicks the splash's X while the history fetch is still running.
+    def load_in_background(tk_root, load, on_loaded, on_failed):
+        splash.cancelled = True
+        splash.on_cancel()
+        on_loaded(load())
+
+    mocker.patch("vet_soap_notetaker.main._load_in_background", side_effect=load_in_background)
+
+
+def test_closing_the_splash_of_a_running_app_skips_history_but_keeps_running(mocker):
+    tray_app, history_cls, loading_cls = _history_app(mocker)
+    _cancelling_load(mocker, loading_cls.return_value)
+    quit_ = mocker.patch.object(tray_app, "quit")
+
+    tray_app.open_history(opened_from="tray")
+
+    history_cls.assert_not_called()
+    quit_.assert_not_called()
+
+
+def test_closing_the_launch_splash_quits_the_app_it_started(mocker):
+    tray_app, history_cls, _loading_cls = _history_app(mocker)
+    splash = MagicMock(cancelled=False)
+    _cancelling_load(mocker, splash)
+    quit_ = mocker.patch.object(tray_app, "quit")
+
+    tray_app.open_history(opened_from="launch", loading=splash, quit_on_cancel=True)
+
+    history_cls.assert_not_called()
+    quit_.assert_called_once()
+
+
+def test_history_can_open_again_after_a_cancelled_open(mocker):
+    tray_app, history_cls, loading_cls = _history_app(mocker)
+    _cancelling_load(mocker, loading_cls.return_value)
+    tray_app.open_history(opened_from="tray")
+    loading_cls.return_value.cancelled = False
+    mocker.patch(
+        "vet_soap_notetaker.main._load_in_background",
+        side_effect=lambda tk_root, load, on_loaded, on_failed: on_loaded(load()),
+    )
+
+    tray_app.open_history(opened_from="tray")
+
+    history_cls.assert_called_once()
+
+
+def test_the_splash_closes_if_the_history_fetch_fails(mocker):
+    tray_app, history_cls, loading_cls = _history_app(mocker)
+    mocker.patch(
+        "vet_soap_notetaker.main._load_in_background",
+        side_effect=lambda tk_root, load, on_loaded, on_failed: on_failed(RuntimeError("boom")),
+    )
+
+    tray_app.open_history(opened_from="tray")
+
+    history_cls.assert_not_called()
+    loading_cls.return_value.close.assert_called()
 
 
 def test_reopening_an_open_history_window_shows_no_splash(mocker):

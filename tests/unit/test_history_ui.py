@@ -80,6 +80,19 @@ def make_window(tk_root, entries, **overrides):
     return HistoryWindow(**kwargs)
 
 
+def test_prefetched_entries_are_shown_without_reading_again(tk_root):
+    # main.py fetches History behind the splash, off the Tk thread, and hands the
+    # result over: building the window must not block on a second read.
+    def load():
+        raise AssertionError("read the backend again at construction")
+
+    window = make_window(
+        tk_root, [], load_entries=load, initial_entries=[make_entry(subjective="first")]
+    )
+
+    assert window.listbox.size() == 1
+
+
 def test_history_window_lists_one_row_per_entry(tk_root):
     entries = [make_entry(subjective="first"), make_entry(subjective="second")]
 

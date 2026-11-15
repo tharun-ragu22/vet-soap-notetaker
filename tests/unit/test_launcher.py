@@ -20,6 +20,7 @@ def parts(mocker):
     request = mocker.patch("vet_soap_notetaker.launcher.request_activation")
     tk_cls = mocker.patch("vet_soap_notetaker.launcher.tk.Tk")
     splash_cls = mocker.patch("vet_soap_notetaker.launcher.LoadingWindow")
+    splash_cls.return_value.cancelled = False
     main_module = MagicMock()
     load_main = mocker.patch("vet_soap_notetaker.launcher._load_main", return_value=main_module)
     # One recorder for call order across the pieces.
@@ -84,6 +85,16 @@ def test_the_splash_closes_if_the_app_fails_to_load(parts):
         launcher.run(argv=[])
 
     parts.splash.close.assert_called_once()
+
+
+def test_a_splash_closed_while_the_app_loads_exits_without_starting_it(parts):
+    # The vet's X click waits in the Tk queue during the imports; the launcher
+    # pumps it straight after, before anything (the backend) is started.
+    parts.splash.update.side_effect = lambda: setattr(parts.splash, "cancelled", True)
+
+    launcher.run(argv=[])
+
+    parts.main.start.assert_not_called()
 
 
 def test_importing_the_launcher_skips_the_heavy_modules():
