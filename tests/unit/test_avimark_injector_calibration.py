@@ -133,29 +133,40 @@ def test_resolve_calibration_box_returns_none_when_no_children(mocker):
     assert injector.resolve_calibration_box(999, box) is None
 
 
-# --- set a control's text directly (no focus / clipboard / keystroke) ---------
+# --- set a control's text as a paste (no focus / keystroke) ------------------
 
 
-def test_set_control_text_inserts_via_edit_messages(mocker):
+def test_set_control_text_pastes_into_that_exact_control(mocker):
     win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     from vet_soap_notetaker import avimark_injector as mod
 
     injector = AvimarkInjector()
+    events = []
+    mocker.patch.object(
+        injector, "copy_to_clipboard", side_effect=lambda text: events.append(("clip", text))
+    )
+    win32gui.SendMessage.side_effect = lambda *args: events.append(args)
+
     injector._set_control_text(555, "hello")
 
-    # Select the whole control then replace the selection: SendMessage marshals to
-    # the control's own thread, so the text lands in *this exact* hwnd with no focus
-    # race, no clipboard contention, and no dependence on the foreground window.
-    assert win32gui.SendMessage.call_args_list == [
-        mocker.call(555, mod._EM_SETSEL, 0, -1),
-        mocker.call(555, mod._EM_REPLACESEL, 1, "hello"),
+    # The section goes on the clipboard, then the whole box is selected and sent a
+    # WM_PASTE. AVImark's Delphi data-aware boxes only save text they see as a user
+    # edit (typing/paste puts the record into edit mode); EM_REPLACESEL only changed
+    # what the box showed, so OK dropped it. SendMessage still targets *this exact*
+    # hwnd synchronously: no focus race, no foreground dependence.
+    assert events[:3] == [
+        ("clip", "hello"),
+        (555, mod._EM_SETSEL, 0, -1),
+        (555, mod._WM_PASTE, 0, 0),
     ]
+    assert all(e[1] != mod._EM_REPLACESEL for e in events if e[0] == 555)
 
 
 # --- _paste_calibrated -------------------------------------------------------
 
 
 def test_paste_calibrated_sets_each_box_text_in_order(mocker):
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
     injector = AvimarkInjector()
     hwnds = {"subjective": 1, "objective": 2, "assessment": 3, "plan": 4}
     mocker.patch.object(
@@ -173,6 +184,39 @@ def test_paste_calibrated_sets_each_box_text_in_order(mocker):
         mocker.call(3, "A text"),
         mocker.call(4, "P text"),
     ]
+
+
+def test_paste_calibrated_leaves_the_whole_note_on_the_clipboard(mocker):
+    mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    # Each box is pasted from the clipboard, so without this the vet would be left
+    # holding just the Plan text; restore the full note like the single-block path.
+    injector = AvimarkInjector()
+    hwnds = {"subjective": 1, "objective": 2, "assessment": 3, "plan": 4}
+    mocker.patch.object(
+        injector, "resolve_calibration_box", side_effect=lambda parent, box: _hwnd_for(box, hwnds)
+    )
+    calls = []
+    mocker.patch.object(injector, "_set_control_text", side_effect=lambda h, t: calls.append("set"))
+    clip = mocker.patch.object(
+        injector, "copy_to_clipboard", side_effect=lambda t: calls.append(("clip", t))
+    )
+
+    ok = injector._paste_calibrated(999, _fields(), _full_calibration(), clipboard_text="FULL NOTE")
+
+    assert ok is True
+    assert calls[-1] == ("clip", "FULL NOTE")
+    clip.assert_called_once_with("FULL NOTE")
+
+
+def test_focus_and_inject_calibrated_restores_the_full_note_to_the_clipboard(mocker):
+    injector = AvimarkInjector()
+    mocker.patch.object(injector, "_resolve_target", return_value=999)
+    mocker.patch.object(injector, "_raise_window")
+    paste = mocker.patch.object(injector, "_paste_calibrated", return_value=True)
+
+    injector.focus_and_inject_fields_calibrated(_fields(), _full_calibration(), "the blob")
+
+    assert paste.call_args.kwargs["clipboard_text"] == "the blob"
 
 
 def test_paste_calibrated_sets_distinct_controls_for_distinct_boxes(mocker):
