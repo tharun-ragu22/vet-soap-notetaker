@@ -17,6 +17,8 @@ _GA_ROOT = getattr(win32con, "GA_ROOT", 2)
 # (fixed Win32 constants; fall back to their literal values if win32con lacks them).
 _EM_SETSEL = getattr(win32con, "EM_SETSEL", 0x00B1)
 _EM_REPLACESEL = getattr(win32con, "EM_REPLACESEL", 0x00C2)
+_WM_PASTE = getattr(win32con, "WM_PASTE", 0x0302)
+_WM_GETTEXTLENGTH = getattr(win32con, "WM_GETTEXTLENGTH", 0x000E)
 
 logger = logging.getLogger("vet_soap_notetaker.avimark_injector")
 
@@ -305,20 +307,30 @@ class AvimarkInjector:
         return choose_control(candidates, box, parent_rect)
 
     def _set_control_text(self, hwnd, text):
-        """Insert ``text`` straight into one EDIT/RichEdit control.
+        """Paste ``text`` straight into one EDIT/RichEdit control.
 
-        Selects the control's whole contents and replaces the selection, both via
-        ``SendMessage`` -- which marshals to the control's own thread. Unlike a
-        global Ctrl+V, this targets *this exact* hwnd, so there's no focus race
-        (the earlier approach could paste a field into the previously-focused box
-        if ``SetFocus`` hadn't settled), no clipboard contention between fields,
-        and no dependence on the window being foreground.
+        Puts ``text`` on the clipboard, selects the control's whole contents and
+        sends it ``WM_PASTE`` -- both via ``SendMessage``, which marshals to the
+        control's own thread and returns once the control has handled it. It must
+        be a *paste*, not ``EM_REPLACESEL``: AVImark's Delphi data-aware boxes only
+        write their text back to the record when it arrives as a user edit (their
+        paste/keypress handlers put the record into edit mode); ``EM_REPLACESEL``
+        only changed what the box showed, so pressing OK saved at most one box.
+        Unlike a global Ctrl+V, this targets *this exact* hwnd, so there's no focus
+        race and no dependence on the window being foreground.
         """
+        self.copy_to_clipboard(text)
         win32gui.SendMessage(hwnd, _EM_SETSEL, 0, -1)
-        win32gui.SendMessage(hwnd, _EM_REPLACESEL, 1, text)
+        win32gui.SendMessage(hwnd, _WM_PASTE, 0, 0)
 
-    def _paste_calibrated(self, parent_hwnd, section_fields, calibration) -> bool:
+    def _paste_calibrated(
+        self, parent_hwnd, section_fields, calibration, clipboard_text=None
+    ) -> bool:
         """Place each ``(section, text)`` straight into its calibrated box.
+
+        Each box is pasted from the clipboard, so ``clipboard_text`` (the whole
+        note) is put back on it afterwards, leaving the vet the same clipboard as
+        the single-block paste rather than just the last section.
 
         Resolves *every* box first; if any can't be resolved (or isn't calibrated),
         or if two boxes resolve to the *same* control, it returns False without
@@ -357,7 +369,17 @@ class AvimarkInjector:
 
         for section, hwnd, text in resolved:
             self._set_control_text(hwnd, text)
-            logger.debug("calibrated paste: %d chars into %r box (control %s)", len(text), section, hwnd)
+            # Field diagnostic, length only (never the text): shows whether each
+            # box actually took the paste if a box is ever found empty after OK.
+            logger.info(
+                "calibrated paste: %d chars into %r box (control %s), box now holds %s chars",
+                len(text),
+                section,
+                hwnd,
+                win32gui.SendMessage(hwnd, _WM_GETTEXTLENGTH, 0, 0),
+            )
+        if clipboard_text is not None:
+            self.copy_to_clipboard(clipboard_text)
         logger.info("SOAP note injected into AVImark across %d calibrated boxes", len(resolved))
         return True
 
@@ -381,7 +403,7 @@ class AvimarkInjector:
 
         Resolves *which* AVImark chart to use (same safety + ambiguity refusal) and
         raises it so the vet sees it fill, then pastes each section into its box via
-        SendMessage -- which delivers straight to each control, so this path does
+        SendMessage (``WM_PASTE``) -- which delivers straight to each control, so this path does
         **not** require the window to be the foreground one (that foreground gate was
         both the layout-4 "all boxes empty" failure and the intermittent real-world
         "could not bring AVImark to the foreground" skip). If the boxes can't be
@@ -393,7 +415,9 @@ class AvimarkInjector:
         if hwnd is None:
             return False
         self._raise_window(hwnd)
-        if self._paste_calibrated(hwnd, section_fields, calibration):
+        if self._paste_calibrated(
+            hwnd, section_fields, calibration, clipboard_text=fallback_text
+        ):
             self.last_result = "per_box"
             return True
         logger.info("calibrated paste unavailable; falling back to single-block paste")
