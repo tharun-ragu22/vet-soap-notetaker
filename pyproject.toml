@@ -12,7 +12,6 @@ dependencies = [
     "pyperclip>=1.8.2",
     "pynput>=1.7.6",
     "pywin32>=306; sys_platform == 'win32'",
-    "pywinauto>=0.6.8; sys_platform == 'win32'",
     "posthog>=7.68.0",
 ]
 
@@ -22,6 +21,8 @@ dev = [
     "pytest-mock>=3.14.0",
     "pytest-asyncio>=0.24.0",
     "respx>=0.21.0",
+    # Drives the Windows GUI acceptance tests; the app itself never imports it.
+    "pywinauto>=0.6.8; sys_platform == 'win32'",
 ]
 # Build-only tooling: PyInstaller freezes the desktop app into the Windows exe
 # the installer ships. Not a runtime dependency (the clinic PC never needs it),

@@ -238,12 +238,12 @@ jobs:
           python-version: "3.11"
 
       - name: Sync dependencies
-        run: uv sync --locked
+        run: uv sync --locked --no-dev --group build
 
       - name: Build VetSoapNotetaker.exe (--onedir)
         # PyInstaller is pinned in the `build` dependency group (pyproject.toml),
         # so the version is reproducible instead of whatever `pip install` grabs.
-        run: uv run --group build pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
+        run: uv run --locked --no-dev --group build pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
 
       - name: Upload VetSoapNotetaker.exe artifact
         uses: actions/upload-artifact@v7
@@ -255,12 +255,12 @@ jobs:
       # httpx), so it builds in its own env. This is the windowless backend exe
       # the desktop app's BackendSupervisor launches on the clinic PC.
       - name: Sync backend dependencies
-        run: uv sync --locked
+        run: uv sync --locked --no-dev --group build
         working-directory: backend
 
       - name: Build VetSoapNotetakerBackend.exe (--onedir)
         # PyInstaller pinned in the backend's own `build` group (its separate env).
-        run: uv run --group build pyinstaller build_spec/backend.spec --distpath dist --workpath build
+        run: uv run --locked --no-dev --group build pyinstaller build_spec/backend.spec --distpath dist --workpath build
         working-directory: backend
 
       - name: Upload VetSoapNotetakerBackend.exe artifact

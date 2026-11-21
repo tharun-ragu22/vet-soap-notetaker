@@ -12,14 +12,22 @@
 # clinic from installing at all.
 #
 # Build with (from the backend/ project root):
-#   uv run pyinstaller build_spec/backend.spec --distpath dist --workpath build
+#   uv sync --locked --no-dev --group build
+#   uv run --locked --no-dev --group build pyinstaller build_spec/backend.spec --distpath dist --workpath build
+#
+# --no-dev keeps the test and eval tooling out of the build environment;
+# bundle_guard (shared with the desktop spec) fails the build if one is traced in.
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
 repo_root = Path(SPECPATH).parent  # backend/
 src_dir = repo_root / "src"
+
+sys.path.insert(0, str(repo_root.parent / "build_spec"))
+from bundle_guard import assert_runtime_only  # noqa: E402
 
 block_cipher = None
 
@@ -52,6 +60,7 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+assert_runtime_only(a)
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

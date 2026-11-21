@@ -7,9 +7,17 @@
 # the app at all.
 #
 # Build with:
-#   uv run pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
+#   uv sync --locked --no-dev --group build
+#   uv run --locked --no-dev --group build pyinstaller build_spec/vet_soap_notetaker.spec --distpath dist --workpath build
+#
+# --no-dev keeps pytest & co. out of the build environment, so they can't be
+# bundled; bundle_guard fails the build if one is traced in anyway.
 
+import sys
 from pathlib import Path
+
+sys.path.insert(0, SPECPATH)
+from bundle_guard import assert_runtime_only  # noqa: E402
 
 repo_root = Path(SPECPATH).parent
 src_dir = repo_root / "src"
@@ -36,6 +44,7 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+assert_runtime_only(a)
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
