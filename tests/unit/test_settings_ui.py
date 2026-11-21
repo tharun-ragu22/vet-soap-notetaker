@@ -97,3 +97,16 @@ def test_settings_window_edits_the_analytics_fields(tk_root):
     assert saved[0].analytics_key == "phc_new"
     assert saved[0].analytics_user_id == "demo-vet-1"
     assert saved[0].analytics_environment == "demo"
+
+
+def test_settings_window_edits_the_clinic(tk_root):
+    saved = []
+    window = SettingsWindow(
+        master=tk_root, config=make_config(analytics_clinic="Maple Vet"), on_save=saved.append
+    )
+
+    assert window.analytics_clinic_var.get() == "Maple Vet"
+    window.analytics_clinic_var.set(" Oak Vet ")
+    window.save_button.invoke()
+
+    assert saved[0].analytics_clinic == "Oak Vet"

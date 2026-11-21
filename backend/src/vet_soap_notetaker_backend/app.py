@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.sse import KEEPALIVE_COMMENT, EventSourceResponse, format_sse_event
 from starlette.concurrency import run_in_threadpool
 
+from vet_soap_notetaker_backend import log_forwarding
 from vet_soap_notetaker_backend.analytics import (
     Analytics,
     edit_summary,
@@ -35,6 +36,11 @@ from vet_soap_notetaker_backend.llm.transcription.silence import is_silent_wav
 from vet_soap_notetaker_backend.llm.transcription.gemini_transcriber import TranscriptionError
 
 logger = logging.getLogger("vet_soap_notetaker_backend.app")
+
+_LOGGER_PREFIX = "vet_soap_notetaker_backend"
+# The loggers whose lines are forwarded (scrubbed) to PostHog: provider
+# failures, async job outcomes and provider retries.
+DIAGNOSTIC_LOGGERS = ("app", "jobs", "http_retry")
 
 _SOAP_FIELDS = ("subjective", "objective", "assessment", "plan")
 _NOTE_FIELDS = (*_SOAP_FIELDS, "transcript")
@@ -118,6 +124,18 @@ def create_app(
     # land on the same person as the phone's/desktop's, falling back to the
     # configured id, then to this machine.
     default_user_id = config.analytics_user_id or f"backend-{socket.gethostname()}"
+    # A scrubbed copy of the diagnostic log lines goes to PostHog too (see
+    # log_forwarding.py), as this backend, tagged with the configured clinic.
+    log_forwarding.install(
+        logging.getLogger(_LOGGER_PREFIX),
+        log_forwarding.PostHogLogHandler(
+            lambda event, props: analytics.capture(
+                event, default_user_id, _with_clinic(props, config.analytics_clinic or None)
+            ),
+            prefix=_LOGGER_PREFIX,
+            loggers=DIAGNOSTIC_LOGGERS,
+        ),
+    )
     # In memory only (reset on restart): exams regenerated since their last
     # save, and exams the vet has edited -- for note_saved/injection_requested.
     regenerated_exams: set[str] = set()
@@ -128,8 +146,17 @@ def create_app(
         value = request.headers.get(name, "").strip()
         return value if 0 < len(value) <= _MAX_ANALYTICS_HEADER_LEN else None
 
+    def _clinic(request: Request) -> str | None:
+        return _header(request, "x-vsn-clinic") or config.analytics_clinic or None
+
+    def _with_clinic(props: dict, clinic: str | None) -> dict:
+        return {**props, "clinic": clinic} if clinic else props
+
     def _track(request: Request, event: str, **properties) -> None:
-        props = {"source_app": _header(request, "x-vsn-client") or "unknown", **properties}
+        props = _with_clinic(
+            {"source_app": _header(request, "x-vsn-client") or "unknown", **properties},
+            _clinic(request),
+        )
         session_id = _header(request, "x-posthog-session-id")
         if session_id:
             props["$session_id"] = session_id
@@ -203,6 +230,7 @@ def create_app(
     def _job_outcome(appointment_id: str, outcome: str, info: dict) -> None:
         client = job_clients.pop(appointment_id, {})
         distinct_id = client.pop("distinct_id", default_user_id)
+        clinic = client.pop("clinic", config.analytics_clinic or None)
         props = {
             "source_app": client.pop("source_app", "unknown"),
             "mode": "async",
@@ -213,7 +241,7 @@ def create_app(
             **client,
             **info,
         }
-        analytics.capture("soap_generated", distinct_id, props)
+        analytics.capture("soap_generated", distinct_id, _with_clinic(props, clinic))
         logger.info(
             "recording processed: mode=async outcome=%s %s",
             outcome,
@@ -268,6 +296,7 @@ def create_app(
         await worker.save_audio(appointment, audio_bytes)
         job_clients[appointment.id] = {
             "distinct_id": _header(request, "x-posthog-distinct-id") or default_user_id,
+            "clinic": _clinic(request),
             "source_app": _header(request, "x-vsn-client") or "unknown",
             "audio_bytes": len(audio_bytes),
             "audio_duration_ms": _audio_duration_ms(request),

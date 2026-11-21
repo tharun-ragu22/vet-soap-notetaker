@@ -19,10 +19,12 @@ DEFAULT_CONFIG = {
     "avimark_calibration": None,
     # Product analytics (PostHog), set in Settings. No key = analytics off. The
     # user id is who events belong to (falls back to desktop-<hostname>); the
-    # environment keeps test runs apart from a demo.
+    # environment keeps test runs apart from a demo; the clinic tags every event
+    # (and the backend's, via X-VSN-Clinic) so sites can be told apart.
     "analytics_key": "",
     "analytics_user_id": "",
     "analytics_environment": "dev",
+    "analytics_clinic": "",
     "analytics_host": "https://us.i.posthog.com",
 }
 
@@ -41,6 +43,7 @@ class Config:
     analytics_user_id: str = ""
     analytics_environment: str = "dev"
     analytics_host: str = "https://us.i.posthog.com"
+    analytics_clinic: str = ""
 
     @classmethod
     def load(cls, path):

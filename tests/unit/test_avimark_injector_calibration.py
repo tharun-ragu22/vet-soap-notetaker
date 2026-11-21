@@ -9,7 +9,12 @@ tests do.
 
 import pytest
 
-from vet_soap_notetaker.avimark_calibration import SOAP_SECTIONS, BoxCalibration, BoxControl
+from vet_soap_notetaker.avimark_calibration import (
+    SOAP_SECTIONS,
+    BoxCalibration,
+    BoxControl,
+    ControlMatch,
+)
 from vet_soap_notetaker.avimark_injector import AvimarkInjector
 
 
@@ -159,9 +164,12 @@ def test_paste_calibrated_sets_each_box_text_in_order(mocker):
     injector = AvimarkInjector()
     hwnds = {"subjective": 1, "objective": 2, "assessment": 3, "plan": 4}
     mocker.patch.object(
-        injector, "resolve_calibration_box", side_effect=lambda parent, box: _hwnd_for(box, hwnds)
+        injector,
+        "match_calibration_box",
+        side_effect=_as_match(lambda parent, box: _hwnd_for(box, hwnds)),
     )
     setter = mocker.patch.object(injector, "_set_control_text")
+    mocker.patch.object(injector, "_text_length", return_value=0)
 
     ok = injector._paste_calibrated(999, _fields(), _full_calibration())
 
@@ -185,7 +193,7 @@ def test_paste_calibrated_sets_distinct_controls_for_distinct_boxes(mocker):
         # plan collides onto the assessment control
         return 3 if box.control_id in (1002, 1003) else {1000: 1, 1001: 2}[box.control_id]
 
-    mocker.patch.object(injector, "resolve_calibration_box", side_effect=resolve)
+    mocker.patch.object(injector, "match_calibration_box", side_effect=_as_match(resolve))
     setter = mocker.patch.object(injector, "_set_control_text")
 
     ok = injector._paste_calibrated(999, _fields(), _full_calibration())
@@ -201,7 +209,7 @@ def test_paste_calibrated_bails_without_pasting_if_a_box_is_unresolved(mocker):
         # fail to resolve the assessment box; the others resolve to distinct hwnds
         return None if box.control_id == 1002 else 40 + box.control_id
 
-    mocker.patch.object(injector, "resolve_calibration_box", side_effect=resolve)
+    mocker.patch.object(injector, "match_calibration_box", side_effect=_as_match(resolve))
     setter = mocker.patch.object(injector, "_set_control_text")
 
     ok = injector._paste_calibrated(999, _fields(), _full_calibration())
@@ -209,6 +217,68 @@ def test_paste_calibrated_bails_without_pasting_if_a_box_is_unresolved(mocker):
     assert ok is False
     # nothing set -- we resolve everything first, then paste, so a miss aborts cleanly
     setter.assert_not_called()
+
+
+def _as_match(resolve, kind="id", class_name="Edit"):
+    # Wrap an hwnd-returning fake resolver as a match_calibration_box fake.
+    def match(parent, box):
+        hwnd = resolve(parent, box)
+        return None if hwnd is None else ControlMatch(hwnd, kind, class_name)
+
+    return match
+
+
+def test_match_calibration_box_reports_the_live_control_and_how_it_matched(mocker):
+    win32gui = mocker.patch("vet_soap_notetaker.avimark_injector.win32gui")
+    _fake_enum(win32gui, {20: (1002, "TDBRichEdit", (0, 200, 100, 300))})
+    box = BoxControl(control_id=1002, class_name="Edit", rel_x=0.0, rel_y=0.0)
+
+    match = AvimarkInjector().match_calibration_box(999, box)
+
+    assert match == ControlMatch(20, "id", "TDBRichEdit")
+
+
+def test_paste_calibrated_reports_each_box_without_its_text(mocker):
+    injector = AvimarkInjector()
+    hwnds = {"subjective": 1, "objective": 2, "assessment": 3, "plan": 4}
+    mocker.patch.object(
+        injector,
+        "match_calibration_box",
+        side_effect=_as_match(lambda parent, box: _hwnd_for(box, hwnds), "position", "TDBMemo"),
+    )
+    mocker.patch.object(injector, "_set_control_text")
+    mocker.patch.object(injector, "_text_length", side_effect=lambda hwnd: hwnd * 100)
+
+    injector._paste_calibrated(999, _fields(plan="Plan text!"), _full_calibration())
+
+    assert injector.last_box_report == {
+        "subjective": {"class": "TDBMemo", "match": "position", "chars_sent": 6, "chars_after": 100},
+        "objective": {"class": "TDBMemo", "match": "position", "chars_sent": 6, "chars_after": 200},
+        "assessment": {"class": "TDBMemo", "match": "position", "chars_sent": 6, "chars_after": 300},
+        "plan": {"class": "TDBMemo", "match": "position", "chars_sent": 10, "chars_after": 400},
+    }
+
+
+def test_an_aborted_calibrated_paste_leaves_no_box_report(mocker):
+    injector = AvimarkInjector()
+    injector.last_box_report = {"stale": {}}
+    mocker.patch.object(injector, "match_calibration_box", return_value=None)
+
+    injector._paste_calibrated(999, _fields(), _full_calibration())
+
+    assert injector.last_box_report is None
+
+
+def test_a_single_block_inject_clears_an_earlier_box_report(mocker):
+    mocker.patch.object(AvimarkInjector, "is_avimark_foreground", return_value=True)
+    mocker.patch.object(AvimarkInjector, "copy_to_clipboard")
+    mocker.patch.object(AvimarkInjector, "_send_ctrl_v")
+    injector = AvimarkInjector()
+    injector.last_box_report = {"stale": {}}
+
+    injector.inject("note")
+
+    assert injector.last_box_report is None
 
 
 def _hwnd_for(box, hwnds):

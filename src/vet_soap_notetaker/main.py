@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pyperclip
 
-from vet_soap_notetaker import autostart, dpi
+from vet_soap_notetaker import autostart, dpi, log_forwarding
 from vet_soap_notetaker.activation import ACTIVATION_FILE_NAME, ActivationWatcher
 from vet_soap_notetaker.analytics import DesktopAnalytics, NullAnalytics, injection_properties
 from vet_soap_notetaker.api_client import ApiClient, SoapNote
@@ -28,6 +28,7 @@ from vet_soap_notetaker.backend_supervisor import (
 )
 from vet_soap_notetaker.injection_poller import InjectionPoller
 from vet_soap_notetaker.loading_ui import LoadingWindow
+from vet_soap_notetaker.logger import LOGGER_NAME
 from vet_soap_notetaker.offline_queue import OfflineQueue
 from vet_soap_notetaker.paths import get_appdata_base_dir
 from vet_soap_notetaker.pipeline import Pipeline, format_soap_text
@@ -47,6 +48,17 @@ _GA_ROOT = 2
 logger = logging.getLogger("vet_soap_notetaker.main")
 
 CONFIG_PATH = Path.home() / ".vetscribe" / "config.json"
+
+# The loggers whose lines are forwarded (scrubbed) to PostHog: how injects,
+# calibration, recordings, the offline queue and the bundled backend went.
+DIAGNOSTIC_LOGGERS = (
+    "avimark_injector",
+    "calibration_ui",
+    "pipeline",
+    "offline_queue",
+    "backend_supervisor",
+    "api_client",
+)
 
 
 def _load_calibration(config):
@@ -99,6 +111,7 @@ def inject_note(
             fallback_flyout_shown=not injected and on_fallback is not None,
             exam_id=exam_id,
             request_id=request_id,
+            box_report=injector.last_box_report,
         ),
     )
     return injected
@@ -297,6 +310,14 @@ def build_app(config=None, tk_root=None, analytics=None):
     apply_window_icon(tk_root)
     # Metadata-only usage events (see analytics.py); off without a key.
     analytics = analytics if analytics is not None else DesktopAnalytics(config)
+    # A scrubbed copy of the diagnostic log lines goes to PostHog too (see
+    # log_forwarding.py), so a misbehaving inject at a clinic can be read remotely.
+    log_forwarding.install(
+        logging.getLogger(LOGGER_NAME),
+        log_forwarding.PostHogLogHandler(
+            analytics.capture, prefix=LOGGER_NAME, loggers=DIAGNOSTIC_LOGGERS
+        ),
+    )
 
     recorder = AudioRecorder()
     api_client = ApiClient(
@@ -665,6 +686,10 @@ def build_app(config=None, tk_root=None, analytics=None):
                     "duration_ms": duration_ms(),
                     "invalid_restarts": progress["invalid_restarts"],
                     "prompt_clicks": progress["prompt_clicks"],
+                    # The captured control classes (e.g. TDBRichEdit) -- names only.
+                    "box_classes": {
+                        section: box.class_name for section, box in calibration.boxes.items()
+                    },
                 },
             )
 

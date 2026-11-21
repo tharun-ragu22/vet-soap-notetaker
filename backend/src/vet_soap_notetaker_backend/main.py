@@ -1,4 +1,6 @@
+import io
 import logging
+import logging.handlers
 import os
 import sys
 from pathlib import Path
@@ -34,30 +36,83 @@ def _frozen_log_path(env=os.environ) -> Path:
     return base / "logs" / "backend.log"
 
 
-def _show_backend_logs() -> None:
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+# Same cap as the desktop's log: 5 MB x 3 backups.
+_LOG_MAX_BYTES = 5 * 1024 * 1024
+_LOG_BACKUP_COUNT = 3
+
+
+class _LineLogger(io.TextIOBase):
+    """Stands in for sys.stdout/stderr in the windowless exe: each line written
+    (a stray print, a traceback) goes through ``logger``, so it lands in the
+    rotating log rather than on a file handle that rotation would leave behind."""
+
+    def __init__(self, logger: logging.Logger, level: int):
+        self._logger = logger
+        self._level = level
+        self._pending = ""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        *lines, self._pending = (self._pending + text).split("\n")
+        for line in lines:
+            if line.strip():
+                self._logger.log(self._level, line)
+        return len(text)
+
+    def flush(self) -> None:
+        if self._pending.strip():
+            self._logger.log(self._level, self._pending)
+        self._pending = ""
+
+
+def _log_to_rotating_file(log_path: Path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        log_path, maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUP_COUNT, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logging.getLogger().addHandler(handler)
+    # uvicorn runs with log_config=None here, so its loggers propagate to the
+    # root handler; keep their INFO lines (startup, access log) as before.
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uvicorn_logger = logging.getLogger(name)
+        uvicorn_logger.handlers = []
+        uvicorn_logger.propagate = True
+    # A failed log write reports itself on stderr -- which is now the log, so
+    # it would recurse. With no console to report to, stay silent instead.
+    logging.raiseExceptions = False
+    stdio = logging.getLogger("vet_soap_notetaker_backend.stdio")
+    sys.stdout = _LineLogger(stdio, logging.INFO)
+    sys.stderr = _LineLogger(stdio, logging.ERROR)
+
+
+def _show_backend_logs(console: bool = True) -> None:
     # uvicorn configures only its own loggers, so the backend's INFO lines
     # (per-recording timings, provider retries) would otherwise be dropped.
     package_logger = logging.getLogger("vet_soap_notetaker_backend")
     package_logger.setLevel(logging.INFO)
-    if not package_logger.handlers:
+    if console and not package_logger.handlers:
         handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler.setFormatter(logging.Formatter(_LOG_FORMAT))
         package_logger.addHandler(handler)
 
 
 def run():
     # A PyInstaller windowless build (console=False) has no stdout/stderr, so
-    # uvicorn's default stream logging would fail. When frozen, redirect both to
-    # a log file under the shared data root -- this also gives us field logs to
-    # diagnose the appliance.
-    if getattr(sys, "frozen", False):
-        log_path = _frozen_log_path()
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        stream = open(log_path, "a", buffering=1, encoding="utf-8")
-        sys.stdout = stream
-        sys.stderr = stream
-    _show_backend_logs()
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8443")))
+    # uvicorn's default stream logging would fail. When frozen, everything goes
+    # to a rotating log file under the shared data root -- the field logs used
+    # to diagnose the appliance.
+    frozen = getattr(sys, "frozen", False)
+    run_options = {}
+    if frozen:
+        _log_to_rotating_file(_frozen_log_path())
+        run_options["log_config"] = None
+    _show_backend_logs(console=not frozen)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8443")), **run_options)
 
 
 if __name__ == "__main__":

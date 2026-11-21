@@ -21,6 +21,7 @@ class SettingsWindow(tk.Toplevel):
         self.analytics_key_var = tk.StringVar(value=config.analytics_key)
         self.analytics_user_id_var = tk.StringVar(value=config.analytics_user_id)
         self.analytics_environment_var = tk.StringVar(value=config.analytics_environment)
+        self.analytics_clinic_var = tk.StringVar(value=config.analytics_clinic)
 
         tk.Label(self, text=ui_strings.LABEL_API_ENDPOINT).pack()
         self.endpoint_entry = tk.Entry(self, textvariable=self.endpoint_var)
@@ -60,6 +61,10 @@ class SettingsWindow(tk.Toplevel):
         )
         self.analytics_environment_entry.pack()
 
+        tk.Label(self, text=ui_strings.LABEL_ANALYTICS_CLINIC).pack()
+        self.analytics_clinic_entry = tk.Entry(self, textvariable=self.analytics_clinic_var)
+        self.analytics_clinic_entry.pack()
+
         self.save_button = tk.Button(
             self, text=ui_strings.BUTTON_SAVE, command=self._on_save_clicked
         )
@@ -76,6 +81,7 @@ class SettingsWindow(tk.Toplevel):
             analytics_key=self.analytics_key_var.get().strip(),
             analytics_user_id=self.analytics_user_id_var.get().strip(),
             analytics_environment=self.analytics_environment_var.get().strip(),
+            analytics_clinic=self.analytics_clinic_var.get().strip(),
         )
         self.on_save(new_config)
         self.destroy()

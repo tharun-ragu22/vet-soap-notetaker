@@ -74,6 +74,10 @@ def test_a_recorded_note_reports_recording_length_wait_and_how_it_landed(tmp_pat
         "calibrated": False,
         "fallback_flyout_shown": False,
         "injected": True,
+        "box_classes": None,
+        "box_match": None,
+        "box_chars_sent": None,
+        "box_chars_after": None,
     }
     # The backend gets the recording length for its own timing analytics.
     assert api_client.generate_soap_note.call_args.kwargs == {"audio_duration_ms": 30000}

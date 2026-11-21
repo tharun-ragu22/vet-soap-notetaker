@@ -52,9 +52,13 @@ class PostHogAnalytics:
         self._shared = {"app": "backend", "environment": environment, "app_version": app_version}
 
     def capture(self, event: str, distinct_id: str, properties: dict) -> None:
+        # A ``clinic`` property is also sent as a PostHog group (for group
+        # analytics, where enabled); the property alone filters the same.
+        clinic = properties.get("clinic")
+        groups = {"groups": {"clinic": clinic}} if clinic else {}
         try:
             self._client.capture(
-                event, distinct_id=distinct_id, properties={**properties, **self._shared}
+                event, distinct_id=distinct_id, properties={**properties, **self._shared}, **groups
             )
         except Exception:
             logger.warning("Failed to record analytics event %s", event, exc_info=True)

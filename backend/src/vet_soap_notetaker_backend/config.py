@@ -42,6 +42,9 @@ class BackendConfig:
     posthog_host: str = "https://us.i.posthog.com"
     analytics_environment: str = "dev"
     analytics_user_id: str = ""
+    # The clinic events are tagged with when a client doesn't send its own
+    # (X-VSN-Clinic) -- e.g. the phone, which has no Settings field for it.
+    analytics_clinic: str = ""
 
     @classmethod
     def from_env(cls, dotenv_path: Path | str | None = None) -> "BackendConfig":
@@ -66,4 +69,5 @@ class BackendConfig:
             posthog_host=os.environ.get("VETSCRIBE_POSTHOG_HOST", "https://us.i.posthog.com"),
             analytics_environment=os.environ.get("VETSCRIBE_ANALYTICS_ENV", "dev"),
             analytics_user_id=os.environ.get("VETSCRIBE_ANALYTICS_USER_ID", ""),
+            analytics_clinic=os.environ.get("VETSCRIBE_ANALYTICS_CLINIC", ""),
         )

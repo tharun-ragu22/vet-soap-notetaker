@@ -102,6 +102,7 @@ LABEL_TARGET_WINDOW = "Target Window Matcher"
 LABEL_ANALYTICS_KEY = "Analytics Project Key (blank = off)"
 LABEL_ANALYTICS_USER_ID = "Analytics User ID"
 LABEL_ANALYTICS_ENVIRONMENT = "Analytics Environment"
+LABEL_ANALYTICS_CLINIC = "Clinic"
 LABEL_LAUNCH_ON_STARTUP = "Launch Vet Soap Notetaker on Windows Startup"
 
 # Delete-confirmation dialog

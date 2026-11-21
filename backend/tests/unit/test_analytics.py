@@ -79,6 +79,19 @@ def test_posthog_analytics_adds_the_shared_properties_to_every_event():
     }
 
 
+def test_posthog_analytics_sends_a_clinic_as_a_group_too():
+    client = FakeClient()
+    tracker = PostHogAnalytics(client=client, environment="demo", app_version="1")
+
+    tracker.capture("note_saved", "demo-vet-1", {"clinic": "Maple Vet"})
+    tracker.capture("note_saved", "demo-vet-1", {})
+
+    (_, with_clinic), (_, without) = client.captured
+    assert with_clinic["properties"]["clinic"] == "Maple Vet"
+    assert with_clinic["groups"] == {"clinic": "Maple Vet"}
+    assert "groups" not in without
+
+
 def test_posthog_analytics_never_raises_when_the_client_fails():
     tracker = PostHogAnalytics(client=FakeClient(fail=True), environment="demo", app_version="1")
 

@@ -109,6 +109,61 @@ def test_events_fall_back_to_a_backend_id_when_nothing_is_configured(setup):
     assert tracker.only("soap_generated")["distinct_id"].startswith("backend-")
 
 
+def test_events_name_the_clinic_from_the_client_header(setup):
+    client, tracker, _ = setup(analytics_clinic="Env Clinic")
+
+    client.post("/api/soap", content=b"RIFF", headers={**CLIENT_HEADERS, "X-VSN-Clinic": "Maple Vet"})
+
+    assert tracker.only("soap_generated")["properties"]["clinic"] == "Maple Vet"
+
+
+def test_events_fall_back_to_the_configured_clinic(setup):
+    client, tracker, _ = setup(analytics_clinic="Env Clinic")
+
+    client.post("/api/soap", content=b"RIFF", headers=CLIENT_HEADERS)
+
+    assert tracker.only("soap_generated")["properties"]["clinic"] == "Env Clinic"
+
+
+def test_events_carry_no_clinic_when_none_is_known(setup):
+    client, tracker, _ = setup()
+
+    client.post("/api/soap", content=b"RIFF", headers=CLIENT_HEADERS)
+
+    assert "clinic" not in tracker.only("soap_generated")["properties"]
+
+
+def test_async_uploads_keep_the_clients_clinic(setup):
+    client, tracker, _ = setup()
+    with client:
+        client.post(
+            "/api/appointments",
+            content=b"m4a",
+            headers={**CLIENT_HEADERS, "Prefer": "respond-async", "X-VSN-Clinic": "Maple Vet"},
+        )
+        client.portal.call(client.app.state.worker.drain)
+
+    assert tracker.only("soap_generated")["properties"]["clinic"] == "Maple Vet"
+
+
+def test_diagnostic_log_lines_are_forwarded_with_the_clinic(setup):
+    client, tracker, _ = setup(
+        analytics_clinic="Env Clinic",
+        pipeline=FakePipeline(note_error=NoteParsingError("model said ZZ_SECRET")),
+    )
+
+    client.post("/api/soap/regenerate", json={"transcript": "x"}, headers=CLIENT_HEADERS)
+
+    [line] = [e for e in tracker.named("diagnostic_log") if e["properties"]["logger"] == "app"]
+    assert line["distinct_id"] == "clinic-default"
+    assert line["properties"] == {
+        "logger": "app",
+        "level": "WARNING",
+        "message": "provider call failed: NoteParsingError: NoteParsingError",
+        "clinic": "Env Clinic",
+    }
+
+
 def test_overlong_client_ids_are_ignored(setup):
     client, tracker, _ = setup()
 
@@ -469,6 +524,8 @@ def test_no_event_ever_carries_patient_data(setup):
     client.delete(f"/api/exams/{exam['id']}")
 
     assert len(tracker.events) >= 7
+    # Forwarded log lines too: the failed generate logs its error.
+    assert tracker.named("diagnostic_log")
     assert SENTINEL not in json.dumps(tracker.events)
 
 

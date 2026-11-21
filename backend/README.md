@@ -160,7 +160,14 @@ PostHog; leave it blank and nothing is sent (the default, and what tests/CI use)
 `VETSCRIBE_POSTHOG_HOST` defaults to US Cloud, `VETSCRIBE_ANALYTICS_ENV` (default `dev`) tags
 every event so a test run can be told apart from a demo, and `VETSCRIBE_ANALYTICS_USER_ID` is
 who events are attributed to when the client doesn't send its own id (falls back to
-`backend-<hostname>`).
+`backend-<hostname>`). `VETSCRIBE_ANALYTICS_CLINIC` tags events with the clinic (as a `clinic`
+property and a PostHog `clinic` group) when the client doesn't send its own `X-VSN-Clinic` header
+-- the desktop sends its Settings "Clinic"; the phone sends none.
+
+A scrubbed copy of the `app`, `jobs` and `http_retry` log lines (INFO and up) is also sent as
+`diagnostic_log` events (`logger`, `level`, `message`): exception arguments become their type
+name, paths their file name, and tracebacks are dropped (`log_forwarding.py`). The frozen exe's
+`backend.log` rotates at 5 MB × 3.
 
 Events are **metadata only** -- ids, durations, counts, which boxes changed and by how much --
 never audio, transcripts, note text or patient names. Errors are sent as the exception *type*

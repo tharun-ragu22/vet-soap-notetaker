@@ -14,6 +14,7 @@ from vet_soap_notetaker.avimark_calibration import (
     BoxControl,
     choose_control,
     descriptor_from_capture,
+    match_control,
 )
 
 
@@ -181,6 +182,47 @@ def test_choose_control_falls_back_to_nearest_center_when_none_contains_point():
 def test_choose_control_returns_none_when_no_candidates():
     box = BoxControl(control_id=1, class_name="Edit", rel_x=0.5, rel_y=0.5)
     assert choose_control([], box, PARENT) is None
+
+
+# --- match_control: which rule picked the box (for injection diagnostics) -----
+
+
+def test_match_control_reports_a_unique_id_match():
+    box = BoxControl(control_id=1007, class_name="Edit", rel_x=0.9, rel_y=0.9)
+    candidates = [_candidate(10, 1007, "TDBRichEdit", (0, 0, 50, 50))]
+
+    match = match_control(candidates, box, PARENT)
+
+    assert (match.hwnd, match.kind, match.class_name) == (10, "id", "TDBRichEdit")
+
+
+def test_match_control_reports_an_id_tie_broken_by_class():
+    box = BoxControl(control_id=1007, class_name="RichEdit20W", rel_x=0.1, rel_y=0.1)
+    candidates = [
+        _candidate(10, 1007, "Edit", (0, 0, 100, 100)),
+        _candidate(20, 1007, "RichEdit20W", (50, 50, 150, 150)),
+    ]
+
+    match = match_control(candidates, box, PARENT)
+
+    assert (match.hwnd, match.kind, match.class_name) == (20, "class", "RichEdit20W")
+
+
+def test_match_control_reports_a_position_fallback():
+    box = BoxControl(control_id=999, class_name="Edit", rel_x=0.3, rel_y=0.3)
+    candidates = [
+        _candidate(10, 111, "Edit", (0, 0, 400, 400)),
+        _candidate(20, 222, "Edit", (500, 500, 900, 900)),
+    ]
+
+    match = match_control(candidates, box, PARENT)
+
+    assert (match.hwnd, match.kind) == (10, "position")
+
+
+def test_match_control_returns_none_when_no_candidates():
+    box = BoxControl(control_id=1, class_name="Edit", rel_x=0.5, rel_y=0.5)
+    assert match_control([], box, PARENT) is None
 
 
 # --- CalibrationSession ------------------------------------------------------

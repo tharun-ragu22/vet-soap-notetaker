@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from dataclasses import replace
@@ -1306,6 +1307,10 @@ def test_a_remote_inject_reports_the_request_and_how_it_landed(mocker):
         "calibrated": False,
         "fallback_flyout_shown": False,
         "injected": True,
+        "box_classes": None,
+        "box_match": None,
+        "box_chars_sent": None,
+        "box_chars_after": None,
     }
 
 
@@ -1332,6 +1337,31 @@ def test_a_calibrated_remote_inject_is_reported_as_calibrated(mocker):
     props = tracker.only("injection_completed")["properties"]
     assert props["calibrated"] is True
     assert props["result"] == "per_box"
+
+
+def test_a_calibrated_inject_reports_how_each_box_was_found_and_filled(mocker):
+    mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, tracker = _tracked_app(mocker, _config(avimark_calibration=_calibration_dict()))
+    injector = tray_app.pipeline.injector
+    report = {
+        section: {"class": "TDBRichEdit", "match": "id", "chars_sent": 10 + i, "chars_after": i}
+        for i, section in enumerate(("subjective", "objective", "assessment", "plan"))
+    }
+
+    def fake(*args, **kwargs):
+        injector.last_result = "per_box"
+        injector.last_box_report = report
+        return True
+
+    mocker.patch.object(injector, "focus_and_inject_fields_calibrated", side_effect=fake)
+
+    tray_app.injection_poller.on_injection(_injection_request())
+
+    props = tracker.only("injection_completed")["properties"]
+    assert props["box_classes"] == {s: "TDBRichEdit" for s in report}
+    assert props["box_match"] == {s: "id" for s in report}
+    assert props["box_chars_sent"] == {"subjective": 10, "objective": 11, "assessment": 12, "plan": 13}
+    assert props["box_chars_after"] == {"subjective": 0, "objective": 1, "assessment": 2, "plan": 3}
 
 
 def test_history_open_inject_and_copy_are_reported(mocker, tmp_path):
@@ -1452,6 +1482,9 @@ def test_a_completed_calibration_reports_restarts_and_prompt_clicks(mocker, tmp_
     assert props["invalid_restarts"] == 1
     assert props["prompt_clicks"] == 1
     assert isinstance(props["duration_ms"], int)
+    assert props["box_classes"] == {
+        "subjective": "Edit", "objective": "Edit", "assessment": "Edit", "plan": "Edit",
+    }
     assert tracker.named("calibration_abandoned") == []
 
 
@@ -1538,7 +1571,22 @@ def test_no_desktop_event_ever_carries_patient_data(mocker, tmp_path):
     )
 
     assert len(tracker.events) >= 15
+    # Forwarded log lines are covered too (the failing generate logs its error).
+    assert tracker.named("diagnostic_log")
     assert sentinel not in repr(tracker.events)
+
+
+def test_diagnostic_log_lines_are_forwarded_to_analytics_once(mocker):
+    tracker = RecordingAnalytics()
+    build_app(config=_config(), tk_root=MagicMock(), analytics=RecordingAnalytics())
+    build_app(config=_config(), tk_root=MagicMock(), analytics=tracker)
+
+    logging.getLogger("vet_soap_notetaker.avimark_injector").warning("box %r unresolved", "plan")
+    logging.getLogger("vet_soap_notetaker.history_ui").warning("not a diagnostic logger")
+
+    assert [e["properties"] for e in tracker.named("diagnostic_log")] == [
+        {"logger": "avimark_injector", "level": "WARNING", "message": "box 'plan' unresolved"}
+    ]
 
 
 def test_every_injection_completed_has_the_same_properties_whatever_its_source(mocker):
@@ -1572,6 +1620,7 @@ def test_every_injection_completed_has_the_same_properties_whatever_its_source(m
     expected_keys = {
         "source", "exam_id", "request_id", "result", "calibrated",
         "fallback_flyout_shown", "injected",
+        "box_classes", "box_match", "box_chars_sent", "box_chars_after",
     }
     for event in events:
         assert set(event["properties"]) == expected_keys, event

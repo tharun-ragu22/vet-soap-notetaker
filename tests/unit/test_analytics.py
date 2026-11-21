@@ -13,6 +13,7 @@ class FakeClient:
         self.host = host
         self.fail = fail
         self.captured = []
+        self.groups_identified = []
         self.shut_down = False
 
     def capture(self, event, **kwargs):
@@ -29,6 +30,11 @@ class FakeClient:
         if self.fail:
             raise RuntimeError("network down")
         self.captured.append(("$exception", {"exc": exc, **kwargs}))
+
+    def group_identify(self, group_type, group_key, **kwargs):
+        if self.fail:
+            raise RuntimeError("network down")
+        self.groups_identified.append((group_type, group_key))
 
 
 class Factory:
@@ -98,6 +104,56 @@ def test_request_headers_identify_the_user_and_the_desktop_client():
         "X-POSTHOG-DISTINCT-ID": "test-tharun",
         "X-VSN-Client": "desktop",
     }
+
+
+def test_a_clinic_tags_every_event_as_a_property_and_a_group():
+    factory = Factory()
+    tracker = DesktopAnalytics(make_config(analytics_clinic="Maple Vet"), client_factory=factory)
+
+    tracker.capture("recording_started")
+    tracker.capture_exception(ValueError("x"))
+
+    for _, kwargs in factory.clients[0].captured:
+        assert kwargs["properties"]["clinic"] == "Maple Vet"
+        assert kwargs["groups"] == {"clinic": "Maple Vet"}
+
+
+def test_without_a_clinic_events_carry_no_clinic_or_group():
+    factory = Factory()
+    tracker = DesktopAnalytics(make_config(), client_factory=factory)
+
+    tracker.capture("recording_started")
+
+    _, kwargs = factory.clients[0].captured[0]
+    assert "clinic" not in kwargs["properties"]
+    assert "groups" not in kwargs
+    assert factory.clients[0].groups_identified == []
+
+
+def test_each_clinic_is_identified_as_a_group_once():
+    factory = Factory()
+    tracker = DesktopAnalytics(make_config(analytics_clinic="Maple Vet"), client_factory=factory)
+
+    tracker.capture("a")
+    tracker.capture("b")
+    tracker.reconfigure(make_config(analytics_clinic="Oak Vet"))
+    tracker.capture("c")
+
+    assert factory.clients[0].groups_identified == [("clinic", "Maple Vet"), ("clinic", "Oak Vet")]
+
+
+def test_group_identify_failures_never_escape():
+    tracker = DesktopAnalytics(
+        make_config(analytics_clinic="Maple Vet"), client_factory=Factory(fail=True)
+    )
+    tracker.capture("recording_started")
+
+
+def test_request_headers_name_the_clinic_when_set():
+    tracker = DesktopAnalytics(
+        make_config(analytics_key="", analytics_clinic="Maple Vet"), client_factory=Factory()
+    )
+    assert tracker.request_headers()["X-VSN-Clinic"] == "Maple Vet"
 
 
 def test_reconfigure_switches_user_and_environment_live():

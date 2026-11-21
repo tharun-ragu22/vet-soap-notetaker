@@ -37,3 +37,43 @@ def test_async_uploads_wait_next_to_the_exams_file():
 
     assert main._INCOMING_AUDIO_DIR == main._EXAMS_PATH.parent / "incoming"
     assert main.app.state.worker.audio_dir == main._INCOMING_AUDIO_DIR
+
+
+def test_a_frozen_run_rotates_the_backend_log(monkeypatch, tmp_path):
+    # The windowless exe has no console: everything (our lines, uvicorn's, and
+    # anything printed) goes to backend.log, which must rotate, not grow forever.
+    import logging
+    import logging.handlers
+    import sys
+
+    from vet_soap_notetaker_backend import main
+
+    run_kwargs = {}
+    monkeypatch.setattr(main.uvicorn, "run", lambda *a, **k: run_kwargs.update(k))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "stdout", sys.stdout)
+    monkeypatch.setattr(sys, "stderr", sys.stderr)
+    monkeypatch.setattr(logging, "raiseExceptions", True)
+    monkeypatch.setattr(main, "_frozen_log_path", lambda: tmp_path / "logs" / "backend.log")
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(logging.getLogger("vet_soap_notetaker_backend"), "handlers", [])
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        # As uvicorn's own default config leaves them (another test may apply it).
+        monkeypatch.setattr(logging.getLogger(name), "propagate", False)
+        monkeypatch.setattr(logging.getLogger(name), "handlers", [])
+
+    main.run()
+    print("stray print")
+    logging.getLogger("uvicorn.error").warning("uvicorn says hi")
+    for handler in root.handlers:
+        handler.flush()
+
+    [handler] = [h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
+    assert (handler.maxBytes, handler.backupCount) == (5 * 1024 * 1024, 3)
+    assert run_kwargs["log_config"] is None
+    text = (tmp_path / "logs" / "backend.log").read_text()
+    assert "stray print" in text
+    assert "uvicorn says hi" in text
+    for h in list(root.handlers):
+        h.close()

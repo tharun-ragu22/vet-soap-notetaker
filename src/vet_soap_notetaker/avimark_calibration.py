@@ -19,6 +19,7 @@ can be exercised against the mock window.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 # The four SOAP sections, in the order they're pasted down the form. Matches the
 # keys used on the backend exam / SoapNote.
@@ -193,28 +194,54 @@ def _closest_by_position(candidates, box: BoxControl, parent_rect):
 
     containing = [c for c in candidates if _contains(c["rect"], target_x, target_y)]
     if containing:
-        return min(containing, key=lambda c: _area(c["rect"]))["hwnd"]
+        return min(containing, key=lambda c: _area(c["rect"]))
 
     def _distance(c):
         cx, cy = _center(c["rect"])
         return (cx - target_x) ** 2 + (cy - target_y) ** 2
 
-    return min(candidates, key=_distance)["hwnd"]
+    return min(candidates, key=_distance)
 
 
-def choose_control(candidates, box: BoxControl, parent_rect):
-    """Resolve a calibrated ``box`` to one of the live ``candidates``' hwnds.
+class ControlMatch(NamedTuple):
+    """The live control a calibrated box resolved to, and how: ``kind`` is "id"
+    (a unique control-id match), "class" (an id tie broken by class, then
+    position) or "position" (no usable id). ``class_name`` is the *live*
+    control's class -- for injection diagnostics."""
+
+    hwnd: int
+    kind: str
+    class_name: str
+
+
+def _as_match(candidate, kind):
+    if candidate is None:
+        return None
+    return ControlMatch(candidate["hwnd"], kind, candidate["class_name"])
+
+
+def match_control(candidates, box: BoxControl, parent_rect) -> ControlMatch | None:
+    """Resolve a calibrated ``box`` to one of the live ``candidates``.
 
     ``candidates`` is a list of ``{"hwnd", "control_id", "class_name", "rect"}``
-    (rect is the control's screen rect). Returns the chosen hwnd, or ``None`` if
-    there are no candidates at all. Strategy: a non-zero control id is the stable
-    key, tie-broken by class then position; otherwise fall back to position.
+    (rect is the control's screen rect). Returns ``None`` if there are no
+    candidates at all. Strategy: a non-zero control id is the stable key,
+    tie-broken by class then position; otherwise fall back to position.
     """
     if box.control_id:
         id_matches = [c for c in candidates if c["control_id"] == box.control_id]
         if len(id_matches) == 1:
-            return id_matches[0]["hwnd"]
+            return _as_match(id_matches[0], "id")
         if id_matches:
             class_matches = [c for c in id_matches if c["class_name"] == box.class_name]
-            return _closest_by_position(class_matches or id_matches, box, parent_rect)
-    return _closest_by_position(candidates, box, parent_rect)
+            return _as_match(
+                _closest_by_position(class_matches or id_matches, box, parent_rect), "class"
+            )
+    return _as_match(_closest_by_position(candidates, box, parent_rect), "position")
+
+
+def choose_control(candidates, box: BoxControl, parent_rect):
+    """The hwnd ``match_control`` picks, or ``None``."""
+    match = match_control(candidates, box, parent_rect)
+    return None if match is None else match.hwnd
+

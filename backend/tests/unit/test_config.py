@@ -92,6 +92,7 @@ def test_from_env_reads_the_analytics_settings(monkeypatch):
     monkeypatch.setenv("VETSCRIBE_POSTHOG_HOST", "https://eu.i.posthog.com")
     monkeypatch.setenv("VETSCRIBE_ANALYTICS_ENV", "demo")
     monkeypatch.setenv("VETSCRIBE_ANALYTICS_USER_ID", "demo-vet-1")
+    monkeypatch.setenv("VETSCRIBE_ANALYTICS_CLINIC", "Maple Vet")
 
     config = BackendConfig.from_env()
 
@@ -99,6 +100,7 @@ def test_from_env_reads_the_analytics_settings(monkeypatch):
     assert config.posthog_host == "https://eu.i.posthog.com"
     assert config.analytics_environment == "demo"
     assert config.analytics_user_id == "demo-vet-1"
+    assert config.analytics_clinic == "Maple Vet"
 
 
 def test_from_env_leaves_analytics_off_by_default(monkeypatch, tmp_path):

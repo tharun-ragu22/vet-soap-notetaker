@@ -6,7 +6,7 @@ import win32con
 import win32gui
 
 from vet_soap_notetaker import dpi
-from vet_soap_notetaker.avimark_calibration import choose_control, descriptor_from_capture
+from vet_soap_notetaker.avimark_calibration import descriptor_from_capture, match_control
 
 AVIMARK_TITLE_MARKER = "AVImark"
 
@@ -17,6 +17,7 @@ _GA_ROOT = getattr(win32con, "GA_ROOT", 2)
 # (fixed Win32 constants; fall back to their literal values if win32con lacks them).
 _EM_SETSEL = getattr(win32con, "EM_SETSEL", 0x00B1)
 _EM_REPLACESEL = getattr(win32con, "EM_REPLACESEL", 0x00C2)
+_WM_GETTEXTLENGTH = getattr(win32con, "WM_GETTEXTLENGTH", 0x000E)
 
 logger = logging.getLogger("vet_soap_notetaker.avimark_injector")
 
@@ -33,6 +34,10 @@ class AvimarkInjector:
         # resolved), or "refused_no_window" / "refused_ambiguous" /
         # "refused_not_foreground". None before the first inject.
         self.last_result = None
+        # For a per-box inject, how each box was found and filled -- section ->
+        # {"class", "match", "chars_sent", "chars_after"}, lengths only, never
+        # text. None for any other inject, so analytics never report stale boxes.
+        self.last_box_report = None
 
     def is_avimark_foreground(self) -> bool:
         hwnd = win32gui.GetForegroundWindow()
@@ -49,6 +54,7 @@ class AvimarkInjector:
             win32clipboard.CloseClipboard()
 
     def inject(self, text: str) -> bool:
+        self.last_box_report = None
         if not self.is_avimark_foreground():
             logger.warning("injection skipped: AVImark is not the foreground window")
             self.last_result = "refused_not_foreground"
@@ -216,6 +222,7 @@ class AvimarkInjector:
         wrong application. Whatever field the caret was last in inside AVImark is
         where the paste goes; we can't target a specific field.
         """
+        self.last_box_report = None
         hwnd = self._resolve_and_focus_target(text)
         if hwnd is None:
             return False
@@ -295,14 +302,23 @@ class AvimarkInjector:
         )
         return results
 
-    def resolve_calibration_box(self, parent_hwnd, box):
-        """Resolve a calibrated ``box`` back to a live control hwnd under the window."""
+    def match_calibration_box(self, parent_hwnd, box):
+        """Resolve a calibrated ``box`` to a live control under the window, as a
+        ``ControlMatch`` (hwnd, how it matched, live class), or None."""
         # Same physical-pixel context as capture, so the child rects and the parent
         # rect are read in the one coordinate space the calibration was taken in.
         with dpi.physical_pixels():
             candidates = self._enumerate_candidates(parent_hwnd)
             parent_rect = win32gui.GetWindowRect(parent_hwnd)
-        return choose_control(candidates, box, parent_rect)
+        return match_control(candidates, box, parent_rect)
+
+    def resolve_calibration_box(self, parent_hwnd, box):
+        """Resolve a calibrated ``box`` back to a live control hwnd under the window."""
+        match = self.match_calibration_box(parent_hwnd, box)
+        return None if match is None else match.hwnd
+
+    def _text_length(self, hwnd) -> int:
+        return win32gui.SendMessage(hwnd, _WM_GETTEXTLENGTH, 0, 0)
 
     def _set_control_text(self, hwnd, text):
         """Insert ``text`` straight into one EDIT/RichEdit control.
@@ -325,6 +341,7 @@ class AvimarkInjector:
         writing anything -- so the caller can fall back to a safe single-block paste
         rather than scatter a half-placed note or let one box overwrite another.
         """
+        self.last_box_report = None
         resolved = []
         seen = {}
         for section, text in section_fields:
@@ -332,7 +349,8 @@ class AvimarkInjector:
             if box is None:
                 logger.warning("calibrated paste aborted: no calibration for %r", section)
                 return False
-            hwnd = self.resolve_calibration_box(parent_hwnd, box)
+            match = self.match_calibration_box(parent_hwnd, box)
+            hwnd = None if match is None else match.hwnd
             logger.info(
                 "resolve %r: stored control_id=%s class=%r -> hwnd=%s",
                 section,
@@ -353,11 +371,30 @@ class AvimarkInjector:
                 )
                 return False
             seen[hwnd] = section
-            resolved.append((section, hwnd, text))
+            resolved.append((section, match, text))
 
-        for section, hwnd, text in resolved:
-            self._set_control_text(hwnd, text)
-            logger.debug("calibrated paste: %d chars into %r box (control %s)", len(text), section, hwnd)
+        report = {}
+        for section, match, text in resolved:
+            self._set_control_text(match.hwnd, text)
+            # Lengths only (never the text): shows whether each box took the paste.
+            chars_after = self._text_length(match.hwnd)
+            logger.info(
+                "calibrated paste: %d chars into %r box (control %s, %s match, class %r), "
+                "box now holds %s chars",
+                len(text),
+                section,
+                match.hwnd,
+                match.kind,
+                match.class_name,
+                chars_after,
+            )
+            report[section] = {
+                "class": match.class_name,
+                "match": match.kind,
+                "chars_sent": len(text),
+                "chars_after": chars_after,
+            }
+        self.last_box_report = report
         logger.info("SOAP note injected into AVImark across %d calibrated boxes", len(resolved))
         return True
 
@@ -389,6 +426,7 @@ class AvimarkInjector:
         fallback uses a global Ctrl+V, which *does* need AVImark foreground, so it
         refuses (leaving the note on the clipboard) if it isn't.
         """
+        self.last_box_report = None
         hwnd = self._resolve_target(fallback_text)
         if hwnd is None:
             return False

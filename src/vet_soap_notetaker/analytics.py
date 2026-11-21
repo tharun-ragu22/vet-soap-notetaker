@@ -68,10 +68,19 @@ def injection_properties(
     fallback_flyout_shown=False,
     exam_id=None,
     request_id=None,
+    box_report=None,
 ) -> dict:
     """Properties for an ``injection_completed`` event -- the same keys for every
     source (hotkey / flyout / history / remote), so dashboards never have to
-    special-case one. ``result`` is ``AvimarkInjector.last_result``."""
+    special-case one. ``result`` is ``AvimarkInjector.last_result``;
+    ``box_report`` is its ``last_box_report`` (per-box injects only), flattened
+    to one section -> value dict per field. Lengths and class names, never text."""
+
+    def per_box(field):
+        if not box_report:
+            return None
+        return {section: box.get(field) for section, box in box_report.items()}
+
     return {
         "source": source,
         "exam_id": exam_id,
@@ -80,6 +89,10 @@ def injection_properties(
         "calibrated": calibrated,
         "fallback_flyout_shown": fallback_flyout_shown,
         "injected": injected,
+        "box_classes": per_box("class"),
+        "box_match": per_box("match"),
+        "box_chars_sent": per_box("chars_sent"),
+        "box_chars_after": per_box("chars_after"),
     }
 
 
@@ -104,6 +117,8 @@ class DesktopAnalytics:
         self._host = ""
         self.distinct_id = ""
         self.environment = ""
+        self.clinic = ""
+        self._identified_clinics = set()
         self._version = _app_version()
         self.reconfigure(config)
 
@@ -115,11 +130,13 @@ class DesktopAnalytics:
         # Who and where can change freely; only a new key/host needs a new client.
         self.distinct_id = config.analytics_user_id or f"desktop-{socket.gethostname()}"
         self.environment = config.analytics_environment
+        self.clinic = config.analytics_clinic
         if (config.analytics_key, config.analytics_host) == (self._key, self._host):
             return
         self.shutdown()
         self._client = None
         self._key, self._host = config.analytics_key, config.analytics_host
+        self._identified_clinics = set()  # a new client (project) identifies afresh
         if not self._key:
             return
         try:
@@ -130,15 +147,39 @@ class DesktopAnalytics:
     def request_headers(self) -> dict:
         # Sent to the backend on every request (even with analytics off here --
         # the backend may have its own key), so its events land on this user.
-        return {"X-POSTHOG-DISTINCT-ID": self.distinct_id, "X-VSN-Client": "desktop"}
+        headers = {"X-POSTHOG-DISTINCT-ID": self.distinct_id, "X-VSN-Client": "desktop"}
+        if self.clinic:
+            headers["X-VSN-Clinic"] = self.clinic
+        return headers
+
+    def _shared(self) -> dict:
+        shared = {"app": "desktop", "environment": self.environment, "app_version": self._version}
+        if self.clinic:
+            shared["clinic"] = self.clinic
+        return shared
+
+    def _group_kwargs(self) -> dict:
+        # The clinic is also a PostHog group (for group analytics, where enabled);
+        # the plain ``clinic`` property filters the same without it.
+        if not self.clinic:
+            return {}
+        if self.clinic not in self._identified_clinics:
+            self._identified_clinics.add(self.clinic)
+            try:
+                self._client.group_identify("clinic", self.clinic)
+            except Exception:
+                logger.warning("Failed to identify the clinic group", exc_info=True)
+        return {"groups": {"clinic": self.clinic}}
 
     def capture(self, event: str, properties: dict | None = None) -> None:
         if self._client is None:
             return
-        shared = {"app": "desktop", "environment": self.environment, "app_version": self._version}
         try:
             self._client.capture(
-                event, distinct_id=self.distinct_id, properties={**(properties or {}), **shared}
+                event,
+                distinct_id=self.distinct_id,
+                properties={**(properties or {}), **self._shared()},
+                **self._group_kwargs(),
             )
         except Exception:
             logger.warning("Failed to record analytics event %s", event, exc_info=True)
@@ -148,10 +189,10 @@ class DesktopAnalytics:
         # message is scrubbed by scrub_exception_messages before sending).
         if self._client is None:
             return
-        shared = {"app": "desktop", "environment": self.environment, "app_version": self._version}
         try:
             self._client.capture_exception(
-                exc, distinct_id=self.distinct_id, properties=shared
+                exc, distinct_id=self.distinct_id, properties=self._shared(),
+                **self._group_kwargs(),
             )
         except Exception:
             logger.warning("Failed to record a crash report", exc_info=True)
