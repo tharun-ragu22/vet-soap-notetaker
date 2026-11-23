@@ -60,9 +60,29 @@ describe('mergeRegenerated', () => {
   });
 
   it("keeps a name the vet typed when the regenerated note's name doesn't match it", () => {
-    const merged = mergeRegenerated([draft('e1', 'Luna')], [regenerated('Patient 1')]);
+    const merged = mergeRegenerated([draft('e1', 'Luna')], [regenerated('Patient 1')], new Set([0]));
 
     expect(merged).toEqual([{ id: 'e1', patientName: 'Luna', ...fields('new') }]);
+  });
+
+  it('takes the regenerated name when the vet renamed the pet in the transcript', () => {
+    // The transcript now says Daisy where it said Bella: the stored name came
+    // from the AI, not the vet, so the regenerate's name replaces it.
+    const merged = mergeRegenerated([draft('e1', 'Bella')], [regenerated('Daisy')]);
+
+    expect(merged).toEqual([{ id: 'e1', patientName: 'Daisy', ...fields('new') }]);
+  });
+
+  it('keeps the stored name when the regenerate has none', () => {
+    const merged = mergeRegenerated([draft('e1', 'Bella')], [regenerated(undefined)]);
+
+    expect(merged[0].patientName).toBe('Bella');
+  });
+
+  it('keeps the spelling of a name matched ignoring case', () => {
+    const merged = mergeRegenerated([draft('e1', 'BELLA')], [regenerated('Bella')]);
+
+    expect(merged[0].patientName).toBe('BELLA');
   });
 
   it('does not pair leftovers when there are several, adding and keeping them instead', () => {

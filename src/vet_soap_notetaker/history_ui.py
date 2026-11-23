@@ -94,6 +94,8 @@ class _AnimalTab:
         self.inject_button = None
         self.copy_button = None
         self.remove_button = None
+        # The vet typed this name (a regenerate keeps it rather than renaming).
+        self.name_typed = False
 
 
 class HistoryWindow(tk.Toplevel):
@@ -148,6 +150,10 @@ class HistoryWindow(tk.Toplevel):
         self._shown = None  # the appointment the detail pane was drawn from
         self._dirty = False  # names, a removed animal or a regenerate unsaved
         self._pending_select = None
+        # Exams whose name the vet typed while this appointment has been open:
+        # kept through saves (which redraw the tabs), forgotten on opening
+        # another appointment.
+        self._typed_name_ids = set()
         self._clear_detail_refs()
 
         # Left: search box and one row per appointment, newest first.
@@ -260,6 +266,8 @@ class HistoryWindow(tk.Toplevel):
     def _render(self, appointment, transcript=None, drafts=None, tab_index=0, dirty=False):
         """Draw an appointment. ``transcript``/``drafts`` redraw it with unsaved
         changes (a regenerate, a removed animal) instead of what's stored."""
+        if self._selected_id() != appointment.id:
+            self._typed_name_ids = set()
         self._clear_detail()
         self._shown = appointment
         if appointment.status in _NO_TRANSCRIPT_MESSAGES:
@@ -360,6 +368,7 @@ class HistoryWindow(tk.Toplevel):
         frame = tk.Frame(self.notebook)
         name_var = tk.StringVar(self, value=draft.patient_name or "")
         tab = _AnimalTab(frame, draft.id, name_var)
+        tab.name_typed = draft.id is not None and draft.id in self._typed_name_ids
 
         name_row = tk.Frame(frame)
         name_row.pack(fill="x")
@@ -397,6 +406,9 @@ class HistoryWindow(tk.Toplevel):
 
     def _on_name_changed(self, tab):
         self._dirty = True
+        tab.name_typed = True
+        if tab.exam_id is not None:
+            self._typed_name_ids.add(tab.exam_id)
         try:
             number = self.tabs.index(tab) + 1
             self.notebook.tab(tab.frame, text=display_name(tab.name_var.get(), number))
@@ -469,6 +481,7 @@ class HistoryWindow(tk.Toplevel):
         """Save the whole appointment as it is on screen. Returns the saved
         Appointment, or None when it wasn't saved (the edits stay on screen)."""
         appointment = self._shown
+        typed = [i for i, tab in enumerate(self.tabs) if tab.name_typed]
         try:
             saved = self.on_save(appointment.id, self._screen_transcript(), self._screen_drafts())
         except ApiClientError as exc:
@@ -484,6 +497,8 @@ class HistoryWindow(tk.Toplevel):
             self.save_status_label.config(text=ui_strings.SAVE_OFFLINE_TITLE)
             return None
         tab_index = self._current_tab_index()
+        # A new animal's typed name is remembered by the id the save gave it.
+        self._typed_name_ids.update(saved.exams[i].id for i in typed if i < len(saved.exams))
         self.appointments = [saved if a.id == saved.id else a for a in self.appointments]
         self._render(saved, tab_index=tab_index)
         self._populate_listbox()
@@ -587,10 +602,15 @@ class HistoryWindow(tk.Toplevel):
             return
         # Fold every animal's fresh note in the way the phone does, as unsaved
         # changes: regeneration is never destructive until the vet clicks Save.
+        # Names follow the transcript unless the vet typed them.
         self._render(
             self._shown,
             transcript=self._screen_transcript(),
-            drafts=merge_regenerated(self._screen_drafts(), notes),
+            drafts=merge_regenerated(
+                self._screen_drafts(),
+                notes,
+                typed_names={i for i, tab in enumerate(self.tabs) if tab.name_typed},
+            ),
             tab_index=self._current_tab_index(),
             dirty=True,
         )

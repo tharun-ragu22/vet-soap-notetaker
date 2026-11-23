@@ -151,6 +151,45 @@ describe('AppointmentScreen', () => {
     expect(draft.exams.map((e: { id?: string }) => e.id)).toEqual(['exam-2', 'exam-1', undefined]);
   });
 
+  it('renames a pet the transcript now calls something else', async () => {
+    const apiClient = makeClient({
+      regenerateAppointment: jest.fn(async () => ({
+        transcript: 'vet: Daisy and Max today',
+        patients: [
+          { patientName: 'Daisy', subjective: 's', objective: 'o', assessment: 'a', plan: 'p' },
+          { patientName: 'Max', subjective: 's', objective: 'o', assessment: 'a', plan: 'p' },
+        ],
+      })),
+    });
+    renderScreen({ apiClient });
+
+    fireEvent.changeText(screen.getByTestId('field-transcript'), 'vet: Daisy and Max today');
+    fireEvent.press(screen.getByText('Regenerate from Transcript'));
+
+    await waitFor(() => expect(screen.getByTestId('name-0').props.value).toBe('Daisy'));
+  });
+
+  it('keeps a name the vet typed through a save and a regenerate', async () => {
+    const apiClient = makeClient({
+      regenerateAppointment: jest.fn(async () => ({
+        transcript: 't',
+        patients: [
+          { patientName: 'Daisy', subjective: 's', objective: 'o', assessment: 'a', plan: 'p' },
+          { patientName: 'Max', subjective: 's', objective: 'o', assessment: 'a', plan: 'p' },
+        ],
+      })),
+    });
+    renderScreen({ apiClient });
+    fireEvent.changeText(screen.getByTestId('name-0'), 'Luna');
+    fireEvent.press(screen.getByText('Save Changes'));
+    await waitFor(() => expect(screen.getByText(/saved/i)).toBeTruthy());
+
+    fireEvent.press(screen.getByText('Regenerate from Transcript'));
+
+    await waitFor(() => expect(screen.getByText(/review and save/i)).toBeTruthy());
+    expect(screen.getByTestId('name-0').props.value).toBe('Luna');
+  });
+
   it('surfaces a regeneration failure and keeps the notes', async () => {
     const apiClient = makeClient({
       regenerateAppointment: jest.fn(async () => {

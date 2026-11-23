@@ -454,6 +454,56 @@ def test_regenerate_keeps_a_name_the_vet_typed(tk_root, sync_threads):
     assert _text(window.tabs[0].field_texts["plan"]) == "new"
 
 
+def test_regenerate_renames_a_pet_the_transcript_now_calls_something_else(tk_root, sync_threads):
+    window = make_window(
+        tk_root,
+        [make_appointment(names=("Bella",))],
+        on_regenerate=lambda t, appointment_id=None: [PatientNote("Daisy", "s", "o", "a", "new")],
+    )
+    _type(window.transcript_text, "Daisy has been vomiting")
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.tabs[0].name_var.get() == "Daisy"
+    assert window.notebook.tab(0, "text") == "Daisy"
+
+
+def test_a_name_the_vet_typed_survives_a_save_and_a_regenerate(tk_root, sync_threads):
+    window = make_window(
+        tk_root,
+        [make_appointment(names=("Bella",))],
+        on_save=_saved_after,
+        on_regenerate=lambda t, appointment_id=None: [PatientNote("Daisy", "s", "o", "a", "new")],
+    )
+    window.tabs[0].name_var.set("Luna")
+    window.save_button.invoke()
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.tabs[0].name_var.get() == "Luna"
+
+
+def test_typed_names_are_forgotten_when_another_appointment_is_opened(tk_root, sync_threads):
+    window = make_window(
+        tk_root,
+        [make_appointment("a2", names=("Rex",)), make_appointment("a1", names=("Bella",))],
+        on_save=_saved_after,
+        on_regenerate=lambda t, appointment_id=None: [PatientNote("Daisy", "s", "o", "a", "new")],
+    )
+    window.show_appointment(1)
+    window.tabs[0].name_var.set("Luna")
+    window.save_button.invoke()
+    window.show_appointment(0)
+    window.show_appointment(1)
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.tabs[0].name_var.get() == "Daisy"
+
+
 def test_regenerate_with_an_empty_transcript_warns_and_skips_the_backend(
     tk_root, sync_threads, monkeypatch
 ):
