@@ -4,7 +4,7 @@ import uuid
 import pytest
 
 from vet_soap_notetaker import history_ui, ui_strings
-from vet_soap_notetaker.api_client import Exam, SoapNote
+from vet_soap_notetaker.api_client import Exam, PatientNote
 from vet_soap_notetaker.history_ui import HistoryWindow
 
 
@@ -33,6 +33,8 @@ def make_entry(
     entry_id=None,
     assessment="assess",
     patient_name=None,
+    appointment_id="appt-1",
+    plan="plan",
 ):
     return Exam(
         # Each entry needs a stable, unique id: the window preserves the vet's
@@ -42,9 +44,10 @@ def make_entry(
         subjective=subjective,
         objective="obj",
         assessment=assessment,
-        plan="plan",
+        plan=plan,
         transcript=transcript,
         patient_name=patient_name,
+        appointment_id=appointment_id,
     )
 
 
@@ -421,14 +424,17 @@ def test_regenerate_sends_edited_transcript_and_shows_note_as_unsaved_edit(
     monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
     received = []
 
-    def fake_regenerate(transcript, exam_id=None):
-        received.append((transcript, exam_id))
-        return SoapNote(
-            subjective="regenerated subjective",
-            objective="regenerated objective",
-            assessment="regenerated assessment",
-            plan="regenerated plan",
-        )
+    def fake_regenerate(transcript, appointment_id=None):
+        received.append((transcript, appointment_id))
+        return [
+            PatientNote(
+                patient_name=None,
+                subjective="regenerated subjective",
+                objective="regenerated objective",
+                assessment="regenerated assessment",
+                plan="regenerated plan",
+            )
+        ]
 
     entry = make_entry(subjective="Original", transcript="orig", entry_id="n1")
     window = make_window(tk_root, [entry], on_regenerate=fake_regenerate)
@@ -440,8 +446,8 @@ def test_regenerate_sends_edited_transcript_and_shows_note_as_unsaved_edit(
     window.regenerate_button.invoke()
     window.update()  # flush the after(0) that applies the result
 
-    # The exam id goes along so the backend can tell which note was regenerated.
-    assert received == [("corrected transcript", "n1")]
+    # The appointment id goes along so the backend can tell what was regenerated.
+    assert received == [("corrected transcript", "appt-1")]
     assert window.field_texts["assessment"].get("1.0", "end-1c") == "regenerated assessment"
     assert window.field_texts["subjective"].get("1.0", "end-1c") == "regenerated subjective"
     # Left as an unsaved edit so nothing is persisted until the vet hits Save.
@@ -459,7 +465,7 @@ def test_regenerate_with_empty_transcript_warns_and_skips_backend(tk_root, monke
 
     entry = make_entry(subjective="Original", transcript="   ", entry_id="n1")
     window = make_window(
-        tk_root, [entry], on_regenerate=lambda t, exam_id=None: called.append(t) or SoapNote("x", "x", "x", "x")
+        tk_root, [entry], on_regenerate=lambda t, appointment_id=None: called.append(t) or []
     )
     window.show_entry(0)
 
@@ -474,17 +480,83 @@ def test_regenerate_result_is_dropped_when_the_vet_selected_another_note(tk_root
         make_entry(subjective="Newest", transcript="a", entry_id="n1"),
         make_entry(subjective="Older", transcript="b", entry_id="n2"),
     ]
-    window = make_window(tk_root, entries, on_regenerate=lambda t, exam_id=None: SoapNote("x", "x", "x", "x"))
+    window = make_window(tk_root, entries, on_regenerate=lambda t, appointment_id=None: [])
     window.show_entry(1)  # currently on n2
 
     # A regenerate that was kicked off for n1 finishes late.
     window._on_regenerate_done(
-        "n1", SoapNote("stale subjective", "s", "stale result", "p")
+        "n1", [PatientNote(None, "stale subjective", "s", "stale result", "p")]
     )
 
     # The pane still shows n2; the stale note is not painted over it.
     assert window.field_texts["subjective"].get("1.0", "end-1c") == "Older"
     assert "stale result" not in _note_pane(window)
+
+
+def test_regenerate_fills_the_selected_animal_with_its_own_note(tk_root, monkeypatch):
+    # A two-animal appointment: regenerating Max must give Max's note, not the
+    # first animal's (the old /api/soap/regenerate returned only Bella's).
+    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
+    entries = [
+        make_entry(entry_id="bella", patient_name="Bella", plan="bella old"),
+        make_entry(entry_id="max", patient_name="Max", plan="max old"),
+    ]
+    notes = [
+        PatientNote("Bella", "s", "o", "a", "bella new"),
+        PatientNote("max", "s", "o", "a", "max new"),
+    ]
+    window = make_window(tk_root, entries, on_regenerate=lambda t, appointment_id=None: notes)
+    window.show_entry(1)
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.field_texts["plan"].get("1.0", "end-1c") == "max new"
+
+
+def test_regenerate_only_pairs_within_the_selected_appointment(tk_root, monkeypatch):
+    # Another recording's exam is never a sibling: the one leftover animal of
+    # this appointment pairs with the one leftover note.
+    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
+    entries = [
+        make_entry(entry_id="other", patient_name=None, appointment_id="appt-0"),
+        make_entry(entry_id="rex", patient_name=None, appointment_id="appt-1"),
+    ]
+    window = make_window(
+        tk_root,
+        entries,
+        on_regenerate=lambda t, appointment_id=None: [PatientNote("Rex", "s", "o", "a", "rex new")],
+    )
+    window.show_entry(1)
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.field_texts["plan"].get("1.0", "end-1c") == "rex new"
+
+
+def test_regenerate_leaves_the_note_alone_when_no_regenerated_note_is_its_own(
+    tk_root, monkeypatch
+):
+    # The AI now hears two different animals and neither name matches this one:
+    # rather than guess, keep the note and tell the vet.
+    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
+    infos = []
+    monkeypatch.setattr(history_ui.messagebox, "showinfo", lambda *a, **k: infos.append(a))
+    entry = make_entry(entry_id="luna", patient_name="Luna", plan="luna old")
+    notes = [
+        PatientNote("Bella", "s", "o", "a", "bella new"),
+        PatientNote("Max", "s", "o", "a", "max new"),
+    ]
+    window = make_window(tk_root, [entry], on_regenerate=lambda t, appointment_id=None: notes)
+    window.show_entry(0)
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.field_texts["plan"].get("1.0", "end-1c") == "luna old"
+    assert not window._has_unsaved_edits()
+    assert len(infos) == 1
 
 
 def test_regenerate_failure_surfaces_an_error_and_re_enables_the_button(
@@ -496,7 +568,7 @@ def test_regenerate_failure_surfaces_an_error_and_re_enables_the_button(
         history_ui.messagebox, "showerror", lambda *a, **k: errors.append(a)
     )
 
-    def boom(transcript, exam_id=None):
+    def boom(transcript, appointment_id=None):
         raise RuntimeError("backend is down")
 
     entry = make_entry(subjective="Original", transcript="orig", entry_id="n1")

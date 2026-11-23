@@ -4,7 +4,7 @@ import time
 from dataclasses import replace
 from unittest.mock import MagicMock
 
-from vet_soap_notetaker.api_client import ApiClient, Exam, SoapNote
+from vet_soap_notetaker.api_client import ApiClient, Exam, PatientNote, SoapNote
 from vet_soap_notetaker.audio_recorder import AudioRecorder
 from vet_soap_notetaker.avimark_injector import AvimarkInjector
 from vet_soap_notetaker.config import Config
@@ -649,6 +649,34 @@ def test_remote_injection_falls_back_to_safety_flyout_when_not_targetable(mocker
     assert kwargs["soap_text"] == _EXPECTED_NOTE
 
 
+def test_a_refused_remote_inject_titles_the_flyout_with_the_pet_name(mocker):
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, _, _ = build_app(config=_config(), tk_root=MagicMock())
+    mocker.patch.object(tray_app.pipeline.injector, "focus_and_inject", return_value=False)
+    request = _injection_request()
+    request["exam"]["patient_name"] = "Bella"
+
+    tray_app.injection_poller.on_injection(request)
+
+    kwargs = mock_flyout_cls.call_args.kwargs
+    assert kwargs["patient_name"] == "Bella"
+    # The name labels the window; it's never part of what gets pasted.
+    assert "Bella" not in kwargs["soap_text"]
+
+
+def test_a_refused_history_inject_titles_the_flyout_with_the_pet_name(mocker):
+    mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
+    mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, _, _ = build_app(config=_config(), tk_root=MagicMock())
+    mocker.patch.object(tray_app.pipeline.injector, "focus_and_inject", return_value=False)
+    tray_app.show_history()
+    exam = Exam("e1", "2026-11-23", "s", "o", "a", "p", patient_name="Max")
+
+    mock_history_window.call_args.kwargs["on_copy_and_inject"](exam)
+
+    assert mock_flyout_cls.call_args.kwargs["patient_name"] == "Max"
+
+
 def test_build_app_offline_queue_on_note_ready_shows_flyout(mocker):
     mock_flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
     config = Config(
@@ -1258,17 +1286,19 @@ def test_saving_settings_reconfigures_analytics_and_reports_which_fields_changed
     assert "demo-vet-1" not in repr(tracker.events)
 
 
-def test_history_regenerate_tells_the_backend_which_exam(mocker):
+def test_history_regenerate_asks_for_every_animal_in_the_appointment(mocker):
     mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
-    regenerate = mocker.patch.object(
-        ApiClient, "regenerate_soap_note", return_value=SoapNote("s", "o", "a", "p")
-    )
+    notes = [PatientNote("Bella", "s", "o", "a", "p")]
+    regenerate = mocker.patch.object(ApiClient, "regenerate_appointment", return_value=notes)
     tray_app, _, _ = build_app(config=_config(), tk_root=MagicMock())
     tray_app.show_history()
 
-    mock_history_window.call_args.kwargs["on_regenerate"]("corrected", exam_id="e1")
+    result = mock_history_window.call_args.kwargs["on_regenerate"](
+        "corrected", appointment_id="appt-1"
+    )
 
-    regenerate.assert_called_once_with("corrected", exam_id="e1")
+    regenerate.assert_called_once_with("corrected", appointment_id="appt-1")
+    assert result == notes
 
 
 # --- Analytics: injects, flyouts, history ----------------------------------
