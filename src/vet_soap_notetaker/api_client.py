@@ -56,6 +56,11 @@ class SoapNote:
     transcript: str = ""
     # The backend's id for the exam this note belongs to, when it sent one.
     exam_id: str | None = None
+    # The animal this note is for, and the recording (appointment) it came
+    # from -- one recording can hold several animals. The name is for the vet
+    # to read on screen; it's never pasted into AVImark.
+    patient_name: str | None = None
+    appointment_id: str | None = None
 
 
 @dataclass
@@ -71,6 +76,9 @@ class Exam:
     plan: str
     transcript: str = ""
     patient_name: str | None = None
+    appointment_id: str | None = None
+    # Transcribed, but the note is still being generated (fields are empty).
+    note_pending: bool = False
 
     @property
     def soap_text(self) -> str:
@@ -90,6 +98,89 @@ class Exam:
             plan=data["plan"],
             transcript=data.get("transcript", ""),
             patient_name=data.get("patient_name"),
+            appointment_id=data.get("appointment_id"),
+            note_pending=bool(data.get("note_pending", False)),
+        )
+
+
+@dataclass
+class Appointment:
+    """One recording as the backend keeps it: a transcript shared by every
+    animal, and one exam (SOAP note) per animal -- the same records the mobile
+    app reads. ``status`` is ``processing``/``failed``/``no_speech`` for a
+    phone upload still (or never) transcribed, else ``note_pending``/``complete``."""
+
+    id: str
+    created_at: str
+    transcript: str
+    status: str
+    exams: list
+
+    @property
+    def note_pending(self) -> bool:
+        return self.status == "note_pending"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Appointment":
+        transcript = data.get("transcript") or ""
+        status = data.get("status") or (
+            "note_pending" if data.get("note_pending") else "complete"
+        )
+        return cls(
+            id=data["id"],
+            created_at=data["created_at"],
+            transcript=transcript,
+            status=status,
+            # The backend sends the transcript once, on the appointment; each
+            # exam carries it here so it reads like an /api/history exam.
+            exams=[
+                Exam.from_dict({**exam, "transcript": transcript})
+                for exam in data.get("exams", [])
+            ],
+        )
+
+
+@dataclass
+class ExamDraft:
+    """One animal of an appointment being saved: an existing exam (``id``) or a
+    new one (``id`` None). Exams left out of a save are deleted."""
+
+    id: str | None
+    patient_name: str | None
+    subjective: str
+    objective: str
+    assessment: str
+    plan: str
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "patient_name": self.patient_name,
+            "subjective": self.subjective,
+            "objective": self.objective,
+            "assessment": self.assessment,
+            "plan": self.plan,
+        }
+
+
+@dataclass
+class PatientNote:
+    """One animal's note from a regenerate (not saved anywhere yet)."""
+
+    patient_name: str | None
+    subjective: str
+    objective: str
+    assessment: str
+    plan: str
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PatientNote":
+        return cls(
+            patient_name=data.get("patient_name"),
+            subjective=data["subjective"],
+            objective=data["objective"],
+            assessment=data["assessment"],
+            plan=data["plan"],
         )
 
 
@@ -137,6 +228,8 @@ class ApiClient:
                 plan=data["plan"],
                 transcript=data.get("transcript", ""),
                 exam_id=data.get("id"),
+                patient_name=data.get("patient_name"),
+                appointment_id=data.get("appointment_id"),
             )
         except KeyError as exc:
             raise ApiClientError(f"backend response missing field: {exc}") from exc
@@ -260,6 +353,70 @@ class ApiClient:
         if response.status_code != 200:
             raise ApiClientError(f"backend returned {response.status_code}: {response.text}")
 
+    # --- Appointments (the routes the mobile app uses) ------------------------
+
+    def _appointment_request(self, method, path, *, json=None, generate=False, ok=(200,)):
+        # One recording's calls. A 404 means the appointment is gone; no answer
+        # at all is BackendUnreachableError, told apart from an error reply.
+        url = f"{self._api_base()}/appointments{path}"
+        extra = {"Content-Type": "application/json"} if json is not None else {}
+        timeout = self._generate_timeout() if generate else self.timeout_seconds
+        logger.info("%s %s", method, url)
+        try:
+            response = httpx.request(
+                method, url, json=json, headers=self._auth_headers(extra), timeout=timeout
+            )
+        except httpx.RequestError as exc:
+            logger.error("appointment request failed: %s", exc)
+            raise BackendUnreachableError(f"request failed: {exc}") from exc
+        if response.status_code == 404:
+            raise ExamNotFoundError(f"appointment not found ({method} {path})")
+        if response.status_code not in ok:
+            raise ApiClientError(f"backend returned {response.status_code}: {response.text}")
+        return response.json()
+
+    def list_appointments(self) -> list:
+        # Newest first: every recording, with its animals and status.
+        data = self._appointment_request("GET", "")
+        return [Appointment.from_dict(item) for item in data.get("appointments", [])]
+
+    def get_appointment(self, appointment_id: str) -> Appointment:
+        return Appointment.from_dict(self._appointment_request("GET", f"/{appointment_id}"))
+
+    def save_appointment(self, appointment_id: str, *, transcript: str, exams) -> Appointment:
+        # The whole appointment: exams with an id are updated, ones without are
+        # added, and exams left out are deleted.
+        body = {"transcript": transcript, "exams": [exam.to_dict() for exam in exams]}
+        return Appointment.from_dict(
+            self._appointment_request("PUT", f"/{appointment_id}", json=body)
+        )
+
+    def delete_appointment(self, appointment_id: str) -> None:
+        self._appointment_request("DELETE", f"/{appointment_id}")
+
+    def retry_appointment(self, appointment_id: str) -> Appointment:
+        # Re-process a phone upload whose transcription failed, from its saved audio.
+        return Appointment.from_dict(
+            self._appointment_request("POST", f"/{appointment_id}/retry", ok=(200, 202))
+        )
+
+    def complete_appointment_notes(self, appointment_id: str) -> Appointment:
+        # Generate the notes of a note-pending appointment from its saved
+        # transcript. Idempotent on the backend: a complete one comes back as-is.
+        return Appointment.from_dict(
+            self._appointment_request("POST", f"/{appointment_id}/notes", generate=True)
+        )
+
+    def regenerate_appointment(self, transcript: str, appointment_id: str | None = None) -> list:
+        # Fresh notes, one per animal heard in the transcript; nothing is saved.
+        data = self._appointment_request(
+            "POST",
+            "/regenerate",
+            json={"transcript": transcript, "appointment_id": appointment_id},
+            generate=True,
+        )
+        return [PatientNote.from_dict(item) for item in data.get("patients", [])]
+
     def _api_base(self) -> str:
         # The configured endpoint is the audio POST URL (".../api/soap"); the
         # injection endpoints live alongside it under ".../api/injections", so
@@ -300,29 +457,3 @@ class ApiClient:
             raise ApiClientError(
                 f"backend returned {response.status_code}: {response.text}"
             )
-
-    def regenerate_soap_note(self, transcript: str, exam_id: str | None = None) -> SoapNote:
-        # Ask the backend to re-run only note generation over a hand-corrected
-        # transcript. Derived from the same base endpoint the audio POST uses so
-        # only one URL needs configuring.
-        url = self.endpoint.rstrip("/") + "/regenerate"
-        headers = self._auth_headers({"Content-Type": "application/json"})
-
-        body = {"transcript": transcript}
-        if exam_id:
-            # Lets the backend's analytics tie the regeneration to its exam.
-            body["exam_id"] = exam_id
-
-        logger.info("POST %s (timeout=%ss)", url, self.generate_timeout_seconds)
-        try:
-            response = httpx.post(
-                url,
-                json=body,
-                headers=headers,
-                timeout=self._generate_timeout(),
-            )
-        except httpx.RequestError as exc:
-            logger.error("backend regenerate request failed: %s", exc)
-            raise ApiClientError(f"request failed: {exc}") from exc
-
-        return self._parse_soap_response(response)

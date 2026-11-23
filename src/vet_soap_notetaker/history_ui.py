@@ -5,6 +5,8 @@ import tkinter as tk
 from tkinter import messagebox
 
 from vet_soap_notetaker import ui_strings
+from vet_soap_notetaker.api_client import ExamDraft
+from vet_soap_notetaker.appointment_merge import merge_regenerated
 from vet_soap_notetaker.window_icon import apply_window_icon
 
 logger = logging.getLogger("vet_soap_notetaker.history_ui")
@@ -51,8 +53,8 @@ class HistoryWindow(tk.Toplevel):
             lambda entry_id, **fields: None
         )
         self.on_delete = on_delete or (lambda entry_id: None)
-        # Blocking call (transcript in -> SoapNote out) that hits the backend;
-        # run off the Tk thread so the window stays responsive.
+        # Blocking call (transcript in -> one PatientNote per animal out) that
+        # hits the backend; run off the Tk thread so the window stays responsive.
         self.on_regenerate = on_regenerate
         self._regenerating = False
         self._confirm_delete = confirm_delete or self._default_confirm_delete
@@ -289,26 +291,35 @@ class HistoryWindow(tk.Toplevel):
         # Remember which note we're regenerating so a late result is dropped if
         # the vet has since selected a different note.
         entry_id = entry.id
+        appointment_id = entry.appointment_id
         self._set_regenerating(True)
 
         def work():
             try:
-                note = self.on_regenerate(transcript, exam_id=entry_id)
+                notes = self.on_regenerate(transcript, appointment_id=appointment_id)
             except Exception as exc:  # noqa: BLE001 -- surfaced to the vet below
                 # Bind exc as a default arg: Python clears the `except ... as`
                 # name when the block exits, before this after() callback runs.
                 self.after(0, lambda err=exc: self._on_regenerate_failed(err))
                 return
-            self.after(0, lambda: self._on_regenerate_done(entry_id, note))
+            self.after(0, lambda: self._on_regenerate_done(entry_id, notes))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_regenerate_done(self, entry_id, note):
+    def _on_regenerate_done(self, entry_id, notes):
         self._set_regenerating(False)
         current = self._selected_entry()
         if current is None or current.id != entry_id:
             # The vet moved to another note while the backend was working; the
             # regenerated note belongs to a note that's no longer on screen.
+            return
+        note = self._regenerated_note_for(current, notes)
+        if note is None:
+            messagebox.showinfo(
+                ui_strings.REGENERATE_NO_MATCH_TITLE,
+                ui_strings.REGENERATE_NO_MATCH_MESSAGE,
+                parent=self,
+            )
             return
         # Show the fresh note as an unsaved edit -- the vet reviews it and hits
         # Save Changes to persist, so regeneration is never destructive on its
@@ -317,6 +328,35 @@ class HistoryWindow(tk.Toplevel):
         for key, widget in self.field_texts.items():
             self._replace_text(widget, getattr(note, key))
             widget.edit_modified(True)
+
+    def _regenerated_note_for(self, entry, notes):
+        """This exam's note among a regenerate's one-per-animal notes, or None.
+
+        Matched the way mobile does it (``merge_regenerated``), against the other
+        animals of the same recording, so a two-animal visit never hands the
+        first animal's note to the second. A note that comes back without this
+        exam's id isn't its own: the regenerate kept it unchanged.
+        """
+        siblings = [
+            e for e in self.entries
+            if e.id == entry.id
+            or (entry.appointment_id is not None and e.appointment_id == entry.appointment_id)
+        ]
+        drafts = [
+            ExamDraft(
+                id=e.id,
+                patient_name=e.patient_name,
+                subjective=e.subjective,
+                objective=e.objective,
+                assessment=e.assessment,
+                plan=e.plan,
+            )
+            for e in siblings
+        ]
+        # merge_regenerated lists the regenerated notes first, then the animals
+        # it kept unchanged.
+        regenerated = merge_regenerated(drafts, notes)[: len(notes)]
+        return next((draft for draft in regenerated if draft.id == entry.id), None)
 
     def _on_regenerate_failed(self, exc):
         self._set_regenerating(False)

@@ -17,9 +17,17 @@ class FlyoutWindow(tk.Toplevel):
         on_copy_to_clipboard,
         on_open_history=None,
         message_only=False,
+        patient_name=None,
     ):
         super().__init__(master)
-        self.title(ui_strings.FLYOUT_WINDOW_TITLE)
+        # The animal this note is for labels the window, so the vet can tell
+        # which chart it belongs in. It's never added to the note text.
+        patient_name = (patient_name or "").strip()
+        self.title(
+            ui_strings.FLYOUT_WINDOW_TITLE_FOR_PATIENT.format(name=patient_name)
+            if patient_name
+            else ui_strings.FLYOUT_WINDOW_TITLE
+        )
         apply_window_icon(self)
         # Held so the button handlers can hand over the note *as currently shown*
         # (the vet may edit it in the pop-out before acting), not the text the
@@ -76,6 +84,16 @@ class FlyoutWindow(tk.Toplevel):
                 command=on_open_history,
             )
             self.open_history_button.pack(side="left")
+
+        self.patient_label = None
+        if patient_name:
+            self.patient_label = tk.Label(
+                self,
+                text=ui_strings.FLYOUT_PATIENT_HEADER.format(name=patient_name),
+                font=("TkDefaultFont", 10, "bold"),
+                anchor="w",
+            )
+            self.patient_label.pack(side="top", fill="x")
 
         self.text_widget = tk.Text(self)
         self.text_widget.insert("1.0", soap_text)

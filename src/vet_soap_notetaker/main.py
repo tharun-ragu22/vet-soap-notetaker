@@ -223,7 +223,9 @@ def keep_window_foreground(
     tk_root.after(interval_ms, tick)
 
 
-def show_flyout(tk_root, injector, soap_text, on_open_history=None, analytics=None):
+def show_flyout(
+    tk_root, injector, soap_text, on_open_history=None, analytics=None, patient_name=None
+):
     # Seed the target with the chart in front right now (before the flyout takes
     # focus); follow_active_avimark then keeps it current as the vet navigates.
     injector.remember_active_window()
@@ -263,6 +265,7 @@ def show_flyout(tk_root, injector, soap_text, on_open_history=None, analytics=No
         on_copy_and_inject=on_copy_and_inject,
         on_copy_to_clipboard=on_copy_to_clipboard,
         on_open_history=open_history,
+        patient_name=patient_name,
     )
     follow_active_avimark(tk_root, injector, flyout)
     return flyout
@@ -338,11 +341,11 @@ def build_app(config=None, tk_root=None, analytics=None):
     # app reads); a local cache keeps History usable through a brief outage.
     history_store = BackendHistoryStore(api_client)
 
-    def regenerate_from_transcript(transcript, exam_id=None):
+    def regenerate_from_transcript(transcript, appointment_id=None):
         # Blocking backend call; HistoryWindow runs this on a worker thread and
-        # marshals the result back to the Tk loop itself. Returns the structured
-        # note so the window can repopulate its four SOAP fields.
-        return api_client.regenerate_soap_note(transcript, exam_id=exam_id)
+        # marshals the result back to the Tk loop itself. Returns one note per
+        # animal heard, so the window can pick the selected animal's own note.
+        return api_client.regenerate_appointment(transcript, appointment_id=appointment_id)
 
     def copy_from_history(soap_text):
         pyperclip.copy(soap_text)
@@ -416,7 +419,11 @@ def build_app(config=None, tk_root=None, analytics=None):
                 injector,
                 current_calibration["value"],
                 note,
-                on_fallback=lambda text: show_note_flyout(text, reason="inject_refused"),
+                on_fallback=lambda text: show_note_flyout(
+                    text,
+                    reason="inject_refused",
+                    patient_name=getattr(note, "patient_name", None),
+                ),
                 analytics=analytics,
                 source="history",
                 exam_id=getattr(note, "id", None),
@@ -428,7 +435,7 @@ def build_app(config=None, tk_root=None, analytics=None):
     # A note flyout also offers an "Open History" button. Errors and status
     # notices don't use show_flyout at all -- they go through show_message.
     # ``reason`` says why the note popped up (for analytics only).
-    def show_note_flyout(soap_text, reason):
+    def show_note_flyout(soap_text, reason, patient_name=None):
         analytics.capture("flyout_shown", {"kind": "note", "reason": reason})
         show_flyout(
             tk_root,
@@ -436,6 +443,7 @@ def build_app(config=None, tk_root=None, analytics=None):
             soap_text,
             on_open_history=lambda: open_history(opened_from="flyout"),
             analytics=analytics,
+            patient_name=patient_name,
         )
 
     def show_message(text, reason):
@@ -479,12 +487,15 @@ def build_app(config=None, tk_root=None, analytics=None):
             assessment=exam.get("assessment", ""),
             plan=exam.get("plan", ""),
             transcript=exam.get("transcript", ""),
+            patient_name=exam.get("patient_name"),
         )
         inject_note(
             injector,
             current_calibration["value"],
             note,
-            on_fallback=lambda text: show_note_flyout(text, reason="inject_refused"),
+            on_fallback=lambda text: show_note_flyout(
+                text, reason="inject_refused", patient_name=note.patient_name
+            ),
             analytics=analytics,
             source="remote",
             exam_id=request.get("exam_id"),

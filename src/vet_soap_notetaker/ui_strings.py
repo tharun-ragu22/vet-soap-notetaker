@@ -7,6 +7,9 @@ renders it and the code that checks for it.
 
 # Window titles
 FLYOUT_WINDOW_TITLE = "Vet Soap Notetaker"
+# A note for a named animal (one recording can hold several).
+FLYOUT_WINDOW_TITLE_FOR_PATIENT = "Vet Soap Notetaker — {name}"
+FLYOUT_PATIENT_HEADER = "Patient: {name}"
 HISTORY_WINDOW_TITLE = "Vet Soap Notetaker History"
 SETTINGS_WINDOW_TITLE = "Vet Soap Notetaker Settings"
 CALIBRATION_TITLE = "Calibrate AVImark Boxes"
@@ -115,6 +118,11 @@ REGENERATE_EMPTY_TITLE = "Nothing to regenerate"
 REGENERATE_EMPTY_MESSAGE = "Add a transcript before regenerating the SOAP note."
 REGENERATE_ERROR_TITLE = "Regenerate failed"
 REGENERATE_ERROR_MESSAGE = "Could not regenerate the SOAP note:\n\n{error}"
+REGENERATE_NO_MATCH_TITLE = "Regenerate didn't match this animal"
+REGENERATE_NO_MATCH_MESSAGE = (
+    "The regenerated notes are for other animals, so this note was left as it was. "
+    "Check the patient name, then regenerate again."
+)
 
 # Shown when the backend heard no speech in the recording (HTTP 422). Nothing
 # was saved and it isn't retried -- the same audio would fail the same way.

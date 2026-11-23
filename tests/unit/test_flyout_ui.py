@@ -228,3 +228,45 @@ def test_message_only_flyout_has_no_copy_or_inject_buttons(tk_root):
     assert flyout.copy_to_clipboard_button is None
     assert flyout.open_history_button is None
     assert flyout.text_widget.get("1.0", "end-1c") == "Still generating the previous note."
+
+
+def test_a_named_note_shows_the_pet_name_in_the_title_and_a_header(tk_root):
+    flyout = FlyoutWindow(
+        master=tk_root,
+        soap_text="SUBJECTIVE: text",
+        on_copy_and_inject=lambda text: None,
+        on_copy_to_clipboard=lambda text: None,
+        patient_name="Bella",
+    )
+
+    assert flyout.title() == ui_strings.FLYOUT_WINDOW_TITLE_FOR_PATIENT.format(name="Bella")
+    assert "Bella" in flyout.patient_label["text"]
+
+
+def test_the_pet_name_is_never_part_of_the_note_that_gets_pasted(tk_root):
+    calls = []
+    flyout = FlyoutWindow(
+        master=tk_root,
+        soap_text="SUBJECTIVE: text",
+        on_copy_and_inject=calls.append,
+        on_copy_to_clipboard=calls.append,
+        patient_name="Bella",
+    )
+
+    flyout.copy_and_inject_button.invoke()
+    flyout.copy_to_clipboard_button.invoke()
+
+    assert calls == ["SUBJECTIVE: text", "SUBJECTIVE: text"]
+
+
+def test_an_unnamed_note_has_no_patient_header(tk_root):
+    flyout = FlyoutWindow(
+        master=tk_root,
+        soap_text="text",
+        on_copy_and_inject=lambda text: None,
+        on_copy_to_clipboard=lambda text: None,
+        patient_name="  ",
+    )
+
+    assert flyout.title() == ui_strings.FLYOUT_WINDOW_TITLE
+    assert flyout.patient_label is None

@@ -8,10 +8,14 @@ from vet_soap_notetaker.api_client import (
     GENERATE_CONNECT_TIMEOUT_SECONDS,
     ApiClient,
     ApiClientError,
+    Appointment,
     BackendUnreachableError,
+    Exam,
+    ExamDraft,
     ExamNotFoundError,
     NoSpeechError,
     NotePendingError,
+    PatientNote,
 )
 
 
@@ -193,95 +197,10 @@ def test_generate_soap_note_raises_api_client_error_on_malformed_json():
 
 
 @respx.mock
-def test_regenerate_soap_note_posts_transcript_json_to_regenerate_endpoint():
-    route = respx.post("https://vet_soap_notetaker.example.com/api/soap/regenerate").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "subjective": "Owner reports limping.",
-                "objective": "Left forelimb lameness.",
-                "assessment": "Soft-tissue strain.",
-                "plan": "Rest and NSAIDs, recheck in 2 weeks.",
-                "transcript": "the owner says the dog is limping",
-            },
-        )
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
-    note = client.regenerate_soap_note("the owner says the dog is limping")
-
-    assert route.called
-    request = route.calls.last.request
-    assert json.loads(request.content) == {
-        "transcript": "the owner says the dog is limping"
-    }
-    assert note.subjective == "Owner reports limping."
-    assert note.transcript == "the owner says the dog is limping"
-
-
 @respx.mock
-def test_regenerate_soap_note_derives_endpoint_when_base_has_trailing_slash():
-    route = respx.post("https://vet_soap_notetaker.example.com/api/soap/regenerate").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "subjective": "s",
-                "objective": "o",
-                "assessment": "a",
-                "plan": "p",
-            },
-        )
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap/", timeout_seconds=5)
-    client.regenerate_soap_note("some transcript")
-
-    assert route.called
-
-
 @respx.mock
-def test_regenerate_soap_note_sends_authorization_header_when_api_key_configured():
-    route = respx.post("https://vet_soap_notetaker.example.com/api/soap/regenerate").mock(
-        return_value=httpx.Response(
-            200,
-            json={"subjective": "s", "objective": "o", "assessment": "a", "plan": "p"},
-        )
-    )
-
-    client = ApiClient(
-        endpoint="https://vet_soap_notetaker.example.com/api/soap",
-        timeout_seconds=5,
-        api_key="secret-token",
-    )
-    client.regenerate_soap_note("transcript")
-
-    assert route.calls.last.request.headers["Authorization"] == "Bearer secret-token"
-
-
 @respx.mock
-def test_regenerate_soap_note_raises_api_client_error_on_connection_refused():
-    respx.post("https://vet_soap_notetaker.example.com/api/soap/regenerate").mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-
-    with pytest.raises(ApiClientError):
-        client.regenerate_soap_note("transcript")
-
-
 @respx.mock
-def test_regenerate_soap_note_raises_api_client_error_on_http_error_status():
-    respx.post("https://vet_soap_notetaker.example.com/api/soap/regenerate").mock(
-        return_value=httpx.Response(502, json={"error": "upstream provider error"})
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-
-    with pytest.raises(ApiClientError, match="502"):
-        client.regenerate_soap_note("transcript")
-
-
 @respx.mock
 def test_fetch_pending_injections_returns_requests_list():
     route = respx.get("https://vet_soap_notetaker.example.com/api/injections/pending").mock(
@@ -601,19 +520,6 @@ def test_generate_soap_note_uses_a_custom_generate_timeout():
 
 
 @respx.mock
-def test_regenerate_soap_note_uses_the_long_generate_timeout():
-    route = respx.post("https://vet_soap_notetaker.example.com/api/soap/regenerate").mock(
-        return_value=httpx.Response(200, json=_NOTE_JSON)
-    )
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
-
-    client.regenerate_soap_note("owner reports vomiting")
-
-    timeout = _sent_timeout(route)
-    assert timeout["read"] == 480
-    assert timeout["connect"] == GENERATE_CONNECT_TIMEOUT_SECONDS
-
-
 @respx.mock
 def test_quick_calls_keep_the_short_timeout():
     history = respx.get("https://vet_soap_notetaker.example.com/api/history").mock(
@@ -762,7 +668,6 @@ def _client_with_identity(identity=None):
     "method, url, call",
     [
         ("POST", f"{_BASE}/soap", lambda c: c.generate_soap_note(b"RIFF")),
-        ("POST", f"{_BASE}/soap/regenerate", lambda c: c.regenerate_soap_note("t")),
         ("POST", f"{_BASE}/exams/e1/note", lambda c: c.complete_note("e1")),
         ("GET", f"{_BASE}/history", lambda c: c.fetch_history()),
         ("DELETE", f"{_BASE}/exams/e1", lambda c: c.delete_exam("e1")),
@@ -816,18 +721,6 @@ def test_generate_soap_note_omits_the_recording_length_when_unknown():
 
 
 @respx.mock
-def test_regenerate_soap_note_names_the_exam_when_given():
-    route = respx.post(f"{_BASE}/soap/regenerate").mock(
-        return_value=httpx.Response(200, json=_NOTE_JSON)
-    )
-
-    ApiClient(endpoint=f"{_BASE}/soap", timeout_seconds=30).regenerate_soap_note(
-        "t", exam_id="exam-9"
-    )
-
-    assert json.loads(route.calls.last.request.content) == {"transcript": "t", "exam_id": "exam-9"}
-
-
 @respx.mock
 def test_generate_soap_note_raises_backend_unreachable_when_there_is_no_answer():
     # Lets the pipeline (and its analytics) tell "backend down" from "provider failed".
@@ -835,3 +728,243 @@ def test_generate_soap_note_raises_backend_unreachable_when_there_is_no_answer()
 
     with pytest.raises(BackendUnreachableError):
         ApiClient(endpoint=f"{_BASE}/soap", timeout_seconds=30).generate_soap_note(b"RIFF")
+
+
+# --- Appointments (one recording, one exam per animal) ----------------------
+
+_EXAM_IN_APPOINTMENT = {
+    "id": "exam-1",
+    "appointment_id": "appt-1",
+    "created_at": "2026-11-23T09:00:00+00:00",
+    "patient_name": "Bella",
+    "subjective": "s1",
+    "objective": "o1",
+    "assessment": "a1",
+    "plan": "p1",
+    "note_pending": False,
+}
+_APPOINTMENT_JSON = {
+    "id": "appt-1",
+    "created_at": "2026-11-23T09:00:00+00:00",
+    "transcript": "Bella the dog and Max the cat",
+    "note_pending": False,
+    "status": "complete",
+    "exams": [
+        _EXAM_IN_APPOINTMENT,
+        {**_EXAM_IN_APPOINTMENT, "id": "exam-2", "patient_name": None, "plan": "p2"},
+    ],
+}
+
+
+def _client():
+    return ApiClient(endpoint=f"{_BASE}/soap", timeout_seconds=30)
+
+
+@respx.mock
+def test_generate_soap_note_keeps_the_patient_name_and_appointment_id():
+    respx.post(f"{_BASE}/soap").mock(
+        return_value=httpx.Response(
+            200, json={**_EXAM_IN_APPOINTMENT, "transcript": "t"}
+        )
+    )
+
+    note = _client().generate_soap_note(b"RIFF")
+
+    assert note.patient_name == "Bella"
+    assert note.appointment_id == "appt-1"
+
+
+def test_exam_from_dict_reads_its_appointment_and_pending_flag():
+    exam = Exam.from_dict({**_EXAM_IN_APPOINTMENT, "note_pending": True})
+
+    assert exam.appointment_id == "appt-1"
+    assert exam.note_pending is True
+
+
+def test_exam_from_dict_defaults_when_an_older_backend_omits_them():
+    data = {k: v for k, v in _EXAM_IN_APPOINTMENT.items() if k not in ("appointment_id", "note_pending")}
+
+    exam = Exam.from_dict(data)
+
+    assert exam.appointment_id is None
+    assert exam.note_pending is False
+
+
+@respx.mock
+def test_list_appointments_parses_each_appointment_and_its_animals():
+    respx.get(f"{_BASE}/appointments").mock(
+        return_value=httpx.Response(200, json={"appointments": [_APPOINTMENT_JSON]})
+    )
+
+    [appointment] = _client().list_appointments()
+
+    assert isinstance(appointment, Appointment)
+    assert appointment.id == "appt-1"
+    assert appointment.status == "complete"
+    assert appointment.transcript == "Bella the dog and Max the cat"
+    assert [e.id for e in appointment.exams] == ["exam-1", "exam-2"]
+    assert [e.patient_name for e in appointment.exams] == ["Bella", None]
+    # The animals share the appointment's transcript.
+    assert appointment.exams[1].transcript == "Bella the dog and Max the cat"
+    assert appointment.exams[1].plan == "p2"
+
+
+def test_appointment_from_dict_derives_a_status_an_older_backend_omits():
+    data = {k: v for k, v in _APPOINTMENT_JSON.items() if k != "status"}
+
+    assert Appointment.from_dict({**data, "note_pending": True}).status == "note_pending"
+    assert Appointment.from_dict(data).status == "complete"
+
+
+@respx.mock
+def test_get_appointment_reads_one_appointment():
+    respx.get(f"{_BASE}/appointments/appt-1").mock(
+        return_value=httpx.Response(200, json=_APPOINTMENT_JSON)
+    )
+
+    appointment = _client().get_appointment("appt-1")
+
+    assert appointment.id == "appt-1"
+    assert len(appointment.exams) == 2
+
+
+@respx.mock
+def test_get_appointment_raises_exam_not_found_on_404():
+    respx.get(f"{_BASE}/appointments/gone").mock(
+        return_value=httpx.Response(404, json={"error": "appointment not found"})
+    )
+
+    with pytest.raises(ExamNotFoundError):
+        _client().get_appointment("gone")
+
+
+@respx.mock
+def test_save_appointment_puts_the_whole_appointment():
+    route = respx.put(f"{_BASE}/appointments/appt-1").mock(
+        return_value=httpx.Response(200, json=_APPOINTMENT_JSON)
+    )
+    exams = [
+        ExamDraft(id="exam-1", patient_name="Bella", subjective="s", objective="o", assessment="a", plan="p"),
+        ExamDraft(id=None, patient_name="Max", subjective="s2", objective="o2", assessment="a2", plan="p2"),
+    ]
+
+    saved = _client().save_appointment("appt-1", transcript="edited", exams=exams)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "transcript": "edited",
+        "exams": [
+            {"id": "exam-1", "patient_name": "Bella", "subjective": "s", "objective": "o", "assessment": "a", "plan": "p"},
+            {"id": None, "patient_name": "Max", "subjective": "s2", "objective": "o2", "assessment": "a2", "plan": "p2"},
+        ],
+    }
+    assert saved.id == "appt-1"
+
+
+@respx.mock
+def test_save_appointment_raises_on_http_error_status():
+    respx.put(f"{_BASE}/appointments/appt-1").mock(
+        return_value=httpx.Response(409, json={"error": "recording still processing"})
+    )
+
+    with pytest.raises(ApiClientError):
+        _client().save_appointment("appt-1", transcript="t", exams=[])
+
+
+@respx.mock
+def test_delete_appointment_sends_delete():
+    route = respx.delete(f"{_BASE}/appointments/appt-1").mock(
+        return_value=httpx.Response(200, json={"status": "deleted"})
+    )
+
+    _client().delete_appointment("appt-1")
+
+    assert route.called
+
+
+@respx.mock
+def test_retry_appointment_posts_to_retry():
+    route = respx.post(f"{_BASE}/appointments/appt-1/retry").mock(
+        return_value=httpx.Response(202, json={**_APPOINTMENT_JSON, "status": "processing"})
+    )
+
+    appointment = _client().retry_appointment("appt-1")
+
+    assert route.called
+    assert appointment.status == "processing"
+
+
+@respx.mock
+def test_complete_appointment_notes_posts_to_notes_with_the_long_timeout():
+    route = respx.post(f"{_BASE}/appointments/appt-1/notes").mock(
+        return_value=httpx.Response(200, json=_APPOINTMENT_JSON)
+    )
+
+    appointment = _client().complete_appointment_notes("appt-1")
+
+    assert appointment.status == "complete"
+    assert _sent_timeout(route)["read"] == 480
+    assert _sent_timeout(route)["connect"] == GENERATE_CONNECT_TIMEOUT_SECONDS
+
+
+@respx.mock
+def test_regenerate_appointment_returns_one_note_per_animal():
+    route = respx.post(f"{_BASE}/appointments/regenerate").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "transcript": "t",
+                "patients": [
+                    {"patient_name": "Bella", "subjective": "s1", "objective": "o1", "assessment": "a1", "plan": "p1"},
+                    {"patient_name": "Max", "subjective": "s2", "objective": "o2", "assessment": "a2", "plan": "p2"},
+                ],
+            },
+        )
+    )
+
+    notes = _client().regenerate_appointment("t", appointment_id="appt-1")
+
+    assert json.loads(route.calls.last.request.content) == {
+        "transcript": "t",
+        "appointment_id": "appt-1",
+    }
+    assert notes == [
+        PatientNote(patient_name="Bella", subjective="s1", objective="o1", assessment="a1", plan="p1"),
+        PatientNote(patient_name="Max", subjective="s2", objective="o2", assessment="a2", plan="p2"),
+    ]
+    assert _sent_timeout(route)["read"] == 480
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "method, url, call",
+    [
+        ("GET", f"{_BASE}/appointments", lambda c: c.list_appointments()),
+        ("GET", f"{_BASE}/appointments/a1", lambda c: c.get_appointment("a1")),
+        ("PUT", f"{_BASE}/appointments/a1", lambda c: c.save_appointment("a1", transcript="t", exams=[])),
+        ("DELETE", f"{_BASE}/appointments/a1", lambda c: c.delete_appointment("a1")),
+        ("POST", f"{_BASE}/appointments/a1/retry", lambda c: c.retry_appointment("a1")),
+        ("POST", f"{_BASE}/appointments/a1/notes", lambda c: c.complete_appointment_notes("a1")),
+        ("POST", f"{_BASE}/appointments/regenerate", lambda c: c.regenerate_appointment("t")),
+    ],
+)
+def test_appointment_requests_carry_identity_and_map_failures(method, url, call):
+    route = respx.route(method=method, url=url).mock(
+        return_value=httpx.Response(
+            200, json={"appointments": [], "patients": [], **_APPOINTMENT_JSON}
+        )
+    )
+
+    call(_client_with_identity())
+
+    headers = route.calls.last.request.headers
+    assert headers["X-POSTHOG-DISTINCT-ID"] == "demo-vet-1"
+    assert headers["Authorization"] == "Bearer secret-token"
+
+    # No answer at all is told apart from an error reply, like complete_note.
+    route.mock(side_effect=httpx.ConnectError("refused"))
+    with pytest.raises(BackendUnreachableError):
+        call(_client_with_identity())
+    route.mock(return_value=httpx.Response(500, json={"error": "boom"}))
+    with pytest.raises(ApiClientError) as excinfo:
+        call(_client_with_identity())
+    assert not isinstance(excinfo.value, BackendUnreachableError)
