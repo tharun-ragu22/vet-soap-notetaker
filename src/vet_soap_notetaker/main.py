@@ -278,22 +278,28 @@ def show_history(
     on_regenerate=None,
     on_inject=None,
     on_copy=None,
-    initial_entries=None,
+    initial_appointments=None,
+    select=None,
 ):
     injector.remember_active_window()
-    # Inject the (already-persisted) current note; the window hands over the
-    # structured entry so build_app's callback can place it per-box via the
+    # Inject one animal's (already-persisted) note; the window hands over the
+    # structured exam so build_app's callback can place it per-box via the
     # calibration. A single-block default keeps direct callers working.
     on_inject = on_inject or (lambda note: injector.focus_and_inject(note.soap_text))
     window = HistoryWindow(
         master=tk_root,
-        load_entries=history_store.list_entries,
+        load_appointments=history_store.list_appointments,
         on_copy_and_inject=on_inject,
         on_copy_to_clipboard=on_copy or (lambda soap_text: pyperclip.copy(soap_text)),
-        on_save_edit=lambda entry_id, **fields: history_store.update(entry_id, **fields),
-        on_delete=lambda entry_id: history_store.delete(entry_id),
+        on_save=lambda appointment_id, transcript, exams: history_store.save_appointment(
+            appointment_id, transcript=transcript, exams=exams
+        ),
+        on_delete=history_store.delete_appointment,
         on_regenerate=on_regenerate,
-        initial_entries=initial_entries,
+        on_retry=history_store.retry,
+        on_complete_notes=history_store.complete_notes,
+        initial_appointments=initial_appointments,
+        select=select,
     )
     follow_active_avimark(tk_root, injector, window)
     return window
@@ -358,15 +364,22 @@ def build_app(config=None, tk_root=None, analytics=None):
     # callbacks (a second-launch request, a tray click) that open History again.
     history_loading = {"value": None}
 
-    def open_history(opened_from="tray", loading=None, quit_on_cancel=False):
+    def open_history(
+        opened_from="tray", loading=None, quit_on_cancel=False, appointment_id=None,
+        exam_id=None,
+    ):
         # ``quit_on_cancel``: this open is the one a launch started the app for,
         # so closing its splash means "never mind" -- quit (and stop the backend)
         # rather than leave the app running in the tray.
+        # ``appointment_id``/``exam_id``: open on that recording and animal.
         analytics.capture("history_opened", {"opened_from": opened_from})
+        select = (appointment_id, exam_id) if appointment_id is not None else None
         window = history_window["value"]
         if window is not None and window.winfo_exists():
             if loading is not None:
                 loading.close()
+            if select is not None:
+                window.select_appointment(*select)
             window.deiconify()
             window.lift()
             window.focus_force()
@@ -386,11 +399,11 @@ def build_app(config=None, tk_root=None, analytics=None):
             if quit_on_cancel:
                 tray_app.quit()
 
-        def loaded(entries):
+        def loaded(appointments):
             if loading.cancelled:
                 return
             try:
-                _build_history_window(entries)
+                _build_history_window(appointments, select)
             finally:
                 history_loading["value"] = None
                 loading.close()
@@ -404,9 +417,9 @@ def build_app(config=None, tk_root=None, analytics=None):
         loading.show()
         if loading.cancelled:  # its update() ran an X click already queued
             return
-        _load_in_background(tk_root, history_store.list_entries, loaded, failed)
+        _load_in_background(tk_root, history_store.list_appointments, loaded, failed)
 
-    def _build_history_window(entries):
+    def _build_history_window(appointments, select=None):
         history_window["value"] = show_history(
             tk_root,
             injector,
@@ -429,7 +442,8 @@ def build_app(config=None, tk_root=None, analytics=None):
                 exam_id=getattr(note, "id", None),
             ),
             on_copy=copy_from_history,
-            initial_entries=entries,
+            initial_appointments=appointments,
+            select=select,
         )
 
     # A note flyout also offers an "Open History" button. Errors and status

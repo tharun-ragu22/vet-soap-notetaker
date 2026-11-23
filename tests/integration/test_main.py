@@ -4,7 +4,14 @@ import time
 from dataclasses import replace
 from unittest.mock import MagicMock
 
-from vet_soap_notetaker.api_client import ApiClient, Exam, PatientNote, SoapNote
+from vet_soap_notetaker.api_client import (
+    ApiClient,
+    Appointment,
+    Exam,
+    ExamDraft,
+    PatientNote,
+    SoapNote,
+)
 from vet_soap_notetaker.audio_recorder import AudioRecorder
 from vet_soap_notetaker.avimark_injector import AvimarkInjector
 from vet_soap_notetaker.config import Config
@@ -496,81 +503,51 @@ def test_build_app_wires_offline_queue_into_pipeline_and_tray_app():
     assert tray_app.offline_queue.api_client is tray_app.pipeline.api_client
 
 
-def test_view_history_opens_window_reading_the_shared_backend_history(mocker, tmp_path):
-    # The history the user browses is the backend's shared exam store -- the same
-    # records the mobile app reads -- so opening the window surfaces every note,
-    # whether it was recorded on this desktop or on a phone.
+def test_view_history_opens_window_on_the_shared_backend_appointments(mocker, tmp_path):
+    # The history the vet browses is the backend's appointments -- the same
+    # records the mobile app reads -- so every recording shows up, whether it was
+    # made on this desktop or on a phone, with all of its animals.
     mock_history_window = mocker.patch("vet_soap_notetaker.main.HistoryWindow")
     mocker.patch(
         "vet_soap_notetaker.backend_history_store.get_cache_path",
-        return_value=tmp_path / "history_cache.json",
+        return_value=tmp_path / "appointments_cache.json",
     )
-    exams = [
-        Exam(
-            id="e1",
-            created_at="2026-09-22T00:00:01Z",
-            subjective="from the backend",
-            objective="o",
-            assessment="a",
-            plan="p",
-            transcript="tx",
-        )
-    ]
-    mocker.patch.object(ApiClient, "fetch_history", return_value=exams)
-    config = Config(
-        api_endpoint="https://example.test/soap",
-        api_timeout_seconds=15,
-        hotkey="<ctrl>+<shift>+r",
+    appointment = Appointment(
+        id="appt-1",
+        created_at="2026-11-23T09:00:00",
+        transcript="tx",
+        status="complete",
+        exams=[Exam("e1", "2026-11-23T09:00:00", "s", "o", "a", "p", "tx", "Bella", "appt-1")],
     )
+    mocker.patch.object(ApiClient, "list_appointments", return_value=[appointment])
     tk_root = MagicMock()
 
-    tray_app, _, _ = build_app(config=config, tk_root=tk_root)
+    tray_app, _, _ = build_app(config=_config(), tk_root=tk_root)
     tray_app.show_history()
 
-    mock_history_window.assert_called_once()
-    _, kwargs = mock_history_window.call_args
+    kwargs = mock_history_window.call_args.kwargs
     assert kwargs["master"] is tk_root
-    # The window is handed a callable that reads the shared backend history live,
-    # so calling it surfaces the exams the backend serves.
-    entries = kwargs["load_entries"]()
-    assert [entry.subjective for entry in entries] == ["from the backend"]
+    assert kwargs["load_appointments"]() == [appointment]
 
-    # The window's save callback persists a structured edit back through the
-    # backend, so it syncs to every device.
-    update_mock = mocker.patch.object(
-        ApiClient,
-        "update_exam",
-        return_value=Exam(
-            id="e1",
-            created_at="2026-09-22T00:00:01Z",
-            subjective="edited",
-            objective="o",
-            assessment="a",
-            plan="p",
-            transcript="edited transcript",
-        ),
-    )
-    kwargs["on_save_edit"](
-        "e1",
-        subjective="edited",
-        objective="o",
-        assessment="a",
-        plan="p",
-        transcript="edited transcript",
-    )
-    update_mock.assert_called_once_with(
-        "e1",
-        subjective="edited",
-        objective="o",
-        assessment="a",
-        plan="p",
-        transcript="edited transcript",
-    )
+    # Save, delete, retry and generate go through the backend so they sync.
+    drafts = [ExamDraft("e1", "Belle", "s", "o", "a", "p")]
+    save = mocker.patch.object(ApiClient, "save_appointment", return_value=appointment)
+    assert kwargs["on_save"]("appt-1", "edited", drafts) == appointment
+    save.assert_called_once_with("appt-1", transcript="edited", exams=drafts)
 
-    # The window's delete callback removes the note through the backend.
-    delete_mock = mocker.patch.object(ApiClient, "delete_exam")
-    kwargs["on_delete"]("e1")
-    delete_mock.assert_called_once_with("e1")
+    delete = mocker.patch.object(ApiClient, "delete_appointment")
+    assert kwargs["on_delete"]("appt-1") is True
+    delete.assert_called_once_with("appt-1")
+
+    retry = mocker.patch.object(ApiClient, "retry_appointment", return_value=appointment)
+    assert kwargs["on_retry"]("appt-1") == appointment
+    retry.assert_called_once_with("appt-1")
+
+    generate = mocker.patch.object(
+        ApiClient, "complete_appointment_notes", return_value=appointment
+    )
+    assert kwargs["on_complete_notes"]("appt-1") == appointment
+    generate.assert_called_once_with("appt-1")
 
 
 def test_build_app_wires_injection_poller_to_api_client_and_tray_app():
@@ -819,7 +796,7 @@ def test_history_inject_callback_persists_then_injects_per_box(mocker, tmp_path)
     mocker.patch("vet_soap_notetaker.main.HistoryWindow")
     mocker.patch(
         "vet_soap_notetaker.backend_history_store.get_cache_path",
-        return_value=tmp_path / "history_cache.json",
+        return_value=tmp_path / "appointments_cache.json",
     )
     config = Config(
         api_endpoint="https://example.test/soap",
@@ -1016,16 +993,38 @@ def test_the_splash_closes_even_if_history_fails_to_open(mocker):
     loading_cls.return_value.close.assert_called_once()
 
 
-def test_history_is_built_from_the_entries_fetched_behind_the_splash(mocker):
+def test_history_is_built_from_the_appointments_fetched_behind_the_splash(mocker):
     tray_app, history_cls, _loading_cls = _history_app(mocker)
-    entries = [MagicMock()]
+    appointments = [MagicMock()]
     mocker.patch(
-        "vet_soap_notetaker.main.BackendHistoryStore.list_entries", return_value=entries
+        "vet_soap_notetaker.main.BackendHistoryStore.list_appointments",
+        return_value=appointments,
     )
 
     tray_app.open_history(opened_from="tray")
 
-    assert history_cls.call_args.kwargs["initial_entries"] == entries
+    assert history_cls.call_args.kwargs["initial_appointments"] == appointments
+
+
+def test_history_can_open_on_a_given_appointment_and_animal(mocker):
+    tray_app, history_cls, _loading_cls = _history_app(mocker)
+
+    tray_app.open_history(opened_from="flyout", appointment_id="appt-1", exam_id="e2")
+
+    assert history_cls.call_args.kwargs["select"] == ("appt-1", "e2")
+
+
+def test_opening_an_appointment_in_an_open_history_window_switches_to_it(mocker):
+    tray_app, history_cls, _loading_cls = _history_app(mocker)
+    tray_app.open_history(opened_from="tray")
+    window = history_cls.return_value
+    window.winfo_exists.return_value = True
+
+    tray_app.open_history(opened_from="flyout", appointment_id="appt-1", exam_id="e2")
+
+    history_cls.assert_called_once()
+    window.select_appointment.assert_called_once_with("appt-1", "e2")
+    window.lift.assert_called()
 
 
 def _cancelling_load(mocker, splash):

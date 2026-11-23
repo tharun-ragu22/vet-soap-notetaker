@@ -197,11 +197,6 @@ def test_generate_soap_note_raises_api_client_error_on_malformed_json():
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 def test_fetch_pending_injections_returns_requests_list():
     route = respx.get("https://vet_soap_notetaker.example.com/api/injections/pending").mock(
         return_value=httpx.Response(
@@ -299,187 +294,6 @@ def test_ack_injection_raises_api_client_error_on_transport_failure():
         client.ack_injection("req-1", outcome="injected")
 
 
-# --- Shared exam history (backend as single source of truth) ---------------
-
-_EXAM_JSON = {
-    "id": "exam-1",
-    "created_at": "2026-09-22T00:00:01Z",
-    "patient_name": "Rex",
-    "subjective": "sub",
-    "objective": "obj",
-    "assessment": "assess",
-    "plan": "plan",
-    "transcript": "vet: hello",
-}
-
-
-@respx.mock
-def test_fetch_history_returns_exams_parsed_into_dataclasses():
-    route = respx.get("https://vet_soap_notetaker.example.com/api/history").mock(
-        return_value=httpx.Response(200, json={"exams": [_EXAM_JSON]})
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-    exams = client.fetch_history()
-
-    assert route.called
-    assert len(exams) == 1
-    exam = exams[0]
-    assert exam.id == "exam-1"
-    assert exam.created_at == "2026-09-22T00:00:01Z"
-    assert exam.patient_name == "Rex"
-    assert exam.assessment == "assess"
-    assert exam.transcript == "vet: hello"
-    # soap_text renders the four structured fields for copy/inject.
-    assert "assess" in exam.soap_text
-
-
-@respx.mock
-def test_fetch_history_sends_bearer_token_when_configured():
-    route = respx.get("https://vet_soap_notetaker.example.com/api/history").mock(
-        return_value=httpx.Response(200, json={"exams": []})
-    )
-
-    client = ApiClient(
-        endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5, api_key="secret"
-    )
-    assert client.fetch_history() == []
-    assert route.calls.last.request.headers["Authorization"] == "Bearer secret"
-
-
-@respx.mock
-def test_fetch_history_raises_api_client_error_on_transport_failure():
-    respx.get("https://vet_soap_notetaker.example.com/api/history").mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-
-    with pytest.raises(ApiClientError):
-        client.fetch_history()
-
-
-@respx.mock
-def test_fetch_history_raises_on_http_error_status():
-    respx.get("https://vet_soap_notetaker.example.com/api/history").mock(
-        return_value=httpx.Response(500, text="boom")
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-
-    with pytest.raises(ApiClientError):
-        client.fetch_history()
-
-
-@respx.mock
-def test_update_exam_puts_structured_fields_and_returns_updated_exam():
-    updated = {**_EXAM_JSON, "assessment": "new-assessment", "transcript": "corrected"}
-    route = respx.put("https://vet_soap_notetaker.example.com/api/exams/exam-1").mock(
-        return_value=httpx.Response(200, json=updated)
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-    exam = client.update_exam(
-        "exam-1",
-        subjective="sub",
-        objective="obj",
-        assessment="new-assessment",
-        plan="plan",
-        transcript="corrected",
-    )
-
-    assert route.called
-    assert json.loads(route.calls.last.request.content) == {
-        "subjective": "sub",
-        "objective": "obj",
-        "assessment": "new-assessment",
-        "plan": "plan",
-        "transcript": "corrected",
-    }
-    assert exam.assessment == "new-assessment"
-    assert exam.transcript == "corrected"
-
-
-@respx.mock
-def test_update_exam_sends_bearer_token_when_configured():
-    route = respx.put("https://vet_soap_notetaker.example.com/api/exams/exam-1").mock(
-        return_value=httpx.Response(200, json=_EXAM_JSON)
-    )
-
-    client = ApiClient(
-        endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5, api_key="secret"
-    )
-    client.update_exam(
-        "exam-1", subjective="s", objective="o", assessment="a", plan="p", transcript="t"
-    )
-
-    assert route.calls.last.request.headers["Authorization"] == "Bearer secret"
-
-
-@respx.mock
-def test_update_exam_raises_on_http_error_status():
-    respx.put("https://vet_soap_notetaker.example.com/api/exams/exam-1").mock(
-        return_value=httpx.Response(404, text="exam not found")
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-
-    with pytest.raises(ApiClientError):
-        client.update_exam(
-            "exam-1", subjective="s", objective="o", assessment="a", plan="p", transcript="t"
-        )
-
-
-@respx.mock
-def test_delete_exam_sends_delete_to_the_exam_endpoint():
-    route = respx.delete("https://vet_soap_notetaker.example.com/api/exams/exam-1").mock(
-        return_value=httpx.Response(200, json={"status": "deleted"})
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-    client.delete_exam("exam-1")
-
-    assert route.called
-
-
-@respx.mock
-def test_delete_exam_sends_bearer_token_when_configured():
-    route = respx.delete("https://vet_soap_notetaker.example.com/api/exams/exam-1").mock(
-        return_value=httpx.Response(200, json={"status": "deleted"})
-    )
-
-    client = ApiClient(
-        endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5, api_key="secret"
-    )
-    client.delete_exam("exam-1")
-
-    assert route.calls.last.request.headers["Authorization"] == "Bearer secret"
-
-
-@respx.mock
-def test_delete_exam_raises_on_http_error_status():
-    respx.delete("https://vet_soap_notetaker.example.com/api/exams/exam-1").mock(
-        return_value=httpx.Response(500, text="boom")
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-
-    with pytest.raises(ApiClientError):
-        client.delete_exam("exam-1")
-
-
-@respx.mock
-def test_delete_exam_raises_api_client_error_on_transport_failure():
-    respx.delete("https://vet_soap_notetaker.example.com/api/exams/exam-1").mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
-
-    client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=5)
-
-    with pytest.raises(ApiClientError):
-        client.delete_exam("exam-1")
-
-
 _NOTE_JSON = {"subjective": "s", "objective": "o", "assessment": "a", "plan": "p"}
 
 
@@ -520,17 +334,16 @@ def test_generate_soap_note_uses_a_custom_generate_timeout():
 
 
 @respx.mock
-@respx.mock
 def test_quick_calls_keep_the_short_timeout():
-    history = respx.get("https://vet_soap_notetaker.example.com/api/history").mock(
-        return_value=httpx.Response(200, json={"exams": []})
+    history = respx.get("https://vet_soap_notetaker.example.com/api/appointments").mock(
+        return_value=httpx.Response(200, json={"appointments": []})
     )
     pending = respx.get("https://vet_soap_notetaker.example.com/api/injections/pending").mock(
         return_value=httpx.Response(200, json={"requests": []})
     )
     client = ApiClient(endpoint="https://vet_soap_notetaker.example.com/api/soap", timeout_seconds=30)
 
-    client.fetch_history()
+    client.list_appointments()
     client.fetch_pending_injections()
 
     assert _sent_timeout(history)["read"] == 30
@@ -669,8 +482,6 @@ def _client_with_identity(identity=None):
     [
         ("POST", f"{_BASE}/soap", lambda c: c.generate_soap_note(b"RIFF")),
         ("POST", f"{_BASE}/exams/e1/note", lambda c: c.complete_note("e1")),
-        ("GET", f"{_BASE}/history", lambda c: c.fetch_history()),
-        ("DELETE", f"{_BASE}/exams/e1", lambda c: c.delete_exam("e1")),
         ("GET", f"{_BASE}/injections/pending", lambda c: c.fetch_pending_injections()),
         ("POST", f"{_BASE}/injections/r1/ack", lambda c: c.ack_injection("r1", "delivered")),
     ],
@@ -689,14 +500,16 @@ def test_every_request_carries_the_analytics_identity_headers(method, url, call)
 
 @respx.mock
 def test_identity_headers_are_read_fresh_for_each_request():
-    route = respx.get(f"{_BASE}/history").mock(return_value=httpx.Response(200, json={"exams": []}))
+    route = respx.get(f"{_BASE}/appointments").mock(
+        return_value=httpx.Response(200, json={"appointments": []})
+    )
     identity = dict(_IDENTITY)
     client = _client_with_identity()
     client.extra_headers = lambda: dict(identity)
 
-    client.fetch_history()
+    client.list_appointments()
     identity["X-POSTHOG-DISTINCT-ID"] = "someone-else"
-    client.fetch_history()
+    client.list_appointments()
 
     assert route.calls.last.request.headers["X-POSTHOG-DISTINCT-ID"] == "someone-else"
 
@@ -720,7 +533,6 @@ def test_generate_soap_note_omits_the_recording_length_when_unknown():
     assert "X-Audio-Duration-Ms" not in route.calls.last.request.headers
 
 
-@respx.mock
 @respx.mock
 def test_generate_soap_note_raises_backend_unreachable_when_there_is_no_answer():
     # Lets the pipeline (and its analytics) tell "backend down" from "provider failed".
