@@ -33,6 +33,7 @@ class TrayApp:
         on_show_note=None,
         on_show_history=None,
         on_calibrate=None,
+        on_show_appointment=None,
     ):
         self.pipeline = pipeline
         self.hotkey_listener = None
@@ -42,7 +43,8 @@ class TrayApp:
         self.tk_root = None
         self.analytics = None
         self.on_open_settings = on_open_settings or (lambda: None)
-        self.on_show_note = on_show_note or (lambda soap_text: None)
+        self.on_show_note = on_show_note or (lambda soap_text, patient_name: None)
+        self.on_show_appointment = on_show_appointment or (lambda appointment_id: None)
         self.on_show_history = on_show_history or (lambda: None)
         self.on_calibrate = on_calibrate or (lambda: None)
         self.icon = pystray.Icon(
@@ -118,8 +120,15 @@ class TrayApp:
         self.update_icon_for_state()
 
     def open_last_note(self):
-        if self.pipeline.last_soap_text:
-            self.on_show_note(self.pipeline.last_soap_text)
+        pipeline = self.pipeline
+        if not pipeline.last_soap_text:
+            return
+        # A several-animal recording has one note per animal: open them all.
+        count = pipeline.last_animal_count
+        if count is not None and count > 1 and pipeline.last_appointment_id:
+            self.on_show_appointment(pipeline.last_appointment_id)
+        else:
+            self.on_show_note(pipeline.last_soap_text, pipeline.last_patient_name)
 
     def show_history(self):
         self.on_show_history()

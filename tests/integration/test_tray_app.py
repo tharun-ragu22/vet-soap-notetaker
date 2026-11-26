@@ -137,11 +137,52 @@ def test_open_last_note_menu_item_disabled_when_no_note_yet():
 
 def test_open_last_note_invokes_on_show_note_with_last_soap_text():
     shown = []
-    tray_app, pipeline = make_tray_app(state=PipelineState.IDLE, last_soap_text="SUBJECTIVE: text")
-    tray_app.on_show_note = shown.append
+    tray_app, pipeline = make_tray_app(
+        state=PipelineState.IDLE,
+        last_soap_text="SUBJECTIVE: text",
+        last_patient_name="Bella",
+        last_appointment_id="appt-1",
+        last_animal_count=1,
+    )
+    tray_app.on_show_note = lambda text, name: shown.append((text, name))
 
     open_note_item = tray_app.icon.menu.items[1]
     assert open_note_item.enabled is True
+
+    tray_app.open_last_note()
+
+    assert shown == [("SUBJECTIVE: text", "Bella")]
+
+
+def test_open_last_note_opens_the_appointment_when_it_had_several_animals():
+    shown, opened = [], []
+    tray_app, pipeline = make_tray_app(
+        state=PipelineState.IDLE,
+        last_soap_text="SUBJECTIVE: text",
+        last_patient_name="Bella",
+        last_appointment_id="appt-1",
+        last_animal_count=2,
+    )
+    tray_app.on_show_note = lambda text, name: shown.append(text)
+    tray_app.on_show_appointment = opened.append
+
+    tray_app.open_last_note()
+
+    assert opened == ["appt-1"]
+    assert shown == []
+
+
+def test_open_last_note_with_an_unknown_animal_count_shows_the_note():
+    # The lookup failed (or an older backend): the note itself is what we have.
+    shown = []
+    tray_app, pipeline = make_tray_app(
+        state=PipelineState.IDLE,
+        last_soap_text="SUBJECTIVE: text",
+        last_patient_name=None,
+        last_appointment_id="appt-1",
+        last_animal_count=None,
+    )
+    tray_app.on_show_note = lambda text, name: shown.append(text)
 
     tray_app.open_last_note()
 

@@ -26,7 +26,7 @@ def test_pipeline_shows_safety_flyout_when_avimark_not_focused():
     root.withdraw()
     flyouts_shown = []
 
-    def on_flyout_needed(soap_text):
+    def on_flyout_needed(soap_text, patient_name=None):
         flyouts_shown.append(
             FlyoutWindow(
                 master=root,

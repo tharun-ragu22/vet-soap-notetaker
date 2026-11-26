@@ -33,6 +33,21 @@ def format_soap_text(soap_note) -> str:
     )
 
 
+def animal_count(api_client, soap_note):
+    """How many animals the recording behind ``soap_note`` covers, or None when
+    that can't be told (an older backend sends no appointment id, or the lookup
+    failed). None means "treat it as the one note we have" -- the count only
+    decides between pasting and opening History, so a failed lookup must never
+    lose or hold up the note."""
+    if not soap_note.appointment_id:
+        return None
+    try:
+        return len(api_client.get_appointment(soap_note.appointment_id).exams)
+    except ApiClientError as exc:
+        logger.warning("could not count the animals in the appointment (%s)", type(exc).__name__)
+        return None
+
+
 class Pipeline:
     def __init__(
         self,
@@ -41,6 +56,7 @@ class Pipeline:
         injector,
         on_flyout_needed,
         on_error=None,
+        on_appointment_ready=None,
         recordings_dir=None,
         offline_queue=None,
         on_state_change=None,
@@ -53,6 +69,10 @@ class Pipeline:
         self.injector = injector
         self.on_flyout_needed = on_flyout_needed
         self.on_error = on_error or (lambda message: None)
+        # Called with (appointment_id, exam_id) instead of pasting when the
+        # recording covers several animals: one paste can only fill one chart,
+        # so the vet picks each animal's note in History.
+        self.on_appointment_ready = on_appointment_ready or (lambda appointment_id, exam_id: None)
         # Share one data root with history/ and queue/ (%APPDATA%\Vet Soap Notetaker on
         # Windows, ~/.vetscribe elsewhere) so all Vet Soap Notetaker data lives together.
         self.recordings_dir = Path(recordings_dir) if recordings_dir else (
@@ -70,6 +90,11 @@ class Pipeline:
         self._recording_started_at = None
         self.state = PipelineState.IDLE
         self.last_soap_text = None
+        # The last recording's pet, appointment and animal count, so the tray's
+        # "Open Last SOAP Note" can open History on a several-animal recording.
+        self.last_patient_name = None
+        self.last_appointment_id = None
+        self.last_animal_count = None
 
     def _transition(self, new_state):
         self.state = new_state
@@ -148,8 +173,12 @@ class Pipeline:
             return
 
         soap_text = format_soap_text(soap_note)
+        count = animal_count(self.api_client, soap_note)
         self.last_soap_text = soap_text
-        logger.info("SOAP note generated successfully")
+        self.last_patient_name = soap_note.patient_name
+        self.last_appointment_id = soap_note.appointment_id
+        self.last_animal_count = count
+        logger.info("SOAP note generated successfully (%s animal(s))", count or "unknown number of")
         self.analytics.capture(
             "note_ready",
             {
@@ -157,12 +186,19 @@ class Pipeline:
                 "wait_ms": int((self._clock() - stopped_at) * 1000),
                 "recording_ms": recording_ms,
                 "via_offline_queue": False,
+                "animal_count": count,
             },
         )
 
         # No local history save here: the backend already persisted this exam
         # when generate_soap_note() posted the audio, and the History window
         # reads that shared record so it syncs across every device.
+
+        if count is not None and count > 1:
+            logger.info("recording has several animals; opening History instead of pasting")
+            self.on_appointment_ready(soap_note.appointment_id, soap_note.exam_id)
+            self._transition(PipelineState.IDLE)
+            return
 
         logger.info("attempting to inject SOAP note into AVImark")
         injected = self.injector.inject(soap_text)
@@ -178,7 +214,7 @@ class Pipeline:
             ),
         )
         if not injected:
-            self.on_flyout_needed(soap_text)
+            self.on_flyout_needed(soap_text, soap_note.patient_name)
 
         self._transition(PipelineState.IDLE)
         logger.info("done, back to idle")

@@ -473,10 +473,26 @@ def build_app(config=None, tk_root=None, analytics=None):
             message_only=True,
         )
 
+    def show_offline_note(soap_note, count):
+        # A queued recording that covers several animals opens History on it
+        # (one note per animal); a single note gets the usual flyout.
+        if count is not None and count > 1:
+            open_history(
+                opened_from="offline_note",
+                appointment_id=soap_note.appointment_id,
+                exam_id=soap_note.exam_id,
+            )
+        else:
+            show_note_flyout(
+                format_soap_text(soap_note),
+                reason="offline_note",
+                patient_name=soap_note.patient_name,
+            )
+
     offline_queue = OfflineQueue(
         api_client=api_client,
-        on_note_ready=lambda soap_text: run_on_main_thread(
-            tk_root, lambda: show_note_flyout(soap_text, reason="offline_note")
+        on_note_ready=lambda soap_note, count: run_on_main_thread(
+            tk_root, lambda: show_offline_note(soap_note, count)
         ),
         on_gave_up=lambda exam_id: run_on_main_thread(
             tk_root,
@@ -540,8 +556,18 @@ def build_app(config=None, tk_root=None, analytics=None):
         recorder=recorder,
         api_client=api_client,
         injector=injector,
-        on_flyout_needed=lambda soap_text: run_on_main_thread(
-            tk_root, lambda: show_note_flyout(soap_text, reason="inject_refused")
+        on_flyout_needed=lambda soap_text, patient_name=None: run_on_main_thread(
+            tk_root,
+            lambda: show_note_flyout(
+                soap_text, reason="inject_refused", patient_name=patient_name
+            ),
+        ),
+        # Several animals in one recording: open History on it, no paste.
+        on_appointment_ready=lambda appointment_id, exam_id: run_on_main_thread(
+            tk_root,
+            lambda: open_history(
+                opened_from="hotkey", appointment_id=appointment_id, exam_id=exam_id
+            ),
         ),
         # Errors and status messages are not notes: message-only, so they can
         # never be pasted into a chart (and need no AVImark window tracking).
@@ -555,8 +581,15 @@ def build_app(config=None, tk_root=None, analytics=None):
 
     tray_app = TrayApp(
         pipeline=pipeline,
-        on_show_note=lambda soap_text: run_on_main_thread(
-            tk_root, lambda: show_note_flyout(soap_text, reason="tray_last_note")
+        on_show_note=lambda soap_text, patient_name=None: run_on_main_thread(
+            tk_root,
+            lambda: show_note_flyout(
+                soap_text, reason="tray_last_note", patient_name=patient_name
+            ),
+        ),
+        on_show_appointment=lambda appointment_id: run_on_main_thread(
+            tk_root,
+            lambda: open_history(opened_from="tray_last_note", appointment_id=appointment_id),
         ),
         on_show_history=lambda: run_on_main_thread(tk_root, open_history),
     )

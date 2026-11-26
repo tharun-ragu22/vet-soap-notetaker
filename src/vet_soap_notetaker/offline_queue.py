@@ -13,7 +13,7 @@ from vet_soap_notetaker.api_client import (
     NotePendingError,
 )
 from vet_soap_notetaker.paths import get_appdata_base_dir
-from vet_soap_notetaker.pipeline import format_soap_text
+from vet_soap_notetaker.pipeline import animal_count
 
 logger = logging.getLogger("vet_soap_notetaker.offline_queue")
 
@@ -67,6 +67,8 @@ class OfflineQueue:
         self.api_client = api_client
         self.analytics = analytics or NullAnalytics()
         self._clock = clock
+        # Called with (soap_note, animal_count) -- the count is None when it
+        # can't be told -- so a several-animal recording can open History.
         self.on_note_ready = on_note_ready
         # Called with the exam id when a pending note hits MAX_NOTE_ATTEMPTS.
         self.on_gave_up = on_gave_up or (lambda exam_id: None)
@@ -81,7 +83,12 @@ class OfflineQueue:
     def _new_stem():
         return f"queued_{datetime.now().strftime(_STEM_FORMAT)}"
 
-    def _report_note_ready(self, path, soap_note, queued_as):
+    def _note_ready(self, path, soap_note, queued_as):
+        count = animal_count(self.api_client, soap_note)
+        self._report_note_ready(path, soap_note, queued_as, count)
+        self.on_note_ready(soap_note, count)
+
+    def _report_note_ready(self, path, soap_note, queued_as, count):
         # How long the vet waited for this note, measured from when it was
         # queued (the stem's timestamp) -- for analytics.
         try:
@@ -96,6 +103,7 @@ class OfflineQueue:
                 "wait_ms": wait_ms,
                 "via_offline_queue": True,
                 "queued_as": queued_as,
+                "animal_count": count,
             },
         )
 
@@ -180,10 +188,9 @@ class OfflineQueue:
             return _STOP
         path.unlink()
         logger.info("queued recording %s processed successfully", path)
-        self._report_note_ready(path, soap_note, "audio")
         # The backend persisted this exam when generate_soap_note() succeeded,
         # so it's already in the shared history the window reads -- no local save.
-        self.on_note_ready(format_soap_text(soap_note))
+        self._note_ready(path, soap_note, "audio")
         return _DONE
 
     def _process_note(self, path):
@@ -227,8 +234,9 @@ class OfflineQueue:
             return _STOP
         path.unlink()
         logger.info("pending note for exam %s completed", exam_id)
-        self._report_note_ready(path, soap_note, "pending_note")
-        self.on_note_ready(format_soap_text(soap_note))
+        # Completing a pending note is where the backend adds the other
+        # animals, so the count is read only now.
+        self._note_ready(path, soap_note, "pending_note")
         return _DONE
 
     def start(self):

@@ -1,7 +1,15 @@
 from unittest.mock import MagicMock
 
 from vet_soap_notetaker import ui_strings
-from vet_soap_notetaker.api_client import ApiClientError, NoSpeechError, NotePendingError, SoapNote
+from vet_soap_notetaker.api_client import (
+    ApiClientError,
+    Appointment,
+    BackendUnreachableError,
+    Exam,
+    NoSpeechError,
+    NotePendingError,
+    SoapNote,
+)
 from vet_soap_notetaker.pipeline import Pipeline, PipelineState
 
 
@@ -275,3 +283,115 @@ def test_no_speech_keeps_the_audio_but_never_queues_it_for_retry(tmp_path):
     assert "No speech was heard" in deps["on_error"].call_args[0][0]
     deps["injector"].inject.assert_not_called()
     assert pipeline.state == PipelineState.IDLE
+
+
+# --- one recording, several animals ------------------------------------------
+
+
+def _appointment_with(count):
+    return Appointment(
+        id="appt-1",
+        created_at="2026-11-25T09:00:00+00:00",
+        transcript="t",
+        status="complete",
+        exams=[
+            Exam(
+                id=f"exam-{i}", created_at="", subjective="s", objective="o",
+                assessment="a", plan="p", transcript="t", appointment_id="appt-1",
+            )
+            for i in range(1, count + 1)
+        ],
+    )
+
+
+def _recorded(api_client, injector=None, **overrides):
+    recorder = MagicMock(save_wav=MagicMock(side_effect=lambda path: path.write_bytes(b"wav")))
+    pipeline, deps = make_pipeline(
+        recorder=recorder,
+        api_client=api_client,
+        injector=injector or MagicMock(inject=MagicMock(return_value=True)),
+        on_appointment_ready=MagicMock(),
+        **overrides,
+    )
+    pipeline.state = PipelineState.RECORDING
+    pipeline.toggle_recording()
+    return pipeline, deps
+
+
+def _named_note(name="Bella"):
+    return SoapNote(
+        "s", "o", "a", "p", exam_id="exam-1", patient_name=name, appointment_id="appt-1"
+    )
+
+
+def test_a_recording_with_several_animals_opens_the_appointment_instead_of_pasting():
+    api_client = MagicMock(
+        generate_soap_note=MagicMock(return_value=_named_note()),
+        get_appointment=MagicMock(return_value=_appointment_with(2)),
+    )
+
+    pipeline, deps = _recorded(api_client)
+
+    api_client.get_appointment.assert_called_once_with("appt-1")
+    deps["injector"].inject.assert_not_called()
+    deps["on_flyout_needed"].assert_not_called()
+    deps["on_appointment_ready"].assert_called_once_with("appt-1", "exam-1")
+    assert pipeline.state == PipelineState.IDLE
+    assert pipeline.last_appointment_id == "appt-1"
+    assert pipeline.last_animal_count == 2
+
+
+def test_a_recording_with_one_animal_still_pastes():
+    api_client = MagicMock(
+        generate_soap_note=MagicMock(return_value=_named_note()),
+        get_appointment=MagicMock(return_value=_appointment_with(1)),
+    )
+
+    pipeline, deps = _recorded(api_client)
+
+    deps["injector"].inject.assert_called_once()
+    deps["on_appointment_ready"].assert_not_called()
+    assert pipeline.last_animal_count == 1
+    assert pipeline.state == PipelineState.IDLE
+
+
+def test_a_failed_animal_lookup_falls_back_to_pasting_the_note():
+    # The count is a nicety: a lookup that fails must never lose the note.
+    api_client = MagicMock(
+        generate_soap_note=MagicMock(return_value=_named_note()),
+        get_appointment=MagicMock(side_effect=BackendUnreachableError("down")),
+    )
+
+    pipeline, deps = _recorded(api_client)
+
+    deps["injector"].inject.assert_called_once()
+    deps["on_appointment_ready"].assert_not_called()
+    assert pipeline.last_animal_count is None
+    assert pipeline.state == PipelineState.IDLE
+
+
+def test_a_note_without_an_appointment_id_skips_the_lookup():
+    # An older backend sends no appointment id.
+    api_client = MagicMock(
+        generate_soap_note=MagicMock(return_value=SoapNote("s", "o", "a", "p"))
+    )
+
+    pipeline, deps = _recorded(api_client)
+
+    api_client.get_appointment.assert_not_called()
+    deps["injector"].inject.assert_called_once()
+
+
+def test_a_refused_paste_shows_the_flyout_with_the_pet_name():
+    api_client = MagicMock(
+        generate_soap_note=MagicMock(return_value=_named_note("Bella")),
+        get_appointment=MagicMock(return_value=_appointment_with(1)),
+    )
+
+    pipeline, deps = _recorded(api_client, injector=MagicMock(inject=MagicMock(return_value=False)))
+
+    text, name = deps["on_flyout_needed"].call_args[0]
+    assert "SUBJECTIVE: s" in text
+    assert "Bella" not in text
+    assert name == "Bella"
+    assert pipeline.last_patient_name == "Bella"

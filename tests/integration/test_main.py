@@ -664,12 +664,16 @@ def test_build_app_offline_queue_on_note_ready_shows_flyout(mocker):
     tk_root = MagicMock()
 
     tray_app, _, _ = build_app(config=config, tk_root=tk_root)
-    tray_app.offline_queue.on_note_ready("SUBJECTIVE: recovered note")
+    tray_app.offline_queue.on_note_ready(
+        SoapNote("recovered note", "o", "a", "p", patient_name="Bella"), 1
+    )
 
     mock_flyout_cls.assert_called_once()
     _, kwargs = mock_flyout_cls.call_args
     assert kwargs["master"] is tk_root
-    assert kwargs["soap_text"] == "SUBJECTIVE: recovered note"
+    assert kwargs["soap_text"].startswith("SUBJECTIVE: recovered note")
+    assert "Bella" not in kwargs["soap_text"]
+    assert kwargs["patient_name"] == "Bella"
 
 
 def _calibration_dict():
@@ -1025,6 +1029,64 @@ def test_opening_an_appointment_in_an_open_history_window_switches_to_it(mocker)
     history_cls.assert_called_once()
     window.select_appointment.assert_called_once_with("appt-1", "e2")
     window.lift.assert_called()
+
+
+def test_a_queued_recording_with_several_animals_opens_history_on_it(mocker):
+    flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, history_cls, _loading_cls = _history_app(mocker)
+    note = SoapNote("s", "o", "a", "p", exam_id="e1", patient_name="Bella", appointment_id="appt-1")
+
+    tray_app.offline_queue.on_note_ready(note, 2)
+
+    flyout_cls.assert_not_called()
+    assert history_cls.call_args.kwargs["select"] == ("appt-1", "e1")
+
+
+def test_a_hotkey_recording_with_several_animals_opens_history_on_it(mocker):
+    tray_app, history_cls, _loading_cls = _history_app(mocker)
+
+    tray_app.pipeline.on_appointment_ready("appt-1", "e1")
+
+    assert history_cls.call_args.kwargs["select"] == ("appt-1", "e1")
+
+
+def test_a_refused_hotkey_paste_titles_the_flyout_with_the_pet_name(mocker):
+    flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, _history_cls, _loading_cls = _history_app(mocker)
+
+    tray_app.pipeline.on_flyout_needed("SUBJECTIVE: s", "Bella")
+
+    assert flyout_cls.call_args.kwargs["patient_name"] == "Bella"
+
+
+def test_the_tray_last_note_opens_history_after_a_several_animal_recording(mocker):
+    flyout_cls = mocker.patch("vet_soap_notetaker.main.FlyoutWindow")
+    tray_app, history_cls, _loading_cls = _history_app(mocker)
+    pipeline = tray_app.pipeline
+    pipeline.last_soap_text = "SUBJECTIVE: s"
+    pipeline.last_appointment_id = "appt-1"
+    pipeline.last_animal_count = 2
+
+    tray_app.open_last_note()
+
+    flyout_cls.assert_not_called()
+    assert history_cls.call_args.kwargs["select"] == ("appt-1", None)
+
+
+def test_multi_animal_opens_are_reported_by_where_they_came_from(mocker):
+    mocker.patch("vet_soap_notetaker.main.HistoryWindow")
+    mocker.patch("vet_soap_notetaker.main.follow_active_avimark")
+    loading_cls = mocker.patch("vet_soap_notetaker.main.LoadingWindow")
+    loading_cls.return_value.cancelled = False
+    tray_app, tracker = _tracked_app(mocker)
+    note = SoapNote("s", "o", "a", "p", exam_id="e1", appointment_id="appt-1")
+
+    tray_app.pipeline.on_appointment_ready("appt-1", "e1")
+    tray_app.offline_queue.on_note_ready(note, 2)
+
+    assert [e["properties"]["opened_from"] for e in tracker.named("history_opened")] == [
+        "hotkey", "offline_note",
+    ]
 
 
 def _cancelling_load(mocker, splash):
@@ -1419,7 +1481,7 @@ def test_flyout_buttons_are_reported(mocker):
     _inject_returns(mocker, tray_app, "focus_and_inject", True, "single_block")
 
     for _ in range(3):
-        tray_app.offline_queue.on_note_ready("SUBJECTIVE: note")
+        tray_app.offline_queue.on_note_ready(SoapNote("note", "o", "a", "p"), None)
     first, second, third = (c.kwargs for c in mock_flyout_cls.call_args_list)
     first["on_copy_and_inject"]("SUBJECTIVE: note")
     second["on_copy_to_clipboard"]("SUBJECTIVE: note")
@@ -1583,7 +1645,9 @@ def test_no_desktop_event_ever_carries_patient_data(mocker, tmp_path):
     request = _injection_request()
     request["exam"] = {f: sentinel for f in ("subjective", "objective", "assessment", "plan", "transcript")}
     tray_app.injection_poller.on_injection(request)
-    tray_app.offline_queue.on_note_ready(f"SUBJECTIVE: {sentinel}")
+    tray_app.offline_queue.on_note_ready(
+        SoapNote(sentinel, sentinel, sentinel, sentinel, patient_name=sentinel), 1
+    )
     flyout_kwargs = mock_flyout_cls.call_args.kwargs
     flyout_kwargs["on_copy_and_inject"](sentinel)
     flyout_kwargs["on_copy_to_clipboard"](sentinel)
@@ -1639,7 +1703,7 @@ def test_every_injection_completed_has_the_same_properties_whatever_its_source(m
     mock_history_window.call_args.kwargs["on_copy_and_inject"](
         Exam(id="e1", created_at="t", subjective="s", objective="o", assessment="a", plan="p")
     )
-    tray_app.offline_queue.on_note_ready("SUBJECTIVE: s")
+    tray_app.offline_queue.on_note_ready(SoapNote("s", "o", "a", "p"), None)
     mock_flyout_cls.call_args.kwargs["on_copy_and_inject"]("SUBJECTIVE: s")
 
     events = tracker.named("injection_completed")

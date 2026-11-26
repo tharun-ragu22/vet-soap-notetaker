@@ -64,6 +64,8 @@ def test_a_recorded_note_reports_recording_length_wait_and_how_it_landed(tmp_pat
         "wait_ms": 4500,
         "recording_ms": 30000,
         "via_offline_queue": False,
+        # No appointment id from this backend, so no count.
+        "animal_count": None,
     }
     assert tracker.only("injection_completed")["properties"] == {
         "source": "hotkey",
@@ -154,3 +156,21 @@ def test_a_hotkey_press_while_busy_is_reported(tmp_path):
     pipeline.toggle_recording()
 
     assert len(tracker.named("hotkey_while_busy")) == 2
+
+
+def test_a_note_ready_reports_how_many_animals_the_recording_had(tmp_path):
+    note = SoapNote("s", "o", "a", "p", exam_id="exam-7", patient_name="Bella", appointment_id="appt-1")
+    api_client = MagicMock(
+        generate_soap_note=MagicMock(return_value=note),
+        get_appointment=MagicMock(return_value=MagicMock(exams=[object(), object()])),
+    )
+    pipeline, tracker, _ = _pipeline(
+        tmp_path, api_client, Clock(0.0, 1.0, 2.0), on_appointment_ready=MagicMock()
+    )
+
+    pipeline.toggle_recording()
+    pipeline.toggle_recording()
+
+    assert tracker.only("note_ready")["properties"]["animal_count"] == 2
+    # Nothing was pasted, so there is no inject to report.
+    assert [e["event"] for e in tracker.events if e["event"] == "injection_completed"] == []

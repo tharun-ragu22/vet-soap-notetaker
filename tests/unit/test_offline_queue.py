@@ -54,8 +54,8 @@ def test_process_once_processes_all_queued_files_in_order_and_removes_them(tmp_p
     assert not first.exists()
     assert not second.exists()
     assert on_note_ready.call_count == 2
-    assert "SUBJECTIVE: s1" in on_note_ready.call_args_list[0][0][0]
-    assert "SUBJECTIVE: s2" in on_note_ready.call_args_list[1][0][0]
+    assert on_note_ready.call_args_list[0][0][0].subjective == "s1"
+    assert on_note_ready.call_args_list[1][0][0].subjective == "s2"
 
 
 def test_process_once_stops_at_first_backend_failure_and_leaves_remaining_files_queued(tmp_path):
@@ -105,7 +105,7 @@ def test_start_runs_process_once_on_background_thread_until_stopped(tmp_path):
         subjective="s", objective="o", assessment="a", plan="p"
     )
     processed_event = threading.Event()
-    on_note_ready = MagicMock(side_effect=lambda text: processed_event.set())
+    on_note_ready = MagicMock(side_effect=lambda note, count: processed_event.set())
     queue = OfflineQueue(
         api_client=api_client,
         on_note_ready=on_note_ready,
@@ -155,7 +155,7 @@ def test_process_once_finishes_a_queued_note_and_removes_the_entry(tmp_path):
     assert processed == [entry]
     assert not entry.exists()
     on_note_ready.assert_called_once()
-    assert "SUBJECTIVE: s1" in on_note_ready.call_args[0][0]
+    assert on_note_ready.call_args[0][0].subjective == "s1"
 
 
 def test_process_once_drops_a_queued_note_whose_exam_was_deleted(tmp_path):
@@ -259,7 +259,7 @@ def test_queuing_a_note_completion_triggers_a_pass_right_away(tmp_path):
     ready = threading.Event()
     queue = OfflineQueue(
         api_client=api_client,
-        on_note_ready=lambda text: ready.set(),
+        on_note_ready=lambda note, count: ready.set(),
         queue_dir=tmp_path / "queue",
         poll_interval_seconds=60,
     )
@@ -384,6 +384,7 @@ def test_a_recovered_recording_reports_how_long_it_waited_in_the_queue(tmp_path)
         "wait_ms": 300000,
         "via_offline_queue": True,
         "queued_as": "audio",
+        "animal_count": None,
     }
 
 
@@ -404,6 +405,20 @@ def test_a_finished_pending_note_reports_its_wait(tmp_path):
     assert props["exam_id"] == "exam-2"
 
 
+def test_a_recovered_note_reports_its_animal_count(tmp_path):
+    api_client = MagicMock()
+    api_client.generate_soap_note.return_value = SoapNote(
+        "s", "o", "a", "p", exam_id="exam-1", appointment_id="appt-1"
+    )
+    api_client.get_appointment.return_value = MagicMock(exams=[object(), object()])
+    queue, tracker = _tracked_queue(tmp_path, api_client, datetime(2026, 10, 13, 9, 5, 0))
+    queue.enqueue(b"wav")
+
+    queue.process_once()
+
+    assert tracker.only("note_ready")["properties"]["animal_count"] == 2
+
+
 def test_giving_up_on_a_pending_note_is_reported(tmp_path):
     api_client = MagicMock()
     api_client.complete_note.side_effect = ApiClientError("backend returned 502")
@@ -417,3 +432,55 @@ def test_giving_up_on_a_pending_note_is_reported(tmp_path):
         "exam_id": "exam-3",
         "attempts": MAX_NOTE_ATTEMPTS,
     }
+
+
+# --- one recording, several animals ------------------------------------------
+
+
+def _appointment_note(exam_id="exam-1"):
+    return SoapNote("s", "o", "a", "p", exam_id=exam_id, patient_name="Bella", appointment_id="appt-1")
+
+
+def test_a_retried_upload_reports_the_note_and_how_many_animals_it_has(tmp_path):
+    api_client = MagicMock()
+    api_client.generate_soap_note.return_value = _appointment_note()
+    api_client.get_appointment.return_value = MagicMock(exams=[object(), object()])
+    on_note_ready = MagicMock()
+    queue = OfflineQueue(api_client=api_client, on_note_ready=on_note_ready, queue_dir=tmp_path / "q")
+    queue.enqueue(b"audio")
+
+    queue.process_once()
+
+    api_client.get_appointment.assert_called_once_with("appt-1")
+    note, count = on_note_ready.call_args[0]
+    assert note.appointment_id == "appt-1"
+    assert count == 2
+
+
+def test_a_completed_pending_note_reports_the_animals_the_backend_added(tmp_path):
+    # Completing a pending note is where the backend appends the other animals.
+    api_client = MagicMock()
+    api_client.complete_note.return_value = _appointment_note()
+    api_client.get_appointment.return_value = MagicMock(exams=[object(), object(), object()])
+    on_note_ready = MagicMock()
+    queue = OfflineQueue(api_client=api_client, on_note_ready=on_note_ready, queue_dir=tmp_path / "q")
+    queue.enqueue_note_completion("exam-1")
+
+    queue.process_once()
+
+    assert on_note_ready.call_args[0][1] == 3
+
+
+def test_a_failed_animal_lookup_still_reports_the_note(tmp_path):
+    api_client = MagicMock()
+    api_client.generate_soap_note.return_value = _appointment_note()
+    api_client.get_appointment.side_effect = ApiClientError("backend returned 500")
+    on_note_ready = MagicMock()
+    queue = OfflineQueue(api_client=api_client, on_note_ready=on_note_ready, queue_dir=tmp_path / "q")
+    entry = queue.enqueue(b"audio")
+
+    assert queue.process_once() == [entry]
+
+    note, count = on_note_ready.call_args[0]
+    assert note.exam_id == "exam-1"
+    assert count is None

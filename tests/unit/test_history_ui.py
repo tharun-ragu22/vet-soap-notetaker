@@ -720,6 +720,20 @@ def test_select_appointment_switches_an_open_window(tk_root):
     assert window.listbox.curselection() == (1,)
 
 
+def test_select_appointment_clears_a_search_that_hides_it(tk_root):
+    # A new recording opened from the hotkey must show even if the vet left a
+    # search in the box that doesn't match it.
+    window = make_window(
+        tk_root, [make_appointment("a2", names=("Rex",)), make_appointment("a1", names=("Bella",))]
+    )
+    window.search_var.set("rex")
+
+    window.select_appointment("a1")
+
+    assert window.search_var.get() == ""
+    assert window.tabs[0].name_var.get() == "Bella"
+
+
 # --- Live refresh ----------------------------------------------------------------
 
 
