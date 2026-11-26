@@ -50,6 +50,7 @@ the mobile analogue of the desktop `build_app()`) and pass them down.
 | `/` (`index`) | `RecorderScreen` | One-tap capture of a whole appointment (feature A) |
 | `/history` | `HistoryScreen` | **Notes**: the backend-synced appointment feed, one row per recording naming every animal, searchable by pet name (feature B) |
 | `/appointment/[id]` | `AppointmentScreen` | The shared transcript and a SOAP card per animal (tap a name to collapse its card; Inject stays): edit, **Regenerate**, **Save**, **Inject into AVImark** per animal, and **Delete** (features B & C) |
+| `/settings` | `SettingsScreen` | The backend URL and optional API key, saved on the device and applied live |
 | `/uploads` | `UploadsScreen` | **Outbox**: recordings still on the phone: where each is up to and why, with **▶ Play** / **■ Stop** (one at a time, from its own copy, so an upload finishing doesn't cut it off; leaving the Outbox stops it), **Retry** and **Discard** |
 
 Notes, Outbox and Settings open from the **☰ menu** at the top left of the home screen.
@@ -88,8 +89,24 @@ attempted, so nothing is lost if the backend is down or the app is killed. The q
   was covered or muted): failed straight away with no automatic retries, since the same audio
   would fail again and each try pays for transcription. It shows as "No speech heard in this
   recording" with Retry and Discard as usual.
-- **Notes failed but the transcript was saved** (a 202): the audio is no longer needed; only
-  the note generation is retried, never a re-upload.
+- **Notes failed but the transcript was saved** (a 202 from an older backend): the audio is no
+  longer needed; only the note generation is retried, never a re-upload.
+
+Uploads are **asynchronous**: each one is sent with `Prefer: respond-async` and an
+`Idempotency-Key` (the queue entry's UUID). The backend replies within seconds that it's
+processing the recording, and the phone deletes its copy of the audio. The upload doesn't stay
+open through transcription and note generation, so a dropped connection or a backgrounded app
+can't cause a duplicate re-upload. If the phone does send the same recording again, the key
+returns the existing appointment.
+
+**Finished notes are announced in the app, not by push notification.** While the app is in the
+foreground and a recording is processing, it keeps the backend's `GET /api/events` stream open
+(`src/services/events/appointmentWatcher.ts`, reconnecting with 1–30 s backoff) and re-checks
+each waiting appointment whenever it reconnects, so results that finished while the app was in
+the background still show up. A toast ("Note for Bella succeeded") appears over any screen,
+unless that appointment is already open. There are deliberately no push notifications: nothing,
+not even animal names, leaves the clinic LAN, and the phone doesn't need internet access. The
+trade-off is no alert while the app is in the background.
 
 **☰ → Outbox** (or tapping the banner) lists every recording that hasn't become notes yet, with
 its status, a plain-words reason and when it last tried ("Last tried 2 min ago"), a **Retry**
@@ -220,7 +237,7 @@ the app bundle. Copy `.env.example` → `.env` and fill in:
 
 | Variable | Purpose |
 |---|---|
-| `EXPO_PUBLIC_VETSCRIBE_API_URL` | Base URL of the backend, e.g. `http://192.168.1.50:8000` |
+| `EXPO_PUBLIC_VETSCRIBE_API_URL` | Base URL of the backend, e.g. `http://192.168.1.50:8443` (the backend's default port) |
 | `EXPO_PUBLIC_VETSCRIBE_API_KEY` | Shared bearer secret (matches the backend's `VETSCRIBE_BACKEND_API_KEY`); leave blank if the backend is unauthenticated |
 
 `.env` is git-ignored; `.env.example` is committed as the template.
