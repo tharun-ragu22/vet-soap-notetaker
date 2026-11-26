@@ -83,15 +83,20 @@ MENU_QUIT = "Quit"
 BUTTON_COPY_AND_INJECT = "Copy & Inject to AVImark"
 BUTTON_COPY_SOAP_NOTE = "Copy SOAP Note"
 BUTTON_OPEN_HISTORY = "Open History"
-BUTTON_DELETE_NOTE = "Delete Note"
+BUTTON_DELETE_APPOINTMENT = "Delete Appointment"
+BUTTON_REMOVE_ANIMAL = "Remove Animal"
+BUTTON_RETRY = "Retry"
+BUTTON_GENERATE_NOTES_NOW = "Generate Notes Now"
+BUTTON_BUSY = "Working…"
 BUTTON_SAVE_CHANGES = "Save Changes"
 BUTTON_REGENERATE = "Regenerate from Transcript"
 BUTTON_REGENERATE_BUSY = "Regenerating…"
 BUTTON_SAVE = "Save"
 
 # History detail-pane labels
-LABEL_SOAP_NOTE = "SOAP Note"
-LABEL_TRANSCRIPT = "Transcript"
+LABEL_SHARED_TRANSCRIPT = "Transcript (shared by every animal)"
+LABEL_PATIENT_NAME = "Patient name"
+LABEL_HISTORY_SEARCH = "Search by pet name"
 LABEL_SUBJECTIVE = "Subjective"
 LABEL_OBJECTIVE = "Objective"
 LABEL_ASSESSMENT = "Assessment"
@@ -108,21 +113,47 @@ LABEL_ANALYTICS_ENVIRONMENT = "Analytics Environment"
 LABEL_ANALYTICS_CLINIC = "Clinic"
 LABEL_LAUNCH_ON_STARTUP = "Launch Vet Soap Notetaker on Windows Startup"
 
-# Delete-confirmation dialog
-DELETE_CONFIRM_TITLE = "Delete note"
+# History: one row per appointment (recording), one tab per animal in it.
+# An unnamed animal among several is numbered, like the backend and mobile do.
+PATIENT_FALLBACK_NAME = "Patient {number}"
+HISTORY_ANIMAL_COUNT = "{count} animals"
+# Row suffixes for an appointment without finished notes.
+HISTORY_STATUS_PROCESSING = "Processing…"
+HISTORY_STATUS_FAILED = "Couldn't transcribe"
+HISTORY_STATUS_NO_SPEECH = "No speech heard"
+HISTORY_STATUS_NOTE_PENDING = "Notes pending"
+# The detail shown instead of the tabs for those appointments.
+HISTORY_PROCESSING_MESSAGE = "This recording is still being transcribed on the computer."
+HISTORY_NO_SPEECH_MESSAGE = "No speech was heard in this recording, so no notes were made."
+HISTORY_FAILED_MESSAGE = "This recording couldn't be transcribed. Retry to try again."
+HISTORY_NOTE_PENDING_MESSAGE = (
+    "The transcript is saved, but the notes are still being generated."
+)
+HISTORY_ACTION_ERROR_TITLE = "Couldn't finish that"
+HISTORY_ACTION_ERROR_MESSAGE = "The backend couldn't do that:\n\n{error}"
+SAVE_ERROR_TITLE = "Save failed"
+SAVE_ERROR_MESSAGE = "Your changes are still on screen, but weren't saved:\n\n{error}"
+SAVE_OFFLINE_TITLE = "Not saved yet"
+SAVE_OFFLINE_MESSAGE = (
+    "The backend can't be reached, so your changes weren't saved. They're still on "
+    "screen; click Save Changes again once it's back."
+)
+
+# Delete/remove confirmation dialogs
+DELETE_CONFIRM_TITLE = "Delete appointment"
 DELETE_CONFIRM_MESSAGE = (
-    "Delete this SOAP note and its transcript? This cannot be undone."
+    "Delete this appointment: every animal's SOAP note and the transcript? "
+    "This cannot be undone."
+)
+REMOVE_ANIMAL_CONFIRM_TITLE = "Remove animal"
+REMOVE_ANIMAL_CONFIRM_MESSAGE = (
+    "Remove {name} from this appointment? It's deleted when you click Save Changes."
 )
 
 REGENERATE_EMPTY_TITLE = "Nothing to regenerate"
 REGENERATE_EMPTY_MESSAGE = "Add a transcript before regenerating the SOAP note."
 REGENERATE_ERROR_TITLE = "Regenerate failed"
 REGENERATE_ERROR_MESSAGE = "Could not regenerate the SOAP note:\n\n{error}"
-REGENERATE_NO_MATCH_TITLE = "Regenerate didn't match this animal"
-REGENERATE_NO_MATCH_MESSAGE = (
-    "The regenerated notes are for other animals, so this note was left as it was. "
-    "Check the patient name, then regenerate again."
-)
 
 # Shown when the backend heard no speech in the recording (HTTP 422). Nothing
 # was saved and it isn't retried -- the same audio would fail the same way.

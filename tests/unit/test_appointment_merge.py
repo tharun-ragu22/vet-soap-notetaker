@@ -62,9 +62,31 @@ def test_pairs_a_single_leftover_animal_with_a_single_leftover_note():
 
 
 def test_keeps_a_name_the_vet_typed_over_the_regenerated_one():
-    merged = merge_regenerated([draft("e1", "Luna")], [regenerated("Patient 1")])
+    merged = merge_regenerated(
+        [draft("e1", "Luna")], [regenerated("Patient 1")], typed_names={0}
+    )
 
     assert merged == [ExamDraft(id="e1", patient_name="Luna", **_fields("new"))]
+
+
+def test_takes_the_regenerated_name_when_the_vet_renamed_the_pet_in_the_transcript():
+    # The transcript now says Daisy where it said Bella: the stored name came
+    # from the AI, not the vet, so the regenerate's name replaces it.
+    merged = merge_regenerated([draft("e1", "Bella")], [regenerated("Daisy")])
+
+    assert merged == [ExamDraft(id="e1", patient_name="Daisy", **_fields("new"))]
+
+
+def test_keeps_the_stored_name_when_the_regenerate_has_none():
+    merged = merge_regenerated([draft("e1", "Bella")], [regenerated(None)])
+
+    assert merged[0].patient_name == "Bella"
+
+
+def test_a_name_matched_ignoring_case_keeps_its_spelling():
+    merged = merge_regenerated([draft("e1", "BELLA")], [regenerated("Bella")])
+
+    assert merged[0].patient_name == "BELLA"
 
 
 def test_does_not_pair_leftovers_when_there_are_several():

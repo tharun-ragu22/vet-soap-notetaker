@@ -1,17 +1,16 @@
 import tkinter
-import uuid
 
 import pytest
 
 from vet_soap_notetaker import history_ui, ui_strings
-from vet_soap_notetaker.api_client import Exam, PatientNote
-from vet_soap_notetaker.history_ui import HistoryWindow
+from vet_soap_notetaker.api_client import Appointment, ApiClientError, Exam, ExamDraft, PatientNote
+from vet_soap_notetaker.history_ui import HistoryWindow, row_label
 
 
 class _SyncThread:
     # Stand-in for threading.Thread that runs the worker inline, so the
-    # regenerate path is deterministic in tests; self.after(0, ...) callbacks
-    # it schedules are then flushed with window.update().
+    # regenerate/retry paths are deterministic in tests; self.after(0, ...)
+    # callbacks it schedules are then flushed with window.update().
     def __init__(self, target, daemon=None):
         self._target = target
 
@@ -27,23 +26,18 @@ def tk_root():
     root.destroy()
 
 
-def make_entry(
-    subjective="sub",
-    transcript="the owner reports vomiting",
-    entry_id=None,
-    assessment="assess",
-    patient_name=None,
-    appointment_id="appt-1",
-    plan="plan",
-):
+@pytest.fixture
+def sync_threads(monkeypatch):
+    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
+
+
+def make_exam(exam_id, patient_name=None, plan="plan", appointment_id="appt-1", transcript="t"):
     return Exam(
-        # Each entry needs a stable, unique id: the window preserves the vet's
-        # selection across auto-refresh by matching on it.
-        id=entry_id or uuid.uuid4().hex,
-        created_at="2026-09-17T10:30:00",
-        subjective=subjective,
+        id=exam_id,
+        created_at="2026-11-23T09:00:00",
+        subjective="sub",
         objective="obj",
-        assessment=assessment,
+        assessment="assess",
         plan=plan,
         transcript=transcript,
         patient_name=patient_name,
@@ -51,423 +45,476 @@ def make_entry(
     )
 
 
-def _note_pane(window):
-    # The four structured fields joined the way the vet reads them; lets the
-    # assertions below check content without caring which field it lands in.
-    return "\n".join(
-        f"{label.upper()}: {window.field_texts[key].get('1.0', 'end-1c')}"
-        for key, label in history_ui._SOAP_FIELDS
+def make_appointment(
+    appointment_id="appt-1",
+    names=(None,),
+    status="complete",
+    transcript="the owner reports vomiting",
+    created_at="2026-11-23T09:00:00",
+):
+    exams = [
+        make_exam(f"{appointment_id}-e{i}", name, plan=f"plan {i}",
+                  appointment_id=appointment_id, transcript=transcript)
+        for i, name in enumerate(names)
+    ]
+    return Appointment(
+        id=appointment_id,
+        created_at=created_at,
+        transcript=transcript,
+        status=status,
+        exams=exams,
     )
 
 
-def make_window(tk_root, entries, **overrides):
-    # Feed entries through a callable so the window can re-fetch them (that's how
-    # auto-refresh works). Return a fresh copy each call so a test can mutate the
-    # source list to simulate a note being saved while the window is open.
+def make_window(tk_root, appointments, **overrides):
+    # Feed appointments through a callable so the window can re-fetch them
+    # (that's how auto-refresh works). A fresh copy each call lets a test mutate
+    # the source list to simulate a recording arriving while the window is open.
     kwargs = dict(
         master=tk_root,
-        load_entries=lambda: list(entries),
-        on_copy_and_inject=lambda soap_text: None,
-        on_copy_to_clipboard=lambda soap_text: None,
-        on_save_edit=lambda entry_id, **fields: None,
-        on_delete=lambda entry_id: None,
-        # Deletion is destructive, so the window guards it behind a confirmation.
-        # Default to "yes" in tests so the delete path runs without a real dialog;
-        # a test can override to simulate the vet cancelling.
-        confirm_delete=lambda entry: True,
-        # Disable the timer-driven poll in tests; drive refresh() explicitly so
-        # assertions are deterministic and no stray `after` jobs outlive the test.
+        load_appointments=lambda: list(appointments),
+        on_copy_and_inject=lambda exam: None,
+        on_copy_to_clipboard=lambda text: None,
+        on_save=lambda appointment_id, transcript, exams: None,
+        on_delete=lambda appointment_id: True,
+        # Destructive actions are confirmed; default to "yes" so their paths
+        # run without a real dialog.
+        confirm_delete=lambda appointment: True,
+        confirm_remove=lambda name: True,
+        # No timer-driven poll in tests: drive refresh() explicitly.
         poll_interval_ms=None,
     )
     kwargs.update(overrides)
     return HistoryWindow(**kwargs)
 
 
-def test_prefetched_entries_are_shown_without_reading_again(tk_root):
-    # main.py fetches History behind the splash, off the Tk thread, and hands the
-    # result over: building the window must not block on a second read.
+def _text(widget):
+    return widget.get("1.0", "end-1c")
+
+
+def _type(widget, value):
+    widget.delete("1.0", "end")
+    widget.insert("1.0", value)
+
+
+def _saved_after(appointment_id, transcript, exams):
+    # What the backend sends back for a save: new animals get ids.
+    return Appointment(
+        id=appointment_id,
+        created_at="2026-11-23T09:00:00",
+        transcript=transcript,
+        status="complete",
+        exams=[
+            Exam(e.id or f"new-{i}", "2026-11-23T09:00:00", e.subjective, e.objective,
+                 e.assessment, e.plan, transcript, e.patient_name, appointment_id)
+            for i, e in enumerate(exams)
+        ],
+    )
+
+
+# --- The list -----------------------------------------------------------------
+
+
+def test_one_row_per_appointment_not_per_animal(tk_root):
+    window = make_window(
+        tk_root,
+        [make_appointment("a2", names=("Bella", "Max")), make_appointment("a1", names=("Rex",))],
+    )
+
+    assert window.listbox.size() == 2
+
+
+def test_a_row_names_every_animal_and_counts_them():
+    label = row_label(make_appointment(names=("Bella", "Max")))
+
+    assert label.startswith("Bella, Max")
+    assert "2026-11-23 09:00" in label
+    assert ui_strings.HISTORY_ANIMAL_COUNT.format(count=2) in label
+
+
+def test_unnamed_animals_among_several_are_numbered():
+    assert row_label(make_appointment(names=("Bella", " "))).startswith(
+        "Bella, " + ui_strings.PATIENT_FALLBACK_NAME.format(number=2)
+    )
+
+
+def test_a_single_unnamed_animal_is_shown_by_its_date():
+    label = row_label(make_appointment(names=(None,)))
+
+    assert label.startswith("2026-11-23 09:00")
+    assert ui_strings.PATIENT_FALLBACK_NAME.format(number=1) not in label
+
+
+@pytest.mark.parametrize(
+    "status, text",
+    [
+        ("processing", ui_strings.HISTORY_STATUS_PROCESSING),
+        ("failed", ui_strings.HISTORY_STATUS_FAILED),
+        ("no_speech", ui_strings.HISTORY_STATUS_NO_SPEECH),
+        ("note_pending", ui_strings.HISTORY_STATUS_NOTE_PENDING),
+    ],
+)
+def test_a_row_says_when_an_appointment_has_no_finished_notes(status, text):
+    names = () if status in ("processing", "failed", "no_speech") else (None,)
+
+    assert text in row_label(make_appointment(names=names, status=status))
+
+
+def test_prefetched_appointments_are_shown_without_reading_again(tk_root):
     def load():
         raise AssertionError("read the backend again at construction")
 
     window = make_window(
-        tk_root, [], load_entries=load, initial_entries=[make_entry(subjective="first")]
+        tk_root, [], load_appointments=load, initial_appointments=[make_appointment()]
     )
 
     assert window.listbox.size() == 1
 
 
-def test_history_window_lists_one_row_per_entry(tk_root):
-    entries = [make_entry(subjective="first"), make_entry(subjective="second")]
-
-    window = make_window(tk_root, entries)
-
-    rows = window.listbox.get(0, "end")
-    assert len(rows) == 2
-    assert any("first" in row for row in rows)
-    assert any("second" in row for row in rows)
-
-
-def test_row_label_prefers_patient_name_when_present(tk_root):
-    entries = [make_entry(subjective="ignored snippet", patient_name="Rex")]
-
-    window = make_window(tk_root, entries)
-
-    assert any("Rex" in row for row in window.listbox.get(0, "end"))
-
-
-def test_selecting_an_entry_shows_its_note_and_transcript(tk_root):
-    entries = [
-        make_entry(subjective="Annual checkup", transcript="dog is well"),
-        make_entry(subjective="Dental cleaning", transcript="tartar buildup noted"),
-    ]
-    window = make_window(tk_root, entries)
-
-    window.show_entry(1)
-
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "Dental cleaning"
-    assert "tartar buildup noted" in window.transcript_text.get("1.0", "end-1c")
-
-
-def test_window_shows_newest_entry_by_default(tk_root):
-    # Entries arrive newest-first (as the store returns them), so the first
-    # entry should be shown without the user clicking anything.
-    entries = [
-        make_entry(subjective="Newest", transcript="latest transcript"),
-        make_entry(subjective="Older", transcript="older transcript"),
-    ]
-    window = make_window(tk_root, entries)
-
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "Newest"
-
-
-def test_copy_and_inject_button_sends_selected_entry_note(tk_root):
-    entries = [make_entry(subjective="Annual checkup")]
-    injected = []
+def test_the_newest_appointment_is_shown_on_open(tk_root):
     window = make_window(
-        tk_root, entries, on_copy_and_inject=injected.append
+        tk_root, [make_appointment("a2", names=("Bella",)), make_appointment("a1", names=("Rex",))]
     )
-    window.show_entry(0)
 
-    assert window.copy_and_inject_button["text"] == ui_strings.BUTTON_COPY_AND_INJECT
-    window.copy_and_inject_button.invoke()
-
-    # Inject now hands over the structured note (so the app can place each SOAP
-    # section into its own calibrated AVImark box), not a pre-joined string.
-    assert len(injected) == 1
-    assert injected[0].subjective == "Annual checkup"
-    assert "SUBJECTIVE: Annual checkup" in injected[0].soap_text
+    assert window.tabs[0].name_var.get() == "Bella"
 
 
-def test_inject_persists_current_edits_before_injecting(tk_root):
-    saved = []
-    entry = make_entry(subjective="Annual checkup", entry_id="n1")
+def test_an_empty_history_opens_without_crashing(tk_root):
+    window = make_window(tk_root, [])
 
-    def on_save_edit(entry_id, **fields):
-        saved.append((entry_id, fields))
-        # The backend echoes the persisted entry back.
-        from dataclasses import replace
-
-        return replace(entry, **fields)
-
-    injected = []
-    window = make_window(
-        tk_root, [entry], on_save_edit=on_save_edit, on_copy_and_inject=injected.append
-    )
-    window.show_entry(0)
-
-    # The vet edits a field, then clicks Inject *without* clicking Save first.
-    window.field_texts["assessment"].delete("1.0", "end")
-    window.field_texts["assessment"].insert("1.0", "corrected assessment")
-    window.copy_and_inject_button.invoke()
-
-    # The edit is saved as part of injecting...
-    assert len(saved) == 1
-    assert saved[0][1]["assessment"] == "corrected assessment"
-    # ...and the *edited* note is what gets injected, not the stale saved one.
-    assert injected[0].assessment == "corrected assessment"
+    assert window.listbox.size() == 0
+    assert window.tabs == []
 
 
-def test_inject_uses_current_edits_even_when_backend_is_unreachable(tk_root):
-    entry = make_entry(subjective="Annual checkup", entry_id="n1")
-    injected = []
+def test_search_filters_appointments_by_pet_name(tk_root):
     window = make_window(
         tk_root,
-        [entry],
-        # Backend down: update returns None (mirrors BackendHistoryStore.update).
-        on_save_edit=lambda entry_id, **fields: None,
-        on_copy_and_inject=injected.append,
+        [
+            make_appointment("a3", names=("Bella", "Max")),
+            make_appointment("a2", names=("Rex",)),
+            make_appointment("a1", names=(None,)),
+        ],
     )
-    window.show_entry(0)
 
-    window.field_texts["plan"].delete("1.0", "end")
-    window.field_texts["plan"].insert("1.0", "recheck in 2 weeks")
-    window.copy_and_inject_button.invoke()
+    window.search_var.set("max")
 
-    # Even without a successful save, the note that lands in AVImark reflects the
-    # vet's on-screen edit (built locally), never the last-saved text.
-    assert injected[0].plan == "recheck in 2 weeks"
-
-
-def test_inject_with_no_edits_does_not_save_but_still_injects(tk_root):
-    entry = make_entry(subjective="Annual checkup", entry_id="n1")
-    saved = []
-    injected = []
-    window = make_window(
-        tk_root,
-        [entry],
-        on_save_edit=lambda entry_id, **fields: saved.append(entry_id),
-        on_copy_and_inject=injected.append,
-    )
-    window.show_entry(0)
-
-    window.copy_and_inject_button.invoke()
-
-    # Nothing changed, so there's no redundant backend write...
-    assert saved == []
-    # ...but the note still gets injected.
-    assert injected[0].subjective == "Annual checkup"
+    assert window.listbox.size() == 1
+    assert window.listbox.get(0).startswith("Bella, Max")
+    # Unnamed animals never match a search.
+    window.search_var.set("patient")
+    assert window.listbox.size() == 0
+    window.search_var.set("")
+    assert window.listbox.size() == 3
 
 
-def test_copy_to_clipboard_button_sends_selected_entry_soap_text(tk_root):
-    entries = [make_entry(subjective="Annual checkup")]
-    copied = []
-    window = make_window(
-        tk_root, entries, on_copy_to_clipboard=copied.append
-    )
-    window.show_entry(0)
-
-    assert window.copy_to_clipboard_button["text"] == ui_strings.BUTTON_COPY_SOAP_NOTE
-    window.copy_to_clipboard_button.invoke()
-
-    assert len(copied) == 1
-    assert "SUBJECTIVE: Annual checkup" in copied[0]
+# --- A complete appointment: one tab per animal ---------------------------------
 
 
-def test_history_window_handles_empty_history_without_crashing(tk_root):
-    window = make_window(tk_root, entries=[])
+def test_each_animal_gets_a_tab_with_its_name_and_note(tk_root):
+    window = make_window(tk_root, [make_appointment(names=("Bella", "Max"))])
 
-    assert window.listbox.get(0, "end") == ()
-    # Copy/inject with nothing selected must be a safe no-op, not a crash.
-    window.copy_to_clipboard_button.invoke()
-
-
-def test_refresh_adds_newly_saved_note_and_shows_it_when_viewing_newest(tk_root):
-    entries = [make_entry(subjective="First note", transcript="first")]
-    window = make_window(tk_root, entries)  # auto-selects the newest on open
-
-    # A new note is saved while the window is open (prepended -- newest first).
-    entries.insert(0, make_entry(subjective="Brand new note", transcript="brand new"))
-    window.refresh()
-
-    rows = window.listbox.get(0, "end")
-    assert len(rows) == 2
-    assert any("Brand new note" in row for row in rows)
-    # The vet was on the newest entry, so the just-recorded note is shown for them.
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "Brand new note"
-    assert "brand new" in window.transcript_text.get("1.0", "end-1c")
+    assert [tab.name_var.get() for tab in window.tabs] == ["Bella", "Max"]
+    assert _text(window.tabs[1].field_texts["plan"]) == "plan 1"
+    assert window.notebook.tab(1, "text") == "Max"
 
 
-def test_refresh_preserves_a_deliberately_selected_older_note(tk_root):
-    entries = [
-        make_entry(subjective="Newest", transcript="newest"),
-        make_entry(subjective="Older", transcript="older"),
-    ]
-    window = make_window(tk_root, entries)
-    window.show_entry(1)  # the vet deliberately opens an older note
+def test_an_unnamed_tab_is_numbered(tk_root):
+    window = make_window(tk_root, [make_appointment(names=("Bella", None))])
 
-    entries.insert(0, make_entry(subjective="Just recorded", transcript="just recorded"))
-    window.refresh()
-
-    # The list grows, but the note the vet is reading is not yanked away.
-    assert len(window.listbox.get(0, "end")) == 3
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "Older"
-    assert "older" in window.transcript_text.get("1.0", "end-1c")
+    assert window.notebook.tab(1, "text") == ui_strings.PATIENT_FALLBACK_NAME.format(number=2)
 
 
-def test_refresh_populates_from_empty_when_first_note_arrives(tk_root):
-    entries = []
-    window = make_window(tk_root, entries)
-    assert window.listbox.get(0, "end") == ()
+def test_the_transcript_is_shown_once_for_the_whole_appointment(tk_root):
+    window = make_window(tk_root, [make_appointment(names=("Bella", "Max"), transcript="shared")])
 
-    entries.append(make_entry(subjective="First ever", transcript="first ever"))
-    window.refresh()
-
-    assert len(window.listbox.get(0, "end")) == 1
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "First ever"
+    assert _text(window.transcript_text) == "shared"
 
 
-def test_refresh_is_a_noop_when_nothing_changed(tk_root):
-    entries = [
-        make_entry(subjective="Newest", transcript="newest"),
-        make_entry(subjective="Older", transcript="older"),
-    ]
-    window = make_window(tk_root, entries)
-    window.show_entry(1)
+def test_save_sends_the_whole_appointment_with_renamed_and_edited_animals(tk_root):
+    saves = []
 
-    window.refresh()  # store unchanged
+    def on_save(appointment_id, transcript, exams):
+        saves.append((appointment_id, transcript, exams))
+        return _saved_after(appointment_id, transcript, exams)
 
-    # Selection is undisturbed and the list is unchanged.
-    assert len(window.listbox.get(0, "end")) == 2
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "Older"
+    window = make_window(tk_root, [make_appointment(names=("Bella", "Max"))], on_save=on_save)
+    window.tabs[1].name_var.set("Maxwell")
+    _type(window.tabs[0].field_texts["plan"], "bella edited")
+    _type(window.transcript_text, "corrected")
+    assert window._has_unsaved_edits()
 
-
-def test_editing_and_saving_sends_the_structured_fields_to_the_save_callback(tk_root):
-    saved = []
-    entry = make_entry(subjective="Annual checkup", transcript="orig", entry_id="n1")
-    window = make_window(
-        tk_root,
-        [entry],
-        on_save_edit=lambda entry_id, **fields: saved.append((entry_id, fields)),
-    )
-    window.show_entry(0)
-
-    # The vet edits a field and the transcript, then saves.
-    window.field_texts["assessment"].delete("1.0", "end")
-    window.field_texts["assessment"].insert("1.0", "corrected assessment")
-    window.transcript_text.delete("1.0", "end")
-    window.transcript_text.insert("1.0", "corrected transcript")
     window.save_button.invoke()
 
-    assert len(saved) == 1
-    entry_id, fields = saved[0]
-    assert entry_id == "n1"
-    assert fields["assessment"] == "corrected assessment"
-    assert fields["subjective"] == "Annual checkup"
-    assert fields["transcript"] == "corrected transcript"
-
-
-def test_delete_button_removes_selected_note_and_shows_a_neighbor(tk_root):
-    deleted = []
-    entries = [
-        make_entry(subjective="Newest", transcript="newest", entry_id="n1"),
-        make_entry(subjective="Older", transcript="older", entry_id="n2"),
+    [(appointment_id, transcript, exams)] = saves
+    assert appointment_id == "appt-1"
+    assert transcript == "corrected"
+    assert exams == [
+        ExamDraft("appt-1-e0", "Bella", "sub", "obj", "assess", "bella edited"),
+        ExamDraft("appt-1-e1", "Maxwell", "sub", "obj", "assess", "plan 1"),
     ]
-
-    def on_delete(entry_id):
-        # The window re-reads the store after deleting, so mirror the removal in
-        # the source list that load_entries() reads from.
-        entries[:] = [e for e in entries if e.id != entry_id]
-        deleted.append(entry_id)
-
-    window = make_window(tk_root, entries, on_delete=on_delete)
-    window.show_entry(0)  # the vet is on the newest note
-
-    window.delete_button.invoke()
-
-    assert deleted == ["n1"]
-    rows = window.listbox.get(0, "end")
-    assert len(rows) == 1
-    assert any("Older" in row for row in rows)
-    # A neighbor is selected so the detail pane isn't left showing a stale note.
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "Older"
-    assert "older" in window.transcript_text.get("1.0", "end-1c")
+    assert not window._has_unsaved_edits()
 
 
-def test_delete_of_the_last_note_clears_the_detail_panes(tk_root):
-    entries = [make_entry(subjective="Only note", transcript="only", entry_id="n1")]
-
-    def on_delete(entry_id):
-        entries[:] = [e for e in entries if e.id != entry_id]
-
-    window = make_window(tk_root, entries, on_delete=on_delete)
-    window.show_entry(0)
-
-    window.delete_button.invoke()
-
-    assert window.listbox.get(0, "end") == ()
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == ""
-    assert window.transcript_text.get("1.0", "end-1c") == ""
-
-
-def test_delete_does_nothing_when_the_vet_cancels_the_confirmation(tk_root):
-    deleted = []
-    entries = [make_entry(subjective="Only note", entry_id="n1")]
+def test_a_blank_name_is_saved_as_no_name(tk_root):
+    saves = []
     window = make_window(
         tk_root,
-        entries,
-        on_delete=deleted.append,
-        confirm_delete=lambda entry: False,  # the vet clicks "No"
+        [make_appointment(names=("Bella",))],
+        on_save=lambda a, t, exams: saves.append(exams),
     )
-    window.show_entry(0)
+    window.tabs[0].name_var.set("   ")
 
-    window.delete_button.invoke()
+    window.save_button.invoke()
 
-    assert deleted == []
-    assert len(window.listbox.get(0, "end")) == 1
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "Only note"
+    assert saves[0][0].patient_name is None
 
 
-def test_delete_button_is_a_safe_noop_with_nothing_selected(tk_root):
-    deleted = []
-    window = make_window(tk_root, entries=[], on_delete=deleted.append)
+def test_a_refused_save_keeps_the_edits_and_tells_the_vet(tk_root, monkeypatch):
+    errors = []
+    monkeypatch.setattr(history_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
 
-    window.delete_button.invoke()
+    def refuse(appointment_id, transcript, exams):
+        raise ApiClientError("backend returned 409")
 
-    assert deleted == []
+    window = make_window(tk_root, [make_appointment(names=("Bella",))], on_save=refuse)
+    _type(window.tabs[0].field_texts["plan"], "keep me")
 
+    window.save_button.invoke()
 
-def test_regenerate_button_absent_without_a_callback(tk_root):
-    window = make_window(tk_root, [make_entry()])  # no on_regenerate wired
-
-    assert window.regenerate_button is None
-    labels = [
-        child["text"]
-        for child in window.winfo_children()
-        if isinstance(child, tkinter.Button)
-    ]
-    assert ui_strings.BUTTON_REGENERATE not in labels
+    assert len(errors) == 1
+    assert _text(window.tabs[0].field_texts["plan"]) == "keep me"
+    assert window._has_unsaved_edits()
 
 
-def test_regenerate_sends_edited_transcript_and_shows_note_as_unsaved_edit(
-    tk_root, monkeypatch
-):
-    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
+def test_remove_animal_is_offered_only_when_there_are_several(tk_root):
+    one = make_window(tk_root, [make_appointment(names=("Bella",))])
+    two = make_window(tk_root, [make_appointment(names=("Bella", "Max"))])
+
+    assert one.tabs[0].remove_button is None
+    assert all(tab.remove_button is not None for tab in two.tabs)
+
+
+def test_removing_an_animal_drops_it_from_the_next_save(tk_root):
+    saves = []
+    window = make_window(
+        tk_root,
+        [make_appointment(names=("Bella", "Max"))],
+        on_save=lambda a, t, exams: saves.append(exams) or _saved_after(a, t, exams),
+    )
+
+    window.tabs[0].remove_button.invoke()
+
+    assert [tab.name_var.get() for tab in window.tabs] == ["Max"]
+    assert window._has_unsaved_edits()
+    window.save_button.invoke()
+    assert [e.id for e in saves[0]] == ["appt-1-e1"]
+
+
+def test_removing_an_animal_needs_confirmation(tk_root):
+    window = make_window(
+        tk_root, [make_appointment(names=("Bella", "Max"))], confirm_remove=lambda name: False
+    )
+
+    window.tabs[0].remove_button.invoke()
+
+    assert len(window.tabs) == 2
+    assert not window._has_unsaved_edits()
+
+
+def test_copy_and_inject_sends_that_animals_note(tk_root):
+    injected = []
+    window = make_window(
+        tk_root, [make_appointment(names=("Bella", "Max"))], on_copy_and_inject=injected.append
+    )
+
+    window.tabs[1].inject_button.invoke()
+
+    [exam] = injected
+    assert exam.id == "appt-1-e1"
+    assert exam.patient_name == "Max"
+    assert exam.plan == "plan 1"
+
+
+def test_inject_saves_unsaved_edits_first_and_injects_what_was_saved(tk_root):
+    order = []
+
+    def on_save(appointment_id, transcript, exams):
+        order.append("save")
+        return _saved_after(appointment_id, transcript, exams)
+
+    window = make_window(
+        tk_root,
+        [make_appointment(names=("Bella", "Max"))],
+        on_save=on_save,
+        on_copy_and_inject=lambda exam: order.append(("inject", exam.plan)),
+    )
+    _type(window.tabs[1].field_texts["plan"], "max edited")
+
+    window.tabs[1].inject_button.invoke()
+
+    assert order == ["save", ("inject", "max edited")]
+
+
+def test_inject_still_uses_the_edits_when_the_backend_is_unreachable(tk_root):
+    injected = []
+    window = make_window(
+        tk_root,
+        [make_appointment(names=("Bella",))],
+        on_save=lambda a, t, exams: None,  # backend unreachable
+        on_copy_and_inject=injected.append,
+    )
+    _type(window.tabs[0].field_texts["plan"], "offline edit")
+
+    window.tabs[0].inject_button.invoke()
+
+    assert injected[0].plan == "offline edit"
+
+
+def test_inject_of_a_new_animal_uses_the_id_the_save_gave_it(tk_root, sync_threads):
+    injected = []
+    window = make_window(
+        tk_root,
+        [make_appointment(names=("Bella",))],
+        on_regenerate=lambda t, appointment_id=None: [
+            PatientNote("Bella", "s", "o", "a", "bella new"),
+            PatientNote("Luna", "s", "o", "a", "luna new"),
+        ],
+        on_save=_saved_after,
+        on_copy_and_inject=injected.append,
+    )
+    window.regenerate_button.invoke()
+    window.update()
+
+    window.tabs[1].inject_button.invoke()
+
+    assert injected[0].id == "new-1"
+    assert injected[0].plan == "luna new"
+
+
+def test_copy_sends_that_animals_note_text(tk_root):
+    copied = []
+    window = make_window(
+        tk_root, [make_appointment(names=("Bella", "Max"))], on_copy_to_clipboard=copied.append
+    )
+
+    window.tabs[1].copy_button.invoke()
+
+    assert copied == ["SUBJECTIVE: sub\nOBJECTIVE: obj\nASSESSMENT: assess\nPLAN: plan 1"]
+    # The pet's name labels the tab; it's never part of the copied note.
+    assert "Max" not in copied[0]
+
+
+# --- Regenerate -------------------------------------------------------------------
+
+
+def test_regenerate_folds_every_animal_in_as_unsaved_edits(tk_root, sync_threads):
     received = []
 
-    def fake_regenerate(transcript, appointment_id=None):
+    def regenerate(transcript, appointment_id=None):
         received.append((transcript, appointment_id))
         return [
-            PatientNote(
-                patient_name=None,
-                subjective="regenerated subjective",
-                objective="regenerated objective",
-                assessment="regenerated assessment",
-                plan="regenerated plan",
-            )
+            PatientNote("Max", "s", "o", "a", "max new"),
+            PatientNote("Bella", "s", "o", "a", "bella new"),
+            PatientNote("Luna", "s", "o", "a", "luna new"),
         ]
 
-    entry = make_entry(subjective="Original", transcript="orig", entry_id="n1")
-    window = make_window(tk_root, [entry], on_regenerate=fake_regenerate)
-    window.show_entry(0)
+    window = make_window(
+        tk_root, [make_appointment(names=("Bella", "Max"))], on_regenerate=regenerate
+    )
+    _type(window.transcript_text, "corrected")
 
-    # The vet corrects the transcript, then regenerates.
-    window.transcript_text.delete("1.0", "end")
-    window.transcript_text.insert("1.0", "corrected transcript")
     window.regenerate_button.invoke()
-    window.update()  # flush the after(0) that applies the result
+    window.update()
 
-    # The appointment id goes along so the backend can tell what was regenerated.
-    assert received == [("corrected transcript", "appt-1")]
-    assert window.field_texts["assessment"].get("1.0", "end-1c") == "regenerated assessment"
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "regenerated subjective"
-    # Left as an unsaved edit so nothing is persisted until the vet hits Save.
+    assert received == [("corrected", "appt-1")]
+    assert [(tab.exam_id, tab.name_var.get(), _text(tab.field_texts["plan"])) for tab in window.tabs] == [
+        ("appt-1-e1", "Max", "max new"),
+        ("appt-1-e0", "Bella", "bella new"),
+        (None, "Luna", "luna new"),
+    ]
+    # The transcript it was regenerated from stays on screen, and nothing is
+    # saved until the vet clicks Save.
+    assert _text(window.transcript_text) == "corrected"
     assert window._has_unsaved_edits()
     assert window.regenerate_button["text"] == ui_strings.BUTTON_REGENERATE
 
 
-def test_regenerate_with_empty_transcript_warns_and_skips_backend(tk_root, monkeypatch):
-    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
-    called = []
-    infos = []
-    monkeypatch.setattr(
-        history_ui.messagebox, "showinfo", lambda *a, **k: infos.append(a)
-    )
-
-    entry = make_entry(subjective="Original", transcript="   ", entry_id="n1")
+def test_regenerate_keeps_a_name_the_vet_typed(tk_root, sync_threads):
     window = make_window(
-        tk_root, [entry], on_regenerate=lambda t, appointment_id=None: called.append(t) or []
+        tk_root,
+        [make_appointment(names=("Bella",))],
+        on_regenerate=lambda t, appointment_id=None: [PatientNote("Patient 1", "s", "o", "a", "new")],
     )
-    window.show_entry(0)
+    window.tabs[0].name_var.set("Luna")
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.tabs[0].name_var.get() == "Luna"
+    assert _text(window.tabs[0].field_texts["plan"]) == "new"
+
+
+def test_regenerate_renames_a_pet_the_transcript_now_calls_something_else(tk_root, sync_threads):
+    window = make_window(
+        tk_root,
+        [make_appointment(names=("Bella",))],
+        on_regenerate=lambda t, appointment_id=None: [PatientNote("Daisy", "s", "o", "a", "new")],
+    )
+    _type(window.transcript_text, "Daisy has been vomiting")
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.tabs[0].name_var.get() == "Daisy"
+    assert window.notebook.tab(0, "text") == "Daisy"
+
+
+def test_a_name_the_vet_typed_survives_a_save_and_a_regenerate(tk_root, sync_threads):
+    window = make_window(
+        tk_root,
+        [make_appointment(names=("Bella",))],
+        on_save=_saved_after,
+        on_regenerate=lambda t, appointment_id=None: [PatientNote("Daisy", "s", "o", "a", "new")],
+    )
+    window.tabs[0].name_var.set("Luna")
+    window.save_button.invoke()
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.tabs[0].name_var.get() == "Luna"
+
+
+def test_typed_names_are_forgotten_when_another_appointment_is_opened(tk_root, sync_threads):
+    window = make_window(
+        tk_root,
+        [make_appointment("a2", names=("Rex",)), make_appointment("a1", names=("Bella",))],
+        on_save=_saved_after,
+        on_regenerate=lambda t, appointment_id=None: [PatientNote("Daisy", "s", "o", "a", "new")],
+    )
+    window.show_appointment(1)
+    window.tabs[0].name_var.set("Luna")
+    window.save_button.invoke()
+    window.show_appointment(0)
+    window.show_appointment(1)
+
+    window.regenerate_button.invoke()
+    window.update()
+
+    assert window.tabs[0].name_var.get() == "Daisy"
+
+
+def test_regenerate_with_an_empty_transcript_warns_and_skips_the_backend(
+    tk_root, sync_threads, monkeypatch
+):
+    infos = []
+    monkeypatch.setattr(history_ui.messagebox, "showinfo", lambda *a, **k: infos.append(a))
+    called = []
+    window = make_window(
+        tk_root,
+        [make_appointment(transcript="   ")],
+        on_regenerate=lambda t, appointment_id=None: called.append(t) or [],
+    )
 
     window.regenerate_button.invoke()
 
@@ -475,142 +522,268 @@ def test_regenerate_with_empty_transcript_warns_and_skips_backend(tk_root, monke
     assert len(infos) == 1
 
 
-def test_regenerate_result_is_dropped_when_the_vet_selected_another_note(tk_root):
-    entries = [
-        make_entry(subjective="Newest", transcript="a", entry_id="n1"),
-        make_entry(subjective="Older", transcript="b", entry_id="n2"),
-    ]
-    window = make_window(tk_root, entries, on_regenerate=lambda t, appointment_id=None: [])
-    window.show_entry(1)  # currently on n2
-
-    # A regenerate that was kicked off for n1 finishes late.
-    window._on_regenerate_done(
-        "n1", [PatientNote(None, "stale subjective", "s", "stale result", "p")]
-    )
-
-    # The pane still shows n2; the stale note is not painted over it.
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "Older"
-    assert "stale result" not in _note_pane(window)
-
-
-def test_regenerate_fills_the_selected_animal_with_its_own_note(tk_root, monkeypatch):
-    # A two-animal appointment: regenerating Max must give Max's note, not the
-    # first animal's (the old /api/soap/regenerate returned only Bella's).
-    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
-    entries = [
-        make_entry(entry_id="bella", patient_name="Bella", plan="bella old"),
-        make_entry(entry_id="max", patient_name="Max", plan="max old"),
-    ]
-    notes = [
-        PatientNote("Bella", "s", "o", "a", "bella new"),
-        PatientNote("max", "s", "o", "a", "max new"),
-    ]
-    window = make_window(tk_root, entries, on_regenerate=lambda t, appointment_id=None: notes)
-    window.show_entry(1)
-
-    window.regenerate_button.invoke()
-    window.update()
-
-    assert window.field_texts["plan"].get("1.0", "end-1c") == "max new"
-
-
-def test_regenerate_only_pairs_within_the_selected_appointment(tk_root, monkeypatch):
-    # Another recording's exam is never a sibling: the one leftover animal of
-    # this appointment pairs with the one leftover note.
-    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
-    entries = [
-        make_entry(entry_id="other", patient_name=None, appointment_id="appt-0"),
-        make_entry(entry_id="rex", patient_name=None, appointment_id="appt-1"),
-    ]
+def test_a_late_regenerate_is_dropped_when_the_vet_opened_another_appointment(tk_root):
     window = make_window(
         tk_root,
-        entries,
-        on_regenerate=lambda t, appointment_id=None: [PatientNote("Rex", "s", "o", "a", "rex new")],
+        [make_appointment("a2", names=("Bella",)), make_appointment("a1", names=("Rex",))],
+        on_regenerate=lambda t, appointment_id=None: [],
     )
-    window.show_entry(1)
+    window.show_appointment(1)
 
-    window.regenerate_button.invoke()
-    window.update()
+    window._on_regenerate_done("a2", [PatientNote("Bella", "s", "o", "a", "stale")])
 
-    assert window.field_texts["plan"].get("1.0", "end-1c") == "rex new"
-
-
-def test_regenerate_leaves_the_note_alone_when_no_regenerated_note_is_its_own(
-    tk_root, monkeypatch
-):
-    # The AI now hears two different animals and neither name matches this one:
-    # rather than guess, keep the note and tell the vet.
-    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
-    infos = []
-    monkeypatch.setattr(history_ui.messagebox, "showinfo", lambda *a, **k: infos.append(a))
-    entry = make_entry(entry_id="luna", patient_name="Luna", plan="luna old")
-    notes = [
-        PatientNote("Bella", "s", "o", "a", "bella new"),
-        PatientNote("Max", "s", "o", "a", "max new"),
-    ]
-    window = make_window(tk_root, [entry], on_regenerate=lambda t, appointment_id=None: notes)
-    window.show_entry(0)
-
-    window.regenerate_button.invoke()
-    window.update()
-
-    assert window.field_texts["plan"].get("1.0", "end-1c") == "luna old"
-    assert not window._has_unsaved_edits()
-    assert len(infos) == 1
+    assert window.tabs[0].name_var.get() == "Rex"
+    assert _text(window.tabs[0].field_texts["plan"]) == "plan 0"
 
 
 def test_regenerate_failure_surfaces_an_error_and_re_enables_the_button(
-    tk_root, monkeypatch
+    tk_root, sync_threads, monkeypatch
 ):
-    monkeypatch.setattr(history_ui.threading, "Thread", _SyncThread)
     errors = []
-    monkeypatch.setattr(
-        history_ui.messagebox, "showerror", lambda *a, **k: errors.append(a)
-    )
+    monkeypatch.setattr(history_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
 
     def boom(transcript, appointment_id=None):
         raise RuntimeError("backend is down")
 
-    entry = make_entry(subjective="Original", transcript="orig", entry_id="n1")
-    window = make_window(tk_root, [entry], on_regenerate=boom)
-    window.show_entry(0)
-    note_before = _note_pane(window)
+    window = make_window(tk_root, [make_appointment(names=("Bella",))], on_regenerate=boom)
 
     window.regenerate_button.invoke()
-    window.update()  # flush the after(0) that surfaces the failure
+    window.update()
 
     assert len(errors) == 1
-    # The note is left untouched and the button is usable again.
-    assert _note_pane(window) == note_before
-    assert window._regenerating is False
+    assert _text(window.tabs[0].field_texts["plan"]) == "plan 0"
     assert window.regenerate_button["text"] == ui_strings.BUTTON_REGENERATE
 
 
-def test_auto_refresh_does_not_discard_an_in_progress_unsaved_edit(tk_root):
-    entries = [make_entry(subjective="Only note", transcript="orig", entry_id="n1")]
-    window = make_window(tk_root, entries)
-    window.show_entry(0)
+def test_regenerate_button_absent_without_a_callback(tk_root):
+    window = make_window(tk_root, [make_appointment()])
 
-    # The vet starts editing but has not saved yet...
-    window.field_texts["subjective"].delete("1.0", "end")
-    window.field_texts["subjective"].insert("1.0", "half-typed edit")
+    assert window.regenerate_button is None
 
-    # ...and a new note is recorded, triggering an auto-refresh.
-    entries.insert(0, make_entry(subjective="Just recorded", transcript="new", entry_id="n2"))
+
+# --- Delete -----------------------------------------------------------------------
+
+
+def test_delete_removes_the_whole_appointment_and_shows_a_neighbor(tk_root):
+    appointments = [make_appointment("a2", names=("Bella",)), make_appointment("a1", names=("Rex",))]
+    deleted = []
+
+    def on_delete(appointment_id):
+        deleted.append(appointment_id)
+        appointments[:] = [a for a in appointments if a.id != appointment_id]
+        return True
+
+    window = make_window(tk_root, appointments, on_delete=on_delete)
+
+    window.delete_button.invoke()
+
+    assert deleted == ["a2"]
+    assert window.listbox.size() == 1
+    assert window.tabs[0].name_var.get() == "Rex"
+
+
+def test_delete_does_nothing_when_the_vet_cancels(tk_root):
+    deleted = []
+    window = make_window(
+        tk_root,
+        [make_appointment()],
+        on_delete=deleted.append,
+        confirm_delete=lambda appointment: False,
+    )
+
+    window.delete_button.invoke()
+
+    assert deleted == []
+
+
+def test_deleting_the_last_appointment_clears_the_detail(tk_root):
+    appointments = [make_appointment()]
+
+    def on_delete(appointment_id):
+        appointments.clear()
+        return True
+
+    window = make_window(tk_root, appointments, on_delete=on_delete)
+
+    window.delete_button.invoke()
+
+    assert window.listbox.size() == 0
+    assert window.tabs == []
+
+
+# --- Appointments without finished notes ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status, message",
+    [
+        ("processing", ui_strings.HISTORY_PROCESSING_MESSAGE),
+        ("no_speech", ui_strings.HISTORY_NO_SPEECH_MESSAGE),
+        ("failed", ui_strings.HISTORY_FAILED_MESSAGE),
+    ],
+)
+def test_an_appointment_without_a_transcript_shows_a_message_only(tk_root, status, message):
+    window = make_window(
+        tk_root, [make_appointment(names=(), status=status)], on_retry=lambda a: None
+    )
+
+    assert window.status_label["text"] == message
+    assert window.tabs == []
+    assert window.save_button is None
+    assert window.delete_button is not None
+    assert (window.retry_button is not None) == (status == "failed")
+
+
+def test_retry_reprocesses_a_failed_recording(tk_root, sync_threads):
+    retried = []
+
+    def on_retry(appointment_id):
+        retried.append(appointment_id)
+        return make_appointment(names=(), status="processing")
+
+    window = make_window(
+        tk_root, [make_appointment(names=(), status="failed")], on_retry=on_retry
+    )
+
+    window.retry_button.invoke()
+    window.update()
+
+    assert retried == ["appt-1"]
+    assert window.status_label["text"] == ui_strings.HISTORY_PROCESSING_MESSAGE
+
+
+def test_a_pending_appointment_offers_generate_notes_now(tk_root, sync_threads):
+    generated = []
+
+    def on_complete_notes(appointment_id):
+        generated.append(appointment_id)
+        return make_appointment(names=("Bella", "Max"))
+
+    window = make_window(
+        tk_root,
+        [make_appointment(names=(None,), status="note_pending", transcript="saved transcript")],
+        on_complete_notes=on_complete_notes,
+    )
+    assert window.status_label["text"] == ui_strings.HISTORY_NOTE_PENDING_MESSAGE
+    assert _text(window.transcript_text) == "saved transcript"
+    assert str(window.transcript_text["state"]) == "disabled"
+
+    window.generate_button.invoke()
+    window.update()
+
+    assert generated == ["appt-1"]
+    assert [tab.name_var.get() for tab in window.tabs] == ["Bella", "Max"]
+
+
+def test_a_failed_generate_says_why_and_stays_pending(tk_root, sync_threads, monkeypatch):
+    errors = []
+    monkeypatch.setattr(history_ui.messagebox, "showerror", lambda *a, **k: errors.append(a))
+
+    def fail(appointment_id):
+        raise ApiClientError("backend returned 502")
+
+    window = make_window(
+        tk_root,
+        [make_appointment(names=(None,), status="note_pending")],
+        on_complete_notes=fail,
+    )
+
+    window.generate_button.invoke()
+    window.update()
+
+    assert len(errors) == 1
+    assert str(window.generate_button["state"]) == "normal"
+
+
+# --- Opening at an appointment -----------------------------------------------------
+
+
+def test_the_window_can_open_on_a_given_appointment_and_animal(tk_root):
+    window = make_window(
+        tk_root,
+        [make_appointment("a2", names=("Rex",)), make_appointment("a1", names=("Bella", "Max"))],
+        select=("a1", "a1-e1"),
+    )
+
+    assert [tab.name_var.get() for tab in window.tabs] == ["Bella", "Max"]
+    assert window.notebook.index("current") == 1
+
+
+def test_select_appointment_switches_an_open_window(tk_root):
+    window = make_window(
+        tk_root, [make_appointment("a2", names=("Rex",)), make_appointment("a1", names=("Bella",))]
+    )
+
+    window.select_appointment("a1")
+
+    assert window.tabs[0].name_var.get() == "Bella"
+    assert window.listbox.curselection() == (1,)
+
+
+# --- Live refresh ----------------------------------------------------------------
+
+
+def test_refresh_shows_a_new_recording_when_viewing_the_newest(tk_root):
+    appointments = [make_appointment("a1", names=("Rex",))]
+    window = make_window(tk_root, appointments)
+
+    appointments.insert(0, make_appointment("a2", names=("Bella",)))
     window.refresh()
 
-    # The new note shows up in the list, but the unsaved edit is NOT clobbered.
-    assert len(window.listbox.get(0, "end")) == 2
-    assert window.field_texts["subjective"].get("1.0", "end-1c") == "half-typed edit"
+    assert window.listbox.size() == 2
+    assert window.tabs[0].name_var.get() == "Bella"
+
+
+def test_refresh_keeps_a_deliberately_opened_older_appointment(tk_root):
+    appointments = [make_appointment("a2", names=("Bella",)), make_appointment("a1", names=("Rex",))]
+    window = make_window(tk_root, appointments)
+    window.show_appointment(1)
+
+    appointments.insert(0, make_appointment("a3", names=("Luna",)))
+    window.refresh()
+
+    assert window.tabs[0].name_var.get() == "Rex"
+
+
+def test_refresh_never_discards_unsaved_edits(tk_root):
+    appointments = [make_appointment("a1", names=("Bella",))]
+    window = make_window(tk_root, appointments)
+    _type(window.tabs[0].field_texts["plan"], "half-typed")
+    window.tabs[0].name_var.set("Belle")
+
+    appointments.insert(0, make_appointment("a2", names=("Max",)))
+    window.refresh()
+
+    assert window.listbox.size() == 2
+    assert _text(window.tabs[0].field_texts["plan"]) == "half-typed"
+    assert window.tabs[0].name_var.get() == "Belle"
+
+
+def test_refresh_keeps_the_open_tab(tk_root):
+    appointments = [make_appointment("a1", names=("Bella", "Max"))]
+    window = make_window(tk_root, appointments)
+    window.notebook.select(1)
+
+    appointments[0] = make_appointment("a1", names=("Bella", "Max"), transcript="edited on the phone")
+    window.refresh()
+
+    assert _text(window.transcript_text) == "edited on the phone"
+    assert window.notebook.index("current") == 1
+
+
+def test_refresh_is_a_noop_when_nothing_changed(tk_root):
+    appointments = [make_appointment()]
+    window = make_window(tk_root, appointments)
+    tab = window.tabs[0]
+
+    window.refresh()
+
+    assert window.tabs[0] is tab
 
 
 def test_auto_refresh_reads_the_backend_off_the_tk_main_thread(tk_root, monkeypatch):
-    # The live-refresh poll must NOT do its blocking backend read inline on the
-    # Tk main thread -- that call (GET /api/history) stalls typing and clicking
-    # in the window every poll interval. It has to hand the read to a worker
-    # thread and marshal the widget update back via after() (same rule as
-    # regenerate). We capture the worker instead of starting it so the assertion
-    # is deterministic and doesn't need a running mainloop.
+    # The poll's backend read must run on a worker thread, with the widget update
+    # marshalled back via after(): reading inline stalled typing every second.
     captured = []
 
     class _CapturingThread:
@@ -619,31 +792,23 @@ def test_auto_refresh_reads_the_backend_off_the_tk_main_thread(tk_root, monkeypa
             captured.append(self)
 
         def start(self):
-            pass  # don't run yet -- the test decides when
+            pass
 
     monkeypatch.setattr(history_ui.threading, "Thread", _CapturingThread)
-
     fetched = []
-    entries = [make_entry(subjective="first", entry_id="n1")]
+    appointments = [make_appointment("a1")]
 
     def load():
         fetched.append(True)
-        return list(entries)
+        return list(appointments)
 
-    window = make_window(tk_root, entries, load_entries=load)
-    fetched.clear()  # ignore the one synchronous read done at construction
+    window = make_window(tk_root, appointments, load_appointments=load)
+    fetched.clear()
+    appointments.insert(0, make_appointment("a2"))
 
-    # A note arrives while the window is open, so the poll has real work to apply.
-    entries.insert(0, make_entry(subjective="second", entry_id="n2"))
     window._poll()
 
-    # The poll must have deferred the read to a worker thread, NOT read inline on
-    # the Tk loop. (The broken version calls refresh() synchronously here.)
     assert fetched == [], "history poll read the backend on the Tk main thread"
-    assert captured, "history poll did not dispatch the read to a worker thread"
-
-    # Running the worker and flushing its after() callback applies the new note.
     captured[0]._target()
     window.update()
-    assert fetched, "worker never read the store"
-    assert len(window.listbox.get(0, "end")) == 2  # the refresh actually applied
+    assert window.listbox.size() == 2

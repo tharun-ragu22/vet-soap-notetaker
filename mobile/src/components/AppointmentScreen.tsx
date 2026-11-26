@@ -121,6 +121,9 @@ export function AppointmentScreen({
   // is removed. Collapsing only hides the fields: the draft and Inject are unaffected.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const newKeys = useRef(0);
+  // Cards (by key) whose name the vet typed while this appointment is open: a
+  // regenerate keeps those names, and lets every other name follow the transcript.
+  const typedNames = useRef(new Set<string>());
 
   const load = (next: Appointment) => {
     setSaved(next);
@@ -168,12 +171,18 @@ export function AppointmentScreen({
   };
 
   const setCardField = (index: number, field: keyof SoapFields | 'patientName', value: string) => {
+    if (field === 'patientName') typedNames.current.add(cards[index].key);
     setCards((current) => current.map((card, i) => (i === index ? { ...card, [field]: value } : card)));
     edited();
   };
 
   const save = async (): Promise<Appointment> => {
     const updated = await apiClient.updateAppointment(saved.id, draft);
+    // A new animal's card is keyed by its id from now on; keep its typed name.
+    cards.forEach((card, index) => {
+      const id = updated.exams[index]?.id;
+      if (!card.id && id && typedNames.current.has(card.key)) typedNames.current.add(id);
+    });
     load(updated);
     return updated;
   };
@@ -196,7 +205,11 @@ export function AppointmentScreen({
     try {
       const { patients } = await apiClient.regenerateAppointment(transcript, saved.id);
       setCards((current) =>
-        mergeRegenerated(current, patients).map((exam) => ({
+        mergeRegenerated(
+          current,
+          patients,
+          new Set(current.flatMap((card, index) => (typedNames.current.has(card.key) ? [index] : []))),
+        ).map((exam) => ({
           ...exam,
           key: (exam as Partial<Card>).key ?? exam.id ?? `new-${(newKeys.current += 1)}`,
         })),
