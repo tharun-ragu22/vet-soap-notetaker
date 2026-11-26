@@ -2,8 +2,10 @@
 
 A minimal reference server that satisfies the HTTP contract Vet Soap Notetaker's `ApiClient` expects
 (`POST /api/soap` with raw WAV bytes, returns JSON with `subjective`/`objective`/`assessment`/`plan`).
-It's a separate project from the desktop tray app — this is meant to run on a server (or locally for
-development), not ship inside the Windows installer.
+It's a separate uv project from the desktop tray app, with its own dependencies. In a clinic it runs on
+the exam-room PC: the Windows installer bundles a windowless `VetSoapNotetakerBackend.exe`
+(`build_spec/backend.spec`), and the desktop app launches it and relaunches it if it dies. It can
+also run on its own, on a server or locally for development.
 
 Transcription and SOAP-note generation are each behind a small interface, selected independently, so
 you can mix providers (e.g. Gemini for transcription, Anthropic for note generation):
@@ -115,21 +117,46 @@ call (its peak level is below room noise); for anything else the transcriber is 
 `NO_SPEECH` rather than guess, because given silence a model can otherwise invent a whole exam
 conversation. Retrying the same audio can't help, so clients don't retry a `422` automatically.
 
-Exams (the desktop app, which works one animal at a time). Each exam's JSON carries its
-`appointment_id` and the appointment's `transcript`:
+Exams (one animal at a time). The desktop uploads through `POST /api/soap` and finishes pending
+notes with `POST /api/exams/{id}/note`; its History window uses the appointment routes above. Each
+exam's JSON carries its `appointment_id` and the appointment's `transcript`:
 
 | Method & path | Purpose |
 |---|---|
 | `POST /api/soap` | Audio body → the first animal's exam (the pending placeholder on a `202`; `422` if no speech was heard) |
 | `POST /api/exams/{id}/note` | Finish a pending exam (adds any further animals to its appointment); idempotent |
-| `POST /api/soap/regenerate` | `{"transcript", "exam_id"?}` → the first animal's note at the top level plus every animal's under `patients` |
+| `POST /api/soap/regenerate` | `{"transcript", "exam_id"?}` → the first animal's note at the top level plus every animal's under `patients`. Kept for older desktops; new clients use `POST /api/appointments/regenerate` |
 | `GET /api/history` | Every exam, newest appointment first: `{"exams": [ ... ]}` |
 | `GET /api/exams/{id}` | Fetch one exam (404 if unknown) |
 | `PUT /api/exams/{id}` | Save one animal's edits (`subjective`/`objective`/`assessment`/`plan`, optional `patient_name`, optional `transcript` which updates it for every animal); 400 on missing fields, 404 if unknown |
 | `DELETE /api/exams/{id}` | Delete one animal; deleting the last one deletes the appointment |
 
+### Async uploads (the phone)
+
+The phone sends `POST /api/appointments` with `Prefer: respond-async` and an `Idempotency-Key`
+header, so it never holds one request open through transcription and note generation (a dropped
+connection used to make it re-upload, duplicating the appointment and paying twice):
+
+- The backend saves the audio, creates the appointment with status `processing` and replies `202`
+  within seconds. A repeat with the same key gets that same appointment back (`202` while it's still
+  going, `200` once done); the same key with different audio gets `409`.
+- A background worker processes one recording at a time and moves it to `complete`, `note_pending`,
+  `no_speech`, or `failed`. A failed one keeps its audio, and `POST /api/appointments/{id}/retry`
+  queues it again (`409` unless it's `failed`).
+- `GET /api/events` is a Server-Sent Events stream: a `ready` event once subscribed, then one
+  `appointment` event (`{id, status, patient_names}`) per recording that finishes, with keepalive
+  comments. Events aren't stored, so a client that was away re-reads the appointments it's waiting on.
+- Processing survives a restart: `processing` appointments are queued again on startup.
+
+While an appointment is still processing it has no transcript, so `GET /api/history` leaves it out and
+its notes/save routes return `409`. Without the `Prefer` header, `POST /api/appointments` works synchronously as
+described above; `POST /api/soap` is always synchronous.
+
+### Storage
+
 Storage is a JSON file (durable across restarts) at `~/.vetscribe/exams.json` by default;
-override with `VETSCRIBE_EXAMS_PATH`. The backend remains the authoritative source of truth —
+override with `VETSCRIBE_EXAMS_PATH`. Audio waiting for the async worker is kept next to it in
+`incoming/` and deleted once it's no longer needed. The backend remains the authoritative source of truth —
 clients read and write through it and keep no independent copy.
 
 ## Remote AVImark injection
@@ -242,8 +269,9 @@ runners (no GPU), and Ollama serializes generation per model anyway, the eval ru
 at a time with a generous `OLLAMA_EVAL_TIMEOUT_SECONDS` (default 300s) rather than the provider's normal
 120s default — expect the CI job to take tens of minutes, not seconds.
 
-The job only runs when a push/PR touches backend code (gated by the `changes` job at the top of the
-workflow, via `dorny/paths-filter` on `backend/**`, excluding `*.md` files) — it's skipped for
+The job only runs when a push/PR touches the code these evals exercise: the `llm/` package's
+top-level modules, `llm/note_generation/`, or the eval harness itself (the `changes` job's
+`note_evals` filter at the top of the workflow). It's skipped for transcription-only, non-LLM backend,
 tray-app-only or docs-only changes, since it's the slowest job in the pipeline and gains nothing from
 re-running against unchanged eval-relevant code.
 `build-windows-exe` accounts for this by treating `backend-evals` being skipped the same as it succeeding.

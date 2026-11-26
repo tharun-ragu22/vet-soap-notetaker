@@ -42,6 +42,16 @@ installing the phone app (EAS, TestFlight, LAN config).
    muted), no note is made and a message says so. The audio is still archived
    to `~/.vetscribe/recordings/`, but it isn't queued for retry -- the same
    audio would fail the same way.
+7. If the backend transcribed the recording but note generation failed (a
+   `202`), the transcript is already saved there, so the audio is never
+   re-uploaded: the retry queue asks the backend to finish the note in the
+   background, and after 10 failed replies a message points you at History's
+   Regenerate. A backend that doesn't answer at all never uses up those tries.
+
+Pressing the hotkey while a note is still being generated doesn't start a new
+recording; a short "still generating the previous note" message appears instead.
+Error and status messages show in a flyout with no Copy/Inject buttons, so they
+can never be pasted into a chart.
 
 A tray icon shows the current state at a glance: green (idle), red
 (recording), yellow (processing). Right-clicking the tray icon opens a menu
@@ -61,16 +71,23 @@ While History loads, a small "Vet Soap Notetaker" splash shows. The exe starts i
 `launcher.py`, which puts the splash up (and lets a second launch exit) before
 importing the rest of the app, so the window appears straight away.
 
-### Exam history, the mobile app, and remote injection
+### History, the mobile app, and remote injection
 
-Every generated note is saved on the backend, so the same exam history is
-available from both the desktop **History** window and the phone. From History
-(or the phone) the vet can:
+Every generated note is saved on the backend, so the desktop **History** window and
+the phone show the same history. It's organized by **appointment**: one recording,
+which can cover several animals, each with its own SOAP note. History lists one row
+per appointment (the animals' names, time, and status) with a **Search by pet name**
+box. Opening one shows a tab per animal (name, S/O/A/P, its own Copy & Inject / Copy)
+above the one shared transcript. From there (or the phone) the vet can:
 
-- **Edit** the four SOAP fields or the raw transcript inline and save.
-- **Regenerate from Transcript** — after hand-correcting the transcript, get a
-  fresh note without re-recording (the regenerated note lands as an *unsaved*
-  edit, so it's never destructive until Save).
+- **Edit** any animal's name or SOAP fields, or the transcript, then **Save
+  Changes** (saves the whole appointment), or **Remove Animal** / **Delete
+  Appointment**.
+- **Regenerate from Transcript**: after hand-correcting the transcript, get fresh
+  notes for every animal without re-recording. Animals are matched by name, and the
+  new notes arrive as *unsaved* edits, so nothing is overwritten until you Save.
+- **Retry** a recording whose upload failed, or **Generate Notes Now** for one whose
+  transcript was saved but whose notes are still pending.
 - **Inject into AVImark** — paste the note into the exam-room chart. From the
   phone this is a *remote* inject: the mobile app POSTs an injection request to
   the backend, the desktop app polls for it (a firewall-friendly pull, the same
@@ -102,11 +119,24 @@ app:
 - Hotkey Combination (rebinds the global hotkey live)
 - Target Window Matcher (which window title identifies your practice
   software — defaults to `AVImark`)
+- Analytics Project Key, User ID, Environment, and Clinic (see
+  [Analytics](#analytics) below; a blank key turns analytics off)
 - Launch Vet Soap Notetaker on Windows Startup (adds/removes an
   `HKCU\...\CurrentVersion\Run` registry entry)
 
 Saving writes to `~/.vetscribe/config.json` and applies every change to the
 already-running app immediately.
+
+### Analytics
+
+Usage analytics (PostHog) are **off unless an Analytics Project Key is set** in
+Settings. When they're on, the app sends only metadata: ids, timings, counts,
+outcomes, and error *types*. It never sends note text, transcripts, patient names,
+settings values, or error messages. Crash reports and a few diagnostic log lines
+(injection, calibration, pipeline, retry queue) are scrubbed the same way before
+they're sent, and the local log file keeps the full detail. The **Clinic** field
+tags events so different sites can be told apart. The backend's side is described
+in [`backend/README.md`](backend/README.md#analytics-posthog).
 
 ## Tech stack
 
@@ -117,6 +147,7 @@ already-running app immediately.
 | Audio capture | [`sounddevice`](https://pypi.org/project/sounddevice/) |
 | WAV encoding | [`scipy.io.wavfile`](https://pypi.org/project/scipy/) |
 | AI backend calls | [`httpx`](https://pypi.org/project/httpx/) |
+| Usage analytics (opt-in) | [`posthog`](https://pypi.org/project/posthog/) |
 | Global hotkey | [`pynput`](https://pypi.org/project/pynput/) |
 | Clipboard access | [`pyperclip`](https://pypi.org/project/pyperclip/) |
 | Windows automation (foreground detection, clipboard, simulated keystrokes) | [`pywin32`](https://pypi.org/project/pywin32/) |
@@ -147,7 +178,7 @@ uv sync
 On Linux, running/testing also needs system packages for audio and Tk:
 
 ```bash
-sudo apt-get install -y libportaudio2 python3-tk python3-dev
+sudo apt-get install -y libportaudio2 python3-tk python3-dev xvfb
 ```
 
 ### Quick start on Windows (`setup.ps1`)
@@ -197,6 +228,17 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -NoInstall
 powershell -ExecutionPolicy Bypass -File .\setup.ps1 -SkipMobile
 ```
 
+### Installing at a clinic
+
+The clinic PC gets the single `VetSoapNotetakerSetup.exe` installer (built by CI, see
+below). It installs the desktop app and the bundled backend into Program Files and
+adds a firewall rule for the backend port so the phone can reach it. It also seeds
+`~/.vetscribe/config.json` with the local backend URL (`build_spec/clinic_config.json`)
+and registers the login autostart entry. For a shippable build, drop a real
+`backend\.env` (provider keys) into `backend\` before compiling the installer. The
+step-by-step runbook is [`docs/clinic-setup-checklist.md`](docs/clinic-setup-checklist.md),
+and [`docs/ios-install.md`](docs/ios-install.md) covers the iPhone side.
+
 ### Configuration
 
 On first run, Vet Soap Notetaker creates `~/.vetscribe/config.json` with defaults
@@ -206,20 +248,35 @@ On first run, Vet Soap Notetaker creates `~/.vetscribe/config.json` with default
 {
   "api_endpoint": "https://localhost:8443/api/soap",
   "api_timeout_seconds": 30,
+  "api_generate_timeout_seconds": 480,
   "hotkey": "<ctrl>+<shift>+r",
   "api_key": "",
   "target_window_matcher": "AVImark",
-  "launch_on_startup": false
+  "launch_on_startup": false,
+  "avimark_calibration": null,
+  "analytics_key": "",
+  "analytics_user_id": "",
+  "analytics_environment": "dev",
+  "analytics_clinic": "",
+  "analytics_host": "https://us.i.posthog.com"
 }
 ```
 
-All of these fields can also be edited live from the tray's Settings window
-(see above) instead of hand-editing the file.
+`api_timeout_seconds` covers quick calls (history, saves, injection polls), and
+`api_generate_timeout_seconds` covers the calls that wait on the AI provider
+(transcription and note generation, which can take minutes for a long exam).
+`avimark_calibration` is filled in by **Calibrate AVImark Boxes…**. A config saved by
+an older version picks up any new keys' defaults automatically. Most fields can be
+edited live from the tray's Settings window (see above) instead of hand-editing
+the file.
 
 Edit `api_endpoint` to point at your SOAP-note-generation backend. It's
 expected to accept a `POST` with raw WAV bytes (`Content-Type: audio/wav`,
 plus `Authorization: Bearer <api_key>` if `api_key` is set) and return JSON
-with `subjective`, `objective`, `assessment`, and `plan` fields.
+with `subjective`, `objective`, `assessment`, and `plan` fields (a `202` when
+the note is still pending, a `422` when no speech was heard). Every other URL
+the app uses (appointments, injections) is derived from this one, so
+`.../api/soap` is the only address to configure.
 
 A reference implementation of this backend, with pluggable OpenAI/Anthropic/Gemini
 providers for transcription and note generation, lives in [`backend/`](backend/README.md).
@@ -265,19 +322,24 @@ environment variable to any truthy value to log at `DEBUG` instead of `INFO`.
 ```
 src/vet_soap_notetaker/              The Windows desktop tray app (this package)
   config.py              Config dataclass; loads/saves ~/.vetscribe/config.json
-  api_client.py          ApiClient — POSTs audio to the backend, parses SoapNote; also history + regenerate
+  api_client.py          ApiClient — POSTs audio to the backend, parses SoapNote; also appointments, regenerate, injections
+  analytics.py           DesktopAnalytics — opt-in PostHog events + scrubbed crash capture
+  log_forwarding.py      Forwards scrubbed diagnostic log lines to PostHog
+  appointment_store.py   IAppointmentStore — the interface the History window reads/writes appointments through
+  appointment_merge.py   merge_regenerated() — folds regenerated notes into an appointment (mirrors mobile)
+  dpi.py                 Per-monitor DPI helpers for the coordinate-sensitive calibration calls
   audio_recorder.py      AudioRecorder — sounddevice-based mic capture + WAV export
   avimark_injector.py    AvimarkInjector — foreground check, clipboard+Ctrl+V, and per-box SendMessage paste
   avimark_calibration.py Pure model/matching for the four-box calibration (control-id → class → position)
   calibration_ui.py      CalibrationSession/Controller — the "Calibrate AVImark Boxes" capture flow
   flyout_ui.py           FlyoutWindow — Tkinter "Safety Flyout" shown for fallback/errors
-  history_ui.py          HistoryWindow — browse/edit exams, Regenerate from Transcript, Copy & Inject
+  history_ui.py          HistoryWindow — appointments with a tab per animal: edit, Regenerate, Copy & Inject
   settings_ui.py         SettingsWindow — Tkinter form for editing config live
   hotkey_listener.py     HotkeyListener — global hotkey capture via pynput, rebindable live
   pipeline.py            Pipeline / PipelineState — the record→transcribe→inject state machine
   tray_app.py            TrayApp — pystray icon + menu (status, note, history, calibrate, settings, quit)
   offline_queue.py       OfflineQueue — persists failed recordings and retries them in the background
-  backend_history_store.py  BackendHistoryStore — backend-backed exam history with a local read cache
+  backend_history_store.py  BackendHistoryStore — IAppointmentStore over the backend, with an offline cache
   backend_supervisor.py  BackendSupervisor — launches/relaunches the bundled backend exe (packaged install)
   injection_poller.py    InjectionPoller — polls the backend for mobile "Inject into AVImark" requests
   single_instance.py     Guards against a second copy of the app running at once
@@ -286,25 +348,31 @@ src/vet_soap_notetaker/              The Windows desktop tray app (this package)
   loading_ui.py          LoadingWindow — the "Vet Soap Notetaker / Opening History…" splash
   autostart.py           winreg-based Windows "launch on startup" registration
   window_icon.py / icon_art.py / ui_strings.py   Window icon, tray icon art, and shared UI strings
+  assets/                Icon images
   logger.py              Rotating file logger setup
   paths.py               Shared %APPDATA%/home-dir resolution helper
   main.py                build_app() wires everything together; start() runs it (called by launcher.run())
 
 backend/                 Reference AI backend (own uv project) — see backend/README.md
 mobile/                  Expo/React Native companion app (iOS + Android) — see mobile/README.md
-docs/                    Deployment + iOS-install notes (deployment.md is local-only, not committed)
+docs/                    clinic-setup-checklist.md (on-site runbook), ios-install.md, demo-plan.md
+                         (deployment.md is local-only, not committed)
+tools/posthog_dashboard.py  Dev-only script that builds the PostHog dashboard (never shipped)
 
 tests/
   unit/                  Fast, isolated tests for each module (mocked collaborators)
   integration/           Tests that wire multiple real modules together (pipeline, tray, hotkey, main)
-  acceptance/            End-to-end tests, including a fake AVImark window and Windows-only
-                         pywinauto GUI automation tests (skipped on non-Windows platforms)
+  acceptance/            End-to-end tests, including a fake AVImark window (Tk), a native-Win32
+                         mock SOAP window for calibrated injection, and Windows-only pywinauto
+                         GUI automation tests (skipped on non-Windows platforms)
 
 build_spec/
   vet_soap_notetaker.spec  PyInstaller spec (--onedir) for the desktop tray app
   installer.iss          Inno Setup script that wraps both PyInstaller outputs into VetSoapNotetakerSetup.exe
   clinic_config.json     Default config the installer seeds into ~/.vetscribe/config.json on first install
   generate_icons.py      Renders the app/tray icon assets
+  bundle_guard.py        Fails a PyInstaller build if a test/dev package gets bundled
+  mock_avimark_soap.spec Dev/test tool: standalone MockAvimarkSoap.exe for trying calibration on a test PC
 backend/build_spec/backend.spec   PyInstaller spec for the bundled backend exe the desktop supervises
 
 .github/workflows/ci.yml  GitHub Actions CI (see the CI section below)
@@ -314,8 +382,8 @@ backend/build_spec/backend.spec   PyInstaller spec for the bundled backend exe t
 
 - **Dependency injection**: `build_app(config=None, tk_root=None)` in
   `main.py` constructs the recorder, API client, injector, pipeline, tray
-  app, hotkey listener, offline queue, history store, injection poller, and
-  backend supervisor, so every piece can be swapped for a test double.
+  app, hotkey listener, offline queue, history store, injection poller,
+  backend supervisor, and analytics, so every piece can be swapped for a test double.
 - **State machine**: `Pipeline` in `pipeline.py` only has three states
   (`IDLE`, `RECORDING`, `PROCESSING`). `toggle_recording()` is a no-op while
   processing, so a stray hotkey press mid-transcription can't corrupt state,
@@ -340,7 +408,8 @@ backend/build_spec/backend.spec   PyInstaller spec for the bundled backend exe t
   raises, `Pipeline` archives the raw WAV to
   `~/.vetscribe/recordings/failed_*.wav`, enqueues it in `OfflineQueue` for
   automatic retry, and surfaces the error via a flyout — the vet is never
-  left with a frozen yellow tray icon and no explanation.
+  left with a frozen yellow tray icon and no explanation. A `202` (transcript
+  saved, note pending) queues only the note completion, never a re-upload.
 - **Live settings, no restart**: `HotkeyListener.update_hotkey()` and direct
   attribute updates on `ApiClient`/`AvimarkInjector` let the Settings window
   apply changes to the already-running process.
@@ -356,7 +425,7 @@ backend/build_spec/backend.spec   PyInstaller spec for the bundled backend exe t
 uv run pytest -v
 ```
 
-On Linux, GUI-touching tests need a display (real or virtual):
+On Linux, GUI-touching tests need a display, so run the suite under a virtual one:
 
 ```bash
 xvfb-run -a uv run pytest -v
@@ -370,11 +439,11 @@ call sites can still be imported and exercised with mocks.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push/PR to `main`. A `changes` job
-(`dorny/paths-filter`) runs first and gates the backend-only jobs so unrelated
-pushes skip them:
+`.github/workflows/ci.yml` runs on every push/PR to `main`, except when every
+changed file is Markdown (docs-only changes skip CI entirely). A `changes` job
+(`dorny/paths-filter`) runs first and decides whether the eval job needs to run:
 
-- **`test`**: runs the full desktop test suite on both `ubuntu-latest` and
+- **`test`**: runs the full desktop test suite on both `ubuntu-24.04` and
   `windows-latest`, using `uv sync --locked` for reproducible installs. This
   includes the real Windows GUI acceptance tests (mock AVImark injection and
   safety-flyout fallback), so a green run means the app has been verified
@@ -386,13 +455,16 @@ pushes skip them:
 - **`test-mobile`**: runs the `mobile/` Jest suite (unit + integration + the
   screen-level e2e tests against the in-memory fake backend) and `tsc --noEmit`.
 - **`backend-evals`**: runs the LLM note-generation evals against a CPU Ollama
-  model — **only** when a push touches `backend/llm/**` and after `test-backend`
-  passes (it's the slowest job; see [`backend/README.md`](backend/README.md)).
-- **`build-windows-exe`**: runs after the test jobs pass, builds the standalone
-  desktop + backend folders with PyInstaller and uploads them as workflow
-  artifacts. Producing the double-clickable `VetSoapNotetakerSetup.exe` installer
-  additionally requires running Inno Setup (`build_spec/installer.iss`) against
-  that output, which isn't yet automated in CI.
+  model — **only** when a push touches the note-generation code and after
+  `test-backend` passes (it's the slowest job; see [`backend/README.md`](backend/README.md)).
+  The transcription evals aren't in CI yet; they're run by hand.
+- **`build-windows-exe`**: runs after `test` passes (and `backend-evals`, when it
+  ran). It builds the desktop and backend folders with PyInstaller in runtime-only
+  environments (`uv sync --locked --no-dev --group build`; `bundle_guard.py` fails
+  the build if a test/dev package is pulled in), then compiles
+  `VetSoapNotetakerSetup.exe` with Inno Setup. All three are uploaded as workflow
+  artifacts. No `backend/.env` exists in CI, so that installer has no provider keys;
+  it proves the installer compiles against the real builds.
 
 Pushing to `origin/main` and confirming this run is green is the standing proof a
 change works on a fresh machine (see `CLAUDE.md`).
